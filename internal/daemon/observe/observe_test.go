@@ -23,6 +23,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -372,7 +373,7 @@ func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert feedback: %v", err)
 	}
-	rec, err := fx.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
+	rec, err := fx.store.UpsertSelfImprovementRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
 	if err != nil {
 		t.Fatalf("insert recommendation: %v", err)
 	}

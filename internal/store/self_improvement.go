@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -99,34 +98,34 @@ type SelfImprovementFeedbackInput struct {
 }
 
 type SelfImprovementRecommendation struct {
-	ID                      string                         `json:"id"`
-	WorkspaceID             string                         `json:"workspace"`
-	FeedbackEventID         int64                          `json:"feedback_event_id"`
-	Type                    string                         `json:"type"`
-	Status                  string                         `json:"status"`
-	Confidence              string                         `json:"confidence"`
-	Risk                    string                         `json:"risk"`
-	Finding                 string                         `json:"finding"`
-	NormalizedLesson        string                         `json:"normalized_lesson"`
-	Rationale               string                         `json:"rationale"`
-	EvidenceFeedbackIDs     []int64                        `json:"evidence_feedback_ids"`
-	EvidenceSourceURLs      []string                       `json:"evidence_source_urls"`
-	AttributionConfidence   string                         `json:"attribution_confidence"`
-	TargetAssetType         string                         `json:"target_asset_type,omitempty"`
-	TargetAssetID           string                         `json:"target_asset_id,omitempty"`
-	TargetBaseVersionID     string                         `json:"target_base_version_id,omitempty"`
-	ProposedPatch           string                         `json:"proposed_patch,omitempty"`
-	ProposedNewBody         string                         `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                         `json:"suggested_rollout_scope,omitempty"`
-	AnalyzerPromptRef       string                         `json:"analyzer_prompt_ref"`
-	AnalyzerPromptVersionID string                         `json:"analyzer_prompt_version_id,omitempty"`
-	StructuredOutput        map[string]any                 `json:"structured_output,omitempty"`
-	Error                   string                         `json:"error,omitempty"`
-	CreatedAt               string                         `json:"created_at"`
-	UpdatedAt               string                         `json:"updated_at"`
-	Feedback                *SelfImprovementFeedback       `json:"feedback,omitempty"`
-	Clarification           *SelfImprovementClarification  `json:"clarification,omitempty"`
-	ProposalBundle          *SelfImprovementProposalBundle `json:"proposal_bundle,omitempty"`
+	ID                      string                            `json:"id"`
+	WorkspaceID             string                            `json:"workspace"`
+	FeedbackEventID         int64                             `json:"feedback_event_id"`
+	Type                    string                            `json:"type"`
+	Status                  string                            `json:"status"`
+	Confidence              string                            `json:"confidence"`
+	Risk                    string                            `json:"risk"`
+	Finding                 string                            `json:"finding"`
+	NormalizedLesson        string                            `json:"normalized_lesson"`
+	Rationale               string                            `json:"rationale"`
+	EvidenceFeedbackIDs     []int64                           `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs      []string                          `json:"evidence_source_urls"`
+	AttributionConfidence   string                            `json:"attribution_confidence"`
+	TargetAssetType         string                            `json:"target_asset_type,omitempty"`
+	TargetAssetID           string                            `json:"target_asset_id,omitempty"`
+	TargetBaseVersionID     string                            `json:"target_base_version_id,omitempty"`
+	ProposedPatch           string                            `json:"proposed_patch,omitempty"`
+	ProposedNewBody         string                            `json:"proposed_new_body,omitempty"`
+	SuggestedRolloutScope   string                            `json:"suggested_rollout_scope,omitempty"`
+	AnalyzerPromptRef       string                            `json:"analyzer_prompt_ref"`
+	AnalyzerPromptVersionID string                            `json:"analyzer_prompt_version_id,omitempty"`
+	StructuredOutput        map[string]any                    `json:"structured_output,omitempty"`
+	Error                   string                            `json:"error,omitempty"`
+	CreatedAt               string                            `json:"created_at"`
+	UpdatedAt               string                            `json:"updated_at"`
+	Feedback                *SelfImprovementFeedback          `json:"feedback,omitempty"`
+	Clarification           *SelfImprovementClarification     `json:"clarification,omitempty"`
+	ProposalBundle          *SelfImprovementProposalBundleRow `json:"proposal_bundle,omitempty"`
 }
 
 type SelfImprovementClarification struct {
@@ -296,77 +295,6 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	return scanSelfImprovementFeedback(row)
 }
 
-func RecommendationFromFeedback(feedback SelfImprovementFeedback) SelfImprovementRecommendationInput {
-	finding := firstFeedbackLine(feedback.RawBody)
-	if finding == "" {
-		finding = "Review the stored feedback evidence and decide whether a catalog change is warranted."
-	}
-	recType := "needs_more_context"
-	status := RecommendationStatusNeedsUserInput
-	confidence := "low"
-	if feedback.LinkedPromptVersionID != "" || len(feedback.LinkedSkillVersionIDs) > 0 || len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		recType = "deduplicate_guidance"
-		status = RecommendationStatusRecommended
-		confidence = "medium"
-	}
-	targetType, targetID, targetVersion := recommendationTarget(feedback)
-	rationale := fmt.Sprintf("Feedback event %d was captured from %s with %s attribution. The recommendation is review-only and does not publish or mutate catalog assets.", feedback.ID, feedback.SourceURL, feedback.LinkConfidence)
-	lesson := normalizeLesson(finding)
-	structured := map[string]any{
-		"type":                    recType,
-		"status":                  status,
-		"confidence":              confidence,
-		"risk":                    "low",
-		"finding":                 finding,
-		"normalized_lesson":       lesson,
-		"rationale":               rationale,
-		"evidence_feedback_ids":   []int64{feedback.ID},
-		"evidence_source_urls":    []string{feedback.SourceURL},
-		"attribution_confidence":  feedback.LinkConfidence,
-		"target_asset_type":       targetType,
-		"target_asset_id":         targetID,
-		"target_base_version_id":  targetVersion,
-		"proposed_patch":          "",
-		"proposed_new_body":       "",
-		"suggested_rollout_scope": "workspace",
-		"analyzer_prompt_ref":     "prompt_self-improvement-analyst",
-		"no_auto_apply_confirmed": true,
-	}
-	return SelfImprovementRecommendationInput{
-		WorkspaceID:           feedback.WorkspaceID,
-		FeedbackEventID:       feedback.ID,
-		Type:                  recType,
-		Status:                status,
-		Confidence:            confidence,
-		Risk:                  "low",
-		Finding:               finding,
-		NormalizedLesson:      lesson,
-		Rationale:             rationale,
-		EvidenceFeedbackIDs:   []int64{feedback.ID},
-		EvidenceSourceURLs:    []string{feedback.SourceURL},
-		AttributionConfidence: feedback.LinkConfidence,
-		TargetAssetType:       targetType,
-		TargetAssetID:         targetID,
-		TargetBaseVersionID:   targetVersion,
-		SuggestedRolloutScope: "workspace",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		StructuredOutput:      structured,
-	}
-}
-
-func recommendationTarget(feedback SelfImprovementFeedback) (assetType, assetID, versionID string) {
-	if feedback.LinkedPromptVersionID != "" {
-		return "prompt", "", feedback.LinkedPromptVersionID
-	}
-	if len(feedback.LinkedSkillVersionIDs) > 0 {
-		return "skill", "", feedback.LinkedSkillVersionIDs[0]
-	}
-	if len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		return "guardrail", "", feedback.LinkedGuardrailVersionIDs[0]
-	}
-	return "", "", ""
-}
-
 func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) (bool, error) {
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
 	tag := strings.TrimSpace(in.Tag)
@@ -488,9 +416,6 @@ func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommend
 	status := strings.TrimSpace(in.Status)
 	if status == "" {
 		status = RecommendationStatusRecommended
-	}
-	if !validRecommendationStatus(status) {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
 	}
 	confidence := strings.TrimSpace(in.Confidence)
 	if confidence == "" {
@@ -647,9 +572,6 @@ func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (S
 	status = strings.TrimSpace(status)
 	if id == "" {
 		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
-	}
-	if !validRecommendationStatus(status) {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
 	}
 	res, err := db.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
 	if err != nil {
@@ -1028,38 +950,4 @@ func readSkill(db querier, ref string) (fleet.Skill, error) {
 		return fleet.Skill{}, fmt.Errorf("store: read skill %s: %w", ref, err)
 	}
 	return skill, nil
-}
-
-func validRecommendationStatus(status string) bool {
-	return slices.Contains([]string{
-		RecommendationStatusRecommended,
-		RecommendationStatusNeedsUserInput,
-		RecommendationStatusAccepted,
-		RecommendationStatusRejected,
-		RecommendationStatusDeferred,
-		RecommendationStatusDuplicate,
-		RecommendationStatusFailed,
-	}, status)
-}
-
-func firstFeedbackLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(strings.ReplaceAll(line, FeedbackTag, ""))
-		if line != "" {
-			if len(line) > 500 {
-				return line[:500]
-			}
-			return line
-		}
-	}
-	return ""
-}
-
-func normalizeLesson(finding string) string {
-	finding = strings.TrimSpace(strings.ReplaceAll(finding, FeedbackTag, ""))
-	finding = strings.TrimSuffix(finding, ".")
-	if finding == "" {
-		return "Review self-improvement feedback before changing catalog guidance"
-	}
-	return finding
 }

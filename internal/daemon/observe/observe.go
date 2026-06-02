@@ -243,7 +243,7 @@ func (h *Handler) HandleUpdateImprovementRecommendationStatus(w http.ResponseWri
 		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 		return
 	}
-	rec, err := h.store.UpdateSelfImprovementRecommendationStatus(mux.Vars(r)["id"], req.Status)
+	rec, err := h.improve.UpdateRecommendationStatus(mux.Vars(r)["id"], req.Status)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -265,7 +265,7 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 	if author == "" {
 		author = "dashboard"
 	}
-	rec, err := h.store.UpsertSelfImprovementClarification(mux.Vars(r)["id"], author, req.Body)
+	rec, err := h.improve.UpsertClarification(mux.Vars(r)["id"], author, req.Body)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -337,7 +337,7 @@ func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {
-	var req store.SelfImprovementBundleItemUpdate
+	var req selfimprovement.SelfImprovementBundleItemUpdate
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 		return

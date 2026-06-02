@@ -19,6 +19,7 @@ import (
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/daemon/daemontest"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -166,47 +167,47 @@ func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
 	srv, _ := newTestServer(t, testCfg(nil))
 	recID := seedProposalBundleRecommendation(t, srv, "publish")
 
-	var created store.SelfImprovementProposalBundle
+	var created selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &created)
-	if created.ID == "" || created.Status != store.ProposalBundleStatusPending || len(created.Items) != 3 {
+	if created.ID == "" || created.Status != selfimprovement.ProposalBundleStatusPending || len(created.Items) != 3 {
 		t.Fatalf("created bundle = %+v, want pending bundle with three items", created)
 	}
 
-	var fetched store.SelfImprovementProposalBundle
+	var fetched selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodGet, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &fetched)
 	if fetched.ID != created.ID {
 		t.Fatalf("fetched bundle id = %q, want %q", fetched.ID, created.ID)
 	}
 
-	guardItem := bundleItemBy(t, created, func(item store.SelfImprovementBundleItem) bool {
-		return item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationUpdateExisting
+	guardItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.AssetType == "guardrail" && item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting
 	})
-	var edited store.SelfImprovementProposalBundle
+	var edited selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPatch, "/improvements/proposal-bundles/"+created.ID+"/items/"+guardItem.ID, `{"proposed_body":"guard body edited"}`, http.StatusOK, &edited)
-	guardItem = bundleItemBy(t, edited, func(item store.SelfImprovementBundleItem) bool { return item.ID == guardItem.ID })
+	guardItem = bundleItemBy(t, edited, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == guardItem.ID })
 	if guardItem.ProposedBody != "guard body edited" || guardItem.ProposedDescription != "guard desc v2" || guardItem.ProposedEnabled || guardItem.ProposedPosition != 17 {
 		t.Fatalf("body-only REST patch guardrail item = %+v, want body edit with metadata preserved", guardItem)
 	}
 
-	promptItem := bundleItemBy(t, created, func(item store.SelfImprovementBundleItem) bool { return item.AssetType == "prompt" })
-	var rejected store.SelfImprovementProposalBundle
+	promptItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.AssetType == "prompt" })
+	var rejected selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/items/"+promptItem.ID+"/reject", `{"reason":"not needed"}`, http.StatusOK, &rejected)
-	promptItem = bundleItemBy(t, rejected, func(item store.SelfImprovementBundleItem) bool { return item.ID == promptItem.ID })
-	if promptItem.Decision != store.ProposalBundleDecisionRejected || promptItem.DecisionReason != "not needed" {
+	promptItem = bundleItemBy(t, rejected, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == promptItem.ID })
+	if promptItem.Decision != selfimprovement.ProposalBundleDecisionRejected || promptItem.DecisionReason != "not needed" {
 		t.Fatalf("rejected item = decision %q reason %q, want rejected decision", promptItem.Decision, promptItem.DecisionReason)
 	}
 
-	skillItem := bundleItemBy(t, created, func(item store.SelfImprovementBundleItem) bool { return item.AssetType == "skill" })
-	var linked store.SelfImprovementProposalBundle
+	skillItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.AssetType == "skill" })
+	var linked selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/items/"+skillItem.ID+"/link-existing", `{"asset_id":"existing-rest-skill","reason":"already exists"}`, http.StatusOK, &linked)
-	skillItem = bundleItemBy(t, linked, func(item store.SelfImprovementBundleItem) bool { return item.ID == skillItem.ID })
-	if skillItem.Decision != store.ProposalBundleDecisionLinkedExisting || skillItem.AssetID != "existing-rest-skill" || skillItem.DecisionReason != "already exists" {
+	skillItem = bundleItemBy(t, linked, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == skillItem.ID })
+	if skillItem.Decision != selfimprovement.ProposalBundleDecisionLinkedExisting || skillItem.AssetID != "existing-rest-skill" || skillItem.DecisionReason != "already exists" {
 		t.Fatalf("linked item = %+v, want linked_existing decision evidence", skillItem)
 	}
 
-	var published store.SelfImprovementProposalBundle
+	var published selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/publish", "", http.StatusOK, &published)
-	if published.Status != store.ProposalBundleStatusPublished {
+	if published.Status != selfimprovement.ProposalBundleStatusPublished {
 		t.Fatalf("published status = %q, want published", published.Status)
 	}
 	gotGuardrail, err := srv.Store().GetGuardrail("rest-bundle-guardrail")
@@ -218,11 +219,11 @@ func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
 	}
 
 	discardRecID := seedProposalBundleRecommendation(t, srv, "discard")
-	var discardBundle store.SelfImprovementProposalBundle
+	var discardBundle selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+discardRecID+"/proposal-bundle", "", http.StatusOK, &discardBundle)
-	var discarded store.SelfImprovementProposalBundle
+	var discarded selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+discardBundle.ID+"/discard", "", http.StatusOK, &discarded)
-	if discarded.Status != store.ProposalBundleStatusDiscarded {
+	if discarded.Status != selfimprovement.ProposalBundleStatusDiscarded {
 		t.Fatalf("discarded status = %q, want discarded", discarded.Status)
 	}
 }
@@ -323,7 +324,7 @@ func proposalBundleCommentIDForTest(suffix string) int64 {
 	return 683002
 }
 
-func bundleItemBy(t *testing.T, bundle store.SelfImprovementProposalBundle, match func(store.SelfImprovementBundleItem) bool) store.SelfImprovementBundleItem {
+func bundleItemBy(t *testing.T, bundle selfimprovement.SelfImprovementProposalBundle, match func(selfimprovement.SelfImprovementBundleItem) bool) selfimprovement.SelfImprovementBundleItem {
 	t.Helper()
 	for _, item := range bundle.Items {
 		if match(item) {
@@ -331,7 +332,7 @@ func bundleItemBy(t *testing.T, bundle store.SelfImprovementProposalBundle, matc
 		}
 	}
 	t.Fatalf("matching bundle item not found in %+v", bundle.Items)
-	return store.SelfImprovementBundleItem{}
+	return selfimprovement.SelfImprovementBundleItem{}
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.

@@ -22,11 +22,11 @@ func (s *Service) CreateProposal(id string) (store.SelfImprovementProposal, erro
 	return createSelfImprovementProposal(s.store, id)
 }
 
-func (s *Service) CreateProposalBundle(id string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) CreateProposalBundle(id string) (SelfImprovementProposalBundle, error) {
 	return createSelfImprovementProposalBundle(s.store, id)
 }
 
-func (s *Service) GetProposalBundle(id string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) GetProposalBundle(id string) (SelfImprovementProposalBundle, error) {
 	return getSelfImprovementProposalBundleFromStore(s.store, id)
 }
 
@@ -38,7 +38,8 @@ func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([
 	for i := range recs {
 		bundle, err := s.GetProposalBundle(recs[i].ID)
 		if err == nil {
-			recs[i].ProposalBundle = &bundle
+			row := proposalBundleRowFromBundle(bundle)
+			recs[i].ProposalBundle = &row
 			continue
 		}
 		var nf *store.ErrNotFound
@@ -50,22 +51,22 @@ func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([
 	return recs, nil
 }
 
-func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in store.SelfImprovementBundleItemUpdate, actor string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
 	return updateSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, in, actor)
 }
 
-func (s *Service) RejectProposalBundleItem(bundleID, itemID, reason, actor string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) RejectProposalBundleItem(bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	return rejectSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, reason, actor)
 }
 
-func (s *Service) LinkProposalBundleItem(bundleID, itemID, assetID, reason, actor string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) LinkProposalBundleItem(bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	return linkSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, assetID, reason, actor)
 }
 
-func (s *Service) PublishProposalBundle(bundleID, actor string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) PublishProposalBundle(bundleID, actor string) (SelfImprovementProposalBundle, error) {
 	return publishSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
 }
 
-func (s *Service) DiscardProposalBundle(bundleID, actor string) (store.SelfImprovementProposalBundle, error) {
+func (s *Service) DiscardProposalBundle(bundleID, actor string) (SelfImprovementProposalBundle, error) {
 	return discardSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
 }

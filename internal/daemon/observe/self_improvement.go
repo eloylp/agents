@@ -1,9 +1,12 @@
 package observe
 
-import "github.com/eloylp/agents/internal/store"
+import (
+	"github.com/eloylp/agents/internal/selfimprovement"
+	"github.com/eloylp/agents/internal/store"
+)
 
 func buildRecommendation(feedback store.SelfImprovementFeedback, st *store.Store) store.SelfImprovementRecommendationInput {
-	in := store.RecommendationFromFeedback(feedback)
+	in := selfimprovement.RecommendationFromFeedback(feedback)
 	promptVersionID := ""
 	if prompt, err := st.ReadPrompt("prompt_self-improvement-analyst"); err == nil {
 		promptVersionID = prompt.VersionID

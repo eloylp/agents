@@ -13,6 +13,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -126,7 +127,7 @@ func toolUpdateImprovementRecommendationStatus(deps Deps) server.ToolHandlerFunc
 		if !ok {
 			return mcpgo.NewToolResultError("status is required"), nil
 		}
-		rec, err := deps.Store.UpdateSelfImprovementRecommendationStatus(id, status)
+		rec, err := deps.Improvements.UpdateRecommendationStatus(id, status)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update improvement recommendation status", err), nil
 		}
@@ -148,7 +149,7 @@ func toolClarifyImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
 		if author == "" {
 			author = "mcp"
 		}
-		rec, err := deps.Store.UpsertSelfImprovementClarification(id, author, body)
+		rec, err := deps.Improvements.UpsertClarification(id, author, body)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("clarify improvement recommendation", err), nil
 		}
@@ -281,7 +282,7 @@ func toolEditImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("proposed_body is required"), nil
 		}
 		args := req.GetArguments()
-		update := store.SelfImprovementBundleItemUpdate{ProposedBody: body}
+		update := selfimprovement.SelfImprovementBundleItemUpdate{ProposedBody: body}
 		if v, ok := stringPtrArg(args, "proposed_ref"); ok {
 			next := strings.TrimSpace(*v)
 			update.ProposedRef = &next

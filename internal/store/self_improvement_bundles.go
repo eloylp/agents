@@ -10,22 +10,22 @@ import (
 )
 
 const (
-	ProposalBundleStatusPending   = "pending"
-	ProposalBundleStatusPublished = "published"
-	ProposalBundleStatusDiscarded = "discarded"
+	ProposalBundleRowStatusPending   = "pending"
+	ProposalBundleRowStatusPublished = "published"
+	ProposalBundleRowStatusDiscarded = "discarded"
 
-	ProposalBundleOperationUpdateExisting = "update_existing"
-	ProposalBundleOperationCreateNew      = "create_new"
+	ProposalBundleRowOperationUpdateExisting = "update_existing"
+	ProposalBundleRowOperationCreateNew      = "create_new"
 
-	ProposalBundleDecisionPending        = "pending"
-	ProposalBundleDecisionAccepted       = "accepted"
-	ProposalBundleDecisionRejected       = "rejected"
-	ProposalBundleDecisionLinkedExisting = "linked_existing"
-	ProposalBundleDecisionPublished      = "published"
-	ProposalBundleDecisionDiscarded      = "discarded"
+	ProposalBundleRowDecisionPending        = "pending"
+	ProposalBundleRowDecisionAccepted       = "accepted"
+	ProposalBundleRowDecisionRejected       = "rejected"
+	ProposalBundleRowDecisionLinkedExisting = "linked_existing"
+	ProposalBundleRowDecisionPublished      = "published"
+	ProposalBundleRowDecisionDiscarded      = "discarded"
 )
 
-type SelfImprovementProposalBundle struct {
+type SelfImprovementProposalBundleRow struct {
 	ID                              string                         `json:"id"`
 	WorkspaceID                     string                         `json:"workspace"`
 	RecommendationID                string                         `json:"recommendation_id"`
@@ -36,10 +36,10 @@ type SelfImprovementProposalBundle struct {
 	CreatedAt                       string                         `json:"created_at"`
 	UpdatedAt                       string                         `json:"updated_at"`
 	Recommendation                  *SelfImprovementRecommendation `json:"recommendation,omitempty"`
-	Items                           []SelfImprovementBundleItem    `json:"items"`
+	Items                           []SelfImprovementBundleItemRow `json:"items"`
 }
 
-type SelfImprovementBundleItem struct {
+type SelfImprovementBundleItemRow struct {
 	ID                  string                `json:"id"`
 	BundleID            string                `json:"bundle_id"`
 	Operation           string                `json:"operation"`
@@ -66,7 +66,7 @@ type SelfImprovementBundleItem struct {
 	Stale               bool                  `json:"stale"`
 }
 
-type SelfImprovementBundleItemInput struct {
+type SelfImprovementBundleItemInputRow struct {
 	Operation           string `json:"operation"`
 	AssetType           string `json:"asset_type"`
 	AssetID             string `json:"asset_id"`
@@ -82,7 +82,7 @@ type SelfImprovementBundleItemInput struct {
 	Rationale           string `json:"rationale"`
 }
 
-type SelfImprovementBundleItemUpdate struct {
+type SelfImprovementBundleItemUpdateRow struct {
 	ProposedRef         *string `json:"proposed_ref"`
 	ProposedName        *string `json:"proposed_name"`
 	ProposedScope       *string `json:"proposed_scope"`
@@ -92,24 +92,148 @@ type SelfImprovementBundleItemUpdate struct {
 	ProposedPosition    *int    `json:"proposed_position"`
 }
 
-func (s *Store) GetSelfImprovementProposalBundle(id string) (SelfImprovementProposalBundle, error) {
-	return GetSelfImprovementProposalBundle(s.db, id)
+type SelfImprovementProposalBundleItemEventRow struct {
+	BundleID   string
+	ItemID     string
+	EventType  string
+	Actor      string
+	Reason     string
+	BeforeJSON string
+	AfterJSON  string
+}
+
+func InsertSelfImprovementProposalBundleRow(tx *Tx, bundle SelfImprovementProposalBundleRow) error {
+	if _, err := tx.Exec(`
+		INSERT INTO self_improvement_proposal_bundles (
+			id, workspace_id, recommendation_id, recommendation_updated_at_snapshot, recommendation_snapshot_hash
+		) VALUES (?, ?, ?, ?, ?)`, bundle.ID, bundle.WorkspaceID, bundle.RecommendationID, bundle.RecommendationUpdatedAtSnapshot, bundle.RecommendationSnapshotHash); err != nil {
+		return fmt.Errorf("store: create proposal bundle: %w", err)
+	}
+	return nil
+}
+
+func InsertSelfImprovementProposalBundleItemRow(tx *Tx, item SelfImprovementBundleItemRow) error {
+	if _, err := tx.Exec(`
+		INSERT INTO self_improvement_proposal_bundle_items (
+			id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
+			proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
+			analyst_proposed_body, duplicate_risk, rationale, decision
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.BundleID, item.Operation, item.AssetType, item.AssetID, item.BaseVersionID,
+		item.ProposedRef, item.ProposedName, item.ProposedScope, item.ProposedBody, item.ProposedDescription,
+		boolInt(item.ProposedEnabled), item.ProposedPosition, item.AnalystProposedBody,
+		item.DuplicateRisk, item.Rationale, item.Decision,
+	); err != nil {
+		return fmt.Errorf("store: create proposal bundle item: %w", err)
+	}
+	return nil
+}
+
+func UpdateSelfImprovementProposalBundleItemDraftRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
+	if _, err := tx.Exec(`
+		UPDATE self_improvement_proposal_bundle_items
+		SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,
+		    proposed_description=?, proposed_enabled=?, proposed_position=?, updated_at=datetime('now')
+		WHERE id=? AND bundle_id=?`, item.ProposedRef, item.ProposedName, item.ProposedScope, item.ProposedBody,
+		item.ProposedDescription, boolInt(item.ProposedEnabled), item.ProposedPosition, item.ID, bundleID); err != nil {
+		return fmt.Errorf("store: update proposal bundle item: %w", err)
+	}
+	return nil
+}
+
+func UpdateSelfImprovementProposalBundleItemDecisionRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
+	if _, err := tx.Exec(`
+		UPDATE self_improvement_proposal_bundle_items
+		SET decision=?, asset_id=CASE WHEN ? <> '' THEN ? ELSE asset_id END, decision_reason=?, updated_at=datetime('now')
+		WHERE id=? AND bundle_id=?`, item.Decision, item.AssetID, item.AssetID, item.DecisionReason, item.ID, bundleID); err != nil {
+		return fmt.Errorf("store: decide proposal bundle item: %w", err)
+	}
+	return nil
+}
+
+func MarkSelfImprovementProposalBundleItemPublishedRow(tx *Tx, itemID, versionID, decision string) error {
+	if _, err := tx.Exec(`
+		UPDATE self_improvement_proposal_bundle_items
+		SET decision=?, published_version_id=?, updated_at=datetime('now')
+		WHERE id=?`, decision, versionID, itemID); err != nil {
+		return fmt.Errorf("store: mark proposal bundle item published: %w", err)
+	}
+	return nil
+}
+
+func UpdateSelfImprovementProposalBundleStatusRow(tx *Tx, bundleID, status string) error {
+	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundles SET status=?, updated_at=datetime('now') WHERE id=?`, status, bundleID); err != nil {
+		return fmt.Errorf("store: update proposal bundle status: %w", err)
+	}
+	return nil
+}
+
+func DiscardPendingSelfImprovementProposalBundleItemRows(tx *Tx, bundleID, decision string) error {
+	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, decision, bundleID); err != nil {
+		return fmt.Errorf("store: discard proposal bundle items: %w", err)
+	}
+	return nil
+}
+
+func InsertSelfImprovementProposalBundleItemEventRow(tx *Tx, event SelfImprovementProposalBundleItemEventRow) error {
+	if _, err := tx.Exec(`
+		INSERT INTO self_improvement_proposal_bundle_item_events (
+			id, bundle_id, item_id, event_type, actor, reason, before_json, after_json
+		) VALUES ('bundleevent_' || lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?)`,
+		event.BundleID, event.ItemID, event.EventType, event.Actor, event.Reason, event.BeforeJSON, event.AfterJSON,
+	); err != nil {
+		return fmt.Errorf("store: insert proposal bundle item event: %w", err)
+	}
+	return nil
+}
+
+func UpdatePublishedCatalogVersionProvenanceTx(tx *Tx, assetType, versionID, sourceType, sourceRef, author, changelog string) error {
+	table := ""
+	switch assetType {
+	case "prompt":
+		table = "prompt_versions"
+	case "skill":
+		table = "skill_versions"
+	case "guardrail":
+		table = "guardrail_versions"
+	default:
+		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
+	}
+	res, err := tx.Exec(
+		fmt.Sprintf(`UPDATE %s SET source_type=?, source_ref=?, author=?, changelog=? WHERE id=? AND state='published'`, table),
+		sourceType, sourceRef, author, changelog, versionID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: update published catalog version metadata: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return &ErrValidation{Msg: "proposal bundle published version metadata was not updated"}
+	}
+	return nil
+}
+
+func (s *Store) GetSelfImprovementProposalBundleRow(id string) (SelfImprovementProposalBundleRow, error) {
+	return GetSelfImprovementProposalBundleRow(s.db, id)
 }
 
 func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
 	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
 }
 
-func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
-	return getSelfImprovementProposalBundle(db, id)
+func GetSelfImprovementProposalBundleRow(db *sql.DB, id string) (SelfImprovementProposalBundleRow, error) {
+	return getSelfImprovementProposalBundleRow(db, id)
 }
 
-func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProposalBundle, error) {
+func getSelfImprovementProposalBundleRow(q querier, id string) (SelfImprovementProposalBundleRow, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
+		return SelfImprovementProposalBundleRow{}, &ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
 	}
-	var bundle SelfImprovementProposalBundle
+	var bundle SelfImprovementProposalBundleRow
 	err := q.QueryRow(`
 		SELECT id, workspace_id, recommendation_id, recommendation_updated_at_snapshot,
 		       recommendation_snapshot_hash, status, created_at, updated_at
@@ -118,20 +242,20 @@ func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProp
 		Scan(&bundle.ID, &bundle.WorkspaceID, &bundle.RecommendationID, &bundle.RecommendationUpdatedAtSnapshot,
 			&bundle.RecommendationSnapshotHash, &bundle.Status, &bundle.CreatedAt, &bundle.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementProposalBundle{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
+		return SelfImprovementProposalBundleRow{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
 	}
 	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
+		return SelfImprovementProposalBundleRow{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
 	}
-	items, err := listSelfImprovementProposalBundleItems(q, bundle.ID)
+	items, err := listSelfImprovementProposalBundleRowItems(q, bundle.ID)
 	if err != nil {
-		return SelfImprovementProposalBundle{}, err
+		return SelfImprovementProposalBundleRow{}, err
 	}
 	bundle.Items = items
 	return bundle, nil
 }
 
-func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfImprovementBundleItem, error) {
+func listSelfImprovementProposalBundleRowItems(q querier, bundleID string) ([]SelfImprovementBundleItemRow, error) {
 	rows, err := q.Query(`
 		SELECT id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
 		       proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
@@ -144,9 +268,9 @@ func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfI
 		return nil, fmt.Errorf("store: list proposal bundle items: %w", err)
 	}
 	defer rows.Close()
-	var out []SelfImprovementBundleItem
+	var out []SelfImprovementBundleItemRow
 	for rows.Next() {
-		var item SelfImprovementBundleItem
+		var item SelfImprovementBundleItemRow
 		var enabled int
 		if err := rows.Scan(
 			&item.ID, &item.BundleID, &item.Operation, &item.AssetType, &item.AssetID, &item.BaseVersionID,
@@ -172,7 +296,7 @@ func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string,
 		return nil, err
 	}
 	for i := range recs {
-		bundle, err := GetSelfImprovementProposalBundle(db, recs[i].ID)
+		bundle, err := GetSelfImprovementProposalBundleRow(db, recs[i].ID)
 		if err == nil {
 			recs[i].ProposalBundle = &bundle
 			continue

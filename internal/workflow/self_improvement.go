@@ -10,6 +10,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -176,7 +177,7 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return store.SelfImprovementRecommendation{}, err
 	}
-	return e.store.UpsertSelfImprovementRecommendation(in)
+	return selfimprovement.New(e.store).RecordRecommendation(in)
 }
 
 func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, payload string) (ai.Response, error) {

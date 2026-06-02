@@ -369,7 +369,7 @@ func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
 		t.Fatalf("insert feedback: %v", err)
 	}
 
-	rec, err := st.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
+	rec, err := st.UpsertSelfImprovementRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
 	if err != nil {
 		t.Fatalf("insert recommendation: %v", err)
 	}
@@ -677,7 +677,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
-	if len(bundle.Items) != 6 || bundle.Status != store.ProposalBundleStatusPending {
+	if len(bundle.Items) != 6 || bundle.Status != selfimprovement.ProposalBundleStatusPending {
 		t.Fatalf("bundle = %+v, want six pending items", bundle)
 	}
 	if got := countCatalogVersionsForTest(t, db); got != beforeVersions {
@@ -686,22 +686,22 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 
 	for _, item := range bundle.Items {
 		switch {
-		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "prompt":
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}, "system"); err != nil {
+		case item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting && item.AssetType == "prompt":
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}, "system"); err != nil {
 				t.Fatalf("edit bundle item: %v", err)
 			}
-		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "guardrail":
+		case item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting && item.AssetType == "guardrail":
 			if item.ProposedDescription != "guard desc v2" || item.ProposedEnabled || item.ProposedPosition != 11 {
 				t.Fatalf("guardrail update metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
 			}
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}, "system"); err != nil {
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}, "system"); err != nil {
 				t.Fatalf("edit guardrail body only: %v", err)
 			}
-		case item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationCreateNew:
+		case item.AssetType == "guardrail" && item.Operation == selfimprovement.ProposalBundleOperationCreateNew:
 			if item.ProposedDescription != "new guardrail description" || item.ProposedEnabled || item.ProposedPosition != 42 {
 				t.Fatalf("guardrail metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
 			}
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
 				ProposedRef: stringPtr("guardrail_bundle_new_edited"), ProposedName: stringPtr("bundle-new-guardrail-edited"), ProposedScope: stringPtr("workspace"),
 				ProposedBody: "new guardrail edited", ProposedDescription: stringPtr("edited guardrail description"),
 				ProposedEnabled: boolPtr(true), ProposedPosition: intPtr(7),
@@ -718,7 +718,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if err != nil {
 		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
 	}
-	if published.Status != store.ProposalBundleStatusPublished {
+	if published.Status != selfimprovement.ProposalBundleStatusPublished {
 		t.Fatalf("bundle status = %s, want published", published.Status)
 	}
 	gotPrompt, err := store.ReadPrompt(db, prompt.ID)
@@ -748,7 +748,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if gotNewGuard.Description != "edited guardrail description" || gotNewGuard.Content != "new guardrail edited" || !gotNewGuard.Enabled || gotNewGuard.Position != 7 {
 		t.Fatalf("new guardrail = %+v, want edited metadata", gotNewGuard)
 	}
-	var linkedItem store.SelfImprovementBundleItem
+	var linkedItem selfimprovement.SelfImprovementBundleItem
 	for _, item := range published.Items {
 		if item.ProposedRef == "skill_bundle_link" {
 			linkedItem = item
@@ -758,7 +758,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if linkedItem.ID == "" {
 		t.Fatal("linked bundle item not found after publish")
 	}
-	if linkedItem.Decision != store.ProposalBundleDecisionLinkedExisting || linkedItem.AssetID != "existing-skill-link" || linkedItem.DecisionReason != "already exists" {
+	if linkedItem.Decision != selfimprovement.ProposalBundleDecisionLinkedExisting || linkedItem.AssetID != "existing-skill-link" || linkedItem.DecisionReason != "already exists" {
 		t.Fatalf("linked item = decision %q asset %q reason %q, want linked_existing decision evidence", linkedItem.Decision, linkedItem.AssetID, linkedItem.DecisionReason)
 	}
 	if linkedItem.PublishedVersionID != "" {
@@ -843,7 +843,7 @@ func TestSelfImprovementProposalBundleCreateNewUsesBundleWorkspaceAndProvenance(
 	if err != nil {
 		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
 	}
-	item := bundleItemByMatch(t, published, func(item store.SelfImprovementBundleItem) bool {
+	item := bundleItemByMatch(t, published, func(item selfimprovement.SelfImprovementBundleItem) bool {
 		return item.ProposedRef == "prompt_team_bundle_new"
 	})
 	got, err := store.ReadPrompt(db, "prompt_team_bundle_new")
@@ -925,21 +925,23 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "created"); got != 1 {
 		t.Fatalf("created event count = %d, want 1", got)
 	}
-	item := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "prompt_repo_bundle_new" })
+	item := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.ProposedRef == "prompt_repo_bundle_new"
+	})
 	svc := newSelfImprovementService(db)
-	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("missing-workspace"),
 		ProposedBody:  "repo prompt body",
 	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("UpdateSelfImprovementProposalBundleItem invalid scope error = %v, want workspace validation", err)
 	}
-	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("team-a/owner/other"),
 		ProposedBody:  "repo prompt body",
 	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "repo") {
 		t.Fatalf("UpdateSelfImprovementProposalBundleItem cross-workspace repo scope error = %v, want repo validation", err)
 	}
-	edited, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	edited, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("team-a/owner/repo"),
 		ProposedBody:  "repo prompt body edited",
 	}, "dashboard")
@@ -949,7 +951,7 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "edited"); got != 1 {
 		t.Fatalf("edited event count = %d, want 1", got)
 	}
-	editedItem := bundleItemByMatch(t, edited, func(candidate store.SelfImprovementBundleItem) bool { return candidate.ID == item.ID })
+	editedItem := bundleItemByMatch(t, edited, func(candidate selfimprovement.SelfImprovementBundleItem) bool { return candidate.ID == item.ID })
 	if editedItem.ProposedBody == "" {
 		t.Fatalf("edited item = %+v, want populated item", editedItem)
 	}
@@ -1007,8 +1009,12 @@ func TestSelfImprovementProposalBundleRejectLinkPublishEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
-	linkItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_skill_link" })
-	rejectItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_guardrail_reject" })
+	linkItem := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.ProposedRef == "event_skill_link"
+	})
+	rejectItem := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.ProposedRef == "event_guardrail_reject"
+	})
 	if _, err := svc.LinkProposalBundleItem(bundle.ID, linkItem.ID, "event-existing-skill", "already exists", "mcp"); err != nil {
 		t.Fatalf("LinkSelfImprovementProposalBundleItem: %v", err)
 	}
@@ -1034,7 +1040,7 @@ func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) s
 	return id
 }
 
-func bundleItemByMatch(t *testing.T, bundle store.SelfImprovementProposalBundle, match func(store.SelfImprovementBundleItem) bool) store.SelfImprovementBundleItem {
+func bundleItemByMatch(t *testing.T, bundle selfimprovement.SelfImprovementProposalBundle, match func(selfimprovement.SelfImprovementBundleItem) bool) selfimprovement.SelfImprovementBundleItem {
 	t.Helper()
 	for _, item := range bundle.Items {
 		if match(item) {
@@ -1042,7 +1048,7 @@ func bundleItemByMatch(t *testing.T, bundle store.SelfImprovementProposalBundle,
 		}
 	}
 	t.Fatalf("bundle item not found in %+v", bundle.Items)
-	return store.SelfImprovementBundleItem{}
+	return selfimprovement.SelfImprovementBundleItem{}
 }
 
 func proposalBundleEventCountForTest(t *testing.T, db *sql.DB, bundleID, eventType string) int {
