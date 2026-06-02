@@ -55,12 +55,46 @@ versioning path. Non-convertible recommendation types, such as broad design
 recommendations, split-agent work, dispatch-wiring changes, `needs_more_context`,
 or `no_action`, remain review records and do not mutate fleet state.
 
+Reactive recommendations can also stage a coordinated proposal bundle when one
+feedback event needs more than one catalog change. Bundle creation is available
+from **Improvements**, through
+`POST /improvements/recommendations/{id}/proposal-bundle`, or through the MCP
+`create_improvement_proposal_bundle` tool. A bundle stores editable staging
+items only; it does not create prompt, skill, or guardrail version rows during
+creation and it remains ignored by runtime prompt composition.
+
+Bundle items support updating existing prompts, skills, and guardrails, and
+proposing new catalog assets. Before publish, operators can edit staged bodies,
+reject items with a reason, or convert create-new items into link-existing
+decisions. `Publish Bundle` is atomic for accepted publishable items: stale
+base versions, duplicate new refs, invalid items, or write failures roll back
+the whole publish transaction. Link-existing and rejected decisions are
+preserved as review evidence without creating catalog versions. Richer stale
+refresh and re-analysis UX is intentionally separate from this fail-closed
+publish behavior.
+
 Inspect the workflow in the dashboard under **Improvements**, through
 `GET /improvements/feedback`, `GET /improvements/recommendations`, and
-`GET /improvements/recommendations/{id}/proposal`, or through the MCP
-`list_improvement_feedback`, `list_improvement_recommendations`,
-`get_improvement_proposal`, and
-`list_improvement_recommendations_with_proposals` tools.
+`GET /improvements/recommendations/{id}/proposal`,
+`GET /improvements/recommendations/{id}/proposal-bundle`, and the
+`/improvements/proposal-bundles/{id}/...` item/publish/discard endpoints, or
+through the MCP `list_improvement_feedback`,
+`list_improvement_recommendations`, `get_improvement_proposal`,
+`get_improvement_proposal_bundle`, `edit_improvement_proposal_bundle_item`,
+`reject_improvement_proposal_bundle_item`,
+`link_improvement_proposal_bundle_item`,
+`publish_improvement_proposal_bundle`,
+`discard_improvement_proposal_bundle`,
+`list_improvement_recommendations_with_proposals`, and
+`list_improvement_recommendations_with_bundles` tools.
+
+Single-target proposals are for simple one-asset edits. Reactive multi-asset
+bundles are feedback-driven and keep coordinated changes together. Proactive
+catalog audits are a separate workflow that reviews the catalog without a
+specific feedback event. Assistant preference memory is also separate: it
+should learn from accepted, rejected, edited, linked-existing, discarded, and
+published decisions after these review surfaces exist, but it must not bypass
+the recommendation, bundle, or publish gates.
 
 When a recommendation needs more input, the dashboard's **Clarify** action lets
 an operator edit one clarification field while seeing the original feedback,

@@ -85,6 +85,34 @@ interface ImprovementProposal {
   version: CatalogVersion
 }
 
+interface ProposalBundleItem {
+  id: string
+  operation: string
+  asset_type: string
+  asset_id?: string
+  base_version_id?: string
+  proposed_ref?: string
+  proposed_name?: string
+  proposed_scope?: string
+  proposed_body: string
+  analyst_proposed_body: string
+  duplicate_risk?: string
+  rationale?: string
+  decision: string
+  decision_reason?: string
+  published_version_id?: string
+  base_version?: CatalogVersion
+  current_version_id?: string
+  stale?: boolean
+}
+
+interface ProposalBundle {
+  id?: string
+  recommendation_id?: string
+  status?: string
+  items?: ProposalBundleItem[]
+}
+
 type Tab = 'inbox' | 'recommendations' | 'history'
 
 const nonConvertibleTypes = ['needs_more_context', 'no_action', 'split_agent', 'change_dispatch_wiring']
@@ -147,6 +175,8 @@ export default function ImprovementsPage() {
   const [feedback, setFeedback] = useState<FeedbackEvent[]>([])
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [proposals, setProposals] = useState<Record<string, ImprovementProposal[]>>({})
+  const [bundles, setBundles] = useState<Record<string, ProposalBundle>>({})
+  const [itemDrafts, setItemDrafts] = useState<Record<string, string>>({})
   const [tab, setTab] = useState<Tab>('inbox')
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(true)
@@ -165,20 +195,21 @@ export default function ImprovementsPage() {
         setFeedback(feedbackRows ?? [])
         const recs = recommendationRows ?? []
         setRecommendations(recs)
-        return Promise.all(recs.map((row: Recommendation) =>
-          fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}/proposal`, { cache: 'no-store' })
-            .then(r => r.ok ? r.json() : [])
-            .then(rows => [row.id, rows ?? []] as const)
-        ))
+        return Promise.all(recs.map((row: Recommendation) => Promise.all([
+          fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}/proposal`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+          fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}/proposal-bundle`, { cache: 'no-store' }).then(r => r.ok ? r.json() : {}),
+        ]).then(([proposalRows, bundle]) => [row.id, proposalRows ?? [], bundle ?? {}] as const)))
       })
       .then(rows => {
         if (!rows) return
-        setProposals(Object.fromEntries(rows))
+        setProposals(Object.fromEntries(rows.map(([id, proposalRows]) => [id, proposalRows])))
+        setBundles(Object.fromEntries(rows.map(([id, , bundle]) => [id, bundle])))
       })
       .catch(() => {
         setFeedback([])
         setRecommendations([])
         setProposals({})
+        setBundles({})
       })
       .finally(() => setLoading(false))
   }
@@ -230,6 +261,53 @@ export default function ImprovementsPage() {
 
   const createProposal = async (id: string) => {
     const res = await fetch(`/improvements/recommendations/${encodeURIComponent(id)}/proposal`, { method: 'POST' })
+    if (res.ok) load()
+  }
+
+  const createBundle = async (id: string) => {
+    const res = await fetch(`/improvements/recommendations/${encodeURIComponent(id)}/proposal-bundle`, { method: 'POST' })
+    if (res.ok) load()
+  }
+
+  const editBundleItem = async (bundleID: string, item: ProposalBundleItem) => {
+    const body = itemDrafts[item.id] ?? item.proposed_body
+    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(item.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proposed_body: body,
+        proposed_ref: item.proposed_ref,
+        proposed_name: item.proposed_name,
+        proposed_scope: item.proposed_scope,
+      }),
+    })
+    if (res.ok) load()
+  }
+
+  const rejectBundleItem = async (bundleID: string, itemID: string) => {
+    const reason = window.prompt('Reject reason') ?? ''
+    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(itemID)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    })
+    if (res.ok) load()
+  }
+
+  const linkBundleItem = async (bundleID: string, itemID: string) => {
+    const asset_id = window.prompt('Existing asset id/ref') ?? ''
+    if (!asset_id.trim()) return
+    const reason = window.prompt('Link reason') ?? ''
+    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(itemID)}/link-existing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asset_id, reason }),
+    })
+    if (res.ok) load()
+  }
+
+  const postBundleAction = async (bundleID: string, action: 'publish' | 'discard') => {
+    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/${action}`, { method: 'POST' })
     if (res.ok) load()
   }
 
@@ -316,6 +394,55 @@ export default function ImprovementsPage() {
                     </div>
                   </div>
                 )}
+                {bundles[row.id]?.id && (
+                  <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', color: 'var(--text-muted)' }}>
+                      <span>Bundle {bundles[row.id].id} · {bundles[row.id].status}</span>
+                      {bundles[row.id].status === 'pending' && (
+                        <span style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => postBundleAction(bundles[row.id].id!, 'publish')} style={{ padding: '5px 7px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Publish Bundle</button>
+                          <button onClick={() => postBundleAction(bundles[row.id].id!, 'discard')} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Discard Bundle</button>
+                        </span>
+                      )}
+                    </div>
+                    {(bundles[row.id].items ?? []).map(item => {
+                      const itemDiff = diffLines(versionBody(item.asset_type, item.base_version), itemDrafts[item.id] ?? item.proposed_body)
+                      return (
+                        <section key={item.id} style={{ display: 'grid', gap: 7, background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 8 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 5, color: 'var(--text-muted)' }}>
+                            <span>{item.asset_type} · {item.operation}</span>
+                            <span>{item.asset_id || item.proposed_ref}</span>
+                            <span>{item.decision}</span>
+                            <span>{item.stale ? 'stale base' : `base ${item.base_version_id || 'new'}`}</span>
+                            {item.duplicate_risk && <span>duplicate {item.duplicate_risk}</span>}
+                          </div>
+                          {item.operation === 'create_new' && <div style={{ color: 'var(--text-muted)' }}>{item.proposed_name} · {item.proposed_scope}</div>}
+                          <textarea
+                            value={itemDrafts[item.id] ?? item.proposed_body}
+                            onChange={e => setItemDrafts(current => ({ ...current, [item.id]: e.target.value }))}
+                            rows={5}
+                            style={{ resize: 'vertical', minHeight: 120, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 8, font: 'inherit', fontSize: '0.78rem', lineHeight: 1.45 }}
+                          />
+                          <pre aria-label={`Bundle item diff for ${item.id}`} style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 8, fontSize: '0.74rem', lineHeight: 1.45 }}>
+                            {itemDiff.map((line, i) => (
+                              <span key={`${i}-${line.kind}`} style={{ display: 'block', color: line.kind === 'add' ? 'var(--success)' : line.kind === 'del' ? 'var(--text-danger)' : 'var(--text-muted)' }}>{line.text || ' '}</span>
+                            ))}
+                          </pre>
+                          {item.rationale && <div style={{ color: 'var(--text-muted)' }}>{item.rationale}</div>}
+                          {item.decision_reason && <div style={{ color: 'var(--text-muted)' }}>{item.decision_reason}</div>}
+                          {bundles[row.id].status === 'pending' && (
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button onClick={() => editBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Save Item</button>
+                              <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: item.analyst_proposed_body }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
+                              <button onClick={() => rejectBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>
+                              {item.operation === 'create_new' && <button onClick={() => linkBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
+                            </div>
+                          )}
+                        </section>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
               <div style={{ display: 'grid', gap: 3, color: 'var(--text-muted)' }}>
                 <span>{row.type}</span>
@@ -333,6 +460,9 @@ export default function ImprovementsPage() {
                 ))}
                 {canCreateProposal(row) && !proposals[row.id]?.length && (
                   <button onClick={() => createProposal(row.id)} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Create Proposal</button>
+                )}
+                {row.status === 'accepted' && !bundles[row.id]?.id && (
+                  <button onClick={() => createBundle(row.id)} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Create Proposal Bundle</button>
                 )}
               </div>
             </article>

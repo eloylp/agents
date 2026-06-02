@@ -595,6 +595,199 @@ func TestCreateSelfImprovementProposalListsGuardrailMetadata(t *testing.T) {
 	}
 }
 
+func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "bundle-prompt", Description: "prompt desc", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	if err := store.UpsertSkill(db, "bundle-skill", fleet.Skill{Name: "bundle-skill", Prompt: "skill v1"}); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	if err := store.UpsertSkill(db, "existing-skill-link", fleet.Skill{Name: "existing-skill-link", Prompt: "existing skill"}); err != nil {
+		t.Fatalf("seed linked skill: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "bundle-guardrail", Description: "guard desc", Content: "guard v1", Enabled: true, Position: 9}); err != nil {
+		t.Fatalf("seed guardrail: %v", err)
+	}
+	skillVersionID := currentCatalogVersionForTest(t, db, "skills", "bundle-skill")
+	guardrailVersionID := currentCatalogVersionForTest(t, db, "guardrails", "bundle-guardrail")
+	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  683001,
+		SourceURL:        "https://github.com/owner/repo/issues/683#issuecomment-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      683,
+		RawBody:          "multi asset feedback /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "coordinated catalog update",
+		Rationale:             "prompt, skill, and guardrail all need a narrow update",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+				{"operation": "update_existing", "asset_type": "skill", "asset_id": "bundle-skill", "base_version_id": skillVersionID, "proposed_body": "skill v2"},
+				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": "bundle-guardrail", "base_version_id": guardrailVersionID, "proposed_body": "guard v2"},
+				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_new", "proposed_name": "bundle-new", "proposed_scope": "workspace", "proposed_body": "new skill", "duplicate_risk": "low", "rationale": "no current skill covers it"},
+				{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "guardrail_bundle_new", "proposed_name": "bundle-new-guardrail", "proposed_scope": "workspace", "proposed_body": "new guardrail", "duplicate_risk": "medium"},
+				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_link", "proposed_name": "bundle-link", "proposed_scope": "workspace", "proposed_body": "link me"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	beforeVersions := countCatalogVersionsForTest(t, db)
+	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
+	}
+	if len(bundle.Items) != 6 || bundle.Status != store.ProposalBundleStatusPending {
+		t.Fatalf("bundle = %+v, want six pending items", bundle)
+	}
+	if got := countCatalogVersionsForTest(t, db); got != beforeVersions {
+		t.Fatalf("catalog version count after bundle create = %d, want unchanged %d", got, beforeVersions)
+	}
+
+	for _, item := range bundle.Items {
+		switch {
+		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "prompt":
+			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}); err != nil {
+				t.Fatalf("edit bundle item: %v", err)
+			}
+		case item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationCreateNew:
+			if _, err := store.RejectSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, "too broad"); err != nil {
+				t.Fatalf("reject guardrail create item: %v", err)
+			}
+		case item.ProposedRef == "skill_bundle_link":
+			if _, err := store.LinkSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, "existing-skill-link", "already exists"); err != nil {
+				t.Fatalf("link skill item: %v", err)
+			}
+		}
+	}
+	published, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID)
+	if err != nil {
+		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
+	}
+	if published.Status != store.ProposalBundleStatusPublished {
+		t.Fatalf("bundle status = %s, want published", published.Status)
+	}
+	gotPrompt, err := store.ReadPrompt(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if gotPrompt.Content != "prompt v2 edited" {
+		t.Fatalf("prompt content = %q, want edited bundle body", gotPrompt.Content)
+	}
+	if gotSkill := skillPromptForTest(t, db, "bundle-skill"); gotSkill != "skill v2" {
+		t.Fatalf("skill prompt = %q, want skill v2", gotSkill)
+	}
+	if gotGuard := guardrailContentForTest(t, db, "bundle-guardrail"); gotGuard != "guard v2" {
+		t.Fatalf("guardrail content = %q, want guard v2", gotGuard)
+	}
+	if gotNew := skillPromptForTest(t, db, "skill_bundle_new"); gotNew != "new skill" {
+		t.Fatalf("new skill prompt = %q, want new skill", gotNew)
+	}
+	if _, err := store.GetGuardrail(db, "guardrail_bundle_new"); err == nil {
+		t.Fatalf("rejected guardrail was created")
+	}
+}
+
+func TestSelfImprovementProposalBundlePublishRollsBackOnStaleItem(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "stale-bundle-prompt", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	if err := store.UpsertSkill(db, "stale-bundle-skill", fleet.Skill{Name: "stale-bundle-skill", Prompt: "skill v1"}); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID: fleet.DefaultWorkspaceID, RepoOwner: "owner", RepoName: "repo", SourceType: "issue_comment",
+		GitHubCommentID: 683002, AuthorLogin: "maintainer", AuthorAuthorized: true, RawBody: "stale /agents improve", Tag: store.FeedbackTag,
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID: fleet.DefaultWorkspaceID, FeedbackEventID: feedback.ID, Type: "catalog_patch_bundle", Status: store.RecommendationStatusAccepted,
+		Finding: "stale bundle", AnalyzerPromptRef: "prompt_self-improvement-analyst", StructuredOutput: map[string]any{"changes": []map[string]any{
+			{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			{"operation": "update_existing", "asset_type": "skill", "asset_id": "stale-bundle-skill", "base_version_id": currentCatalogVersionForTest(t, db, "skills", "stale-bundle-skill"), "proposed_body": "skill v2"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: prompt.ID, Name: "stale-bundle-prompt", Content: "prompt v1.5"}); err != nil {
+		t.Fatalf("advance prompt: %v", err)
+	}
+	if _, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("publish error = %v, want stale failure", err)
+	}
+	if gotSkill := skillPromptForTest(t, db, "stale-bundle-skill"); gotSkill != "skill v1" {
+		t.Fatalf("skill prompt after failed publish = %q, want rollback to skill v1", gotSkill)
+	}
+}
+
+func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow("SELECT COALESCE(current_version_id, '') FROM "+table+" WHERE ref=? OR name=?", ref, ref).Scan(&id); err != nil {
+		t.Fatalf("current version for %s/%s: %v", table, ref, err)
+	}
+	return id
+}
+
+func countCatalogVersionsForTest(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM prompt_versions) + (SELECT COUNT(*) FROM skill_versions) + (SELECT COUNT(*) FROM guardrail_versions)`).Scan(&count); err != nil {
+		t.Fatalf("count catalog versions: %v", err)
+	}
+	return count
+}
+
+func skillPromptForTest(t *testing.T, db *sql.DB, ref string) string {
+	t.Helper()
+	var prompt string
+	if err := db.QueryRow(`SELECT prompt FROM skills WHERE ref=? OR name=?`, ref, ref).Scan(&prompt); err != nil {
+		t.Fatalf("skill prompt %s: %v", ref, err)
+	}
+	return prompt
+}
+
+func guardrailContentForTest(t *testing.T, db *sql.DB, ref string) string {
+	t.Helper()
+	var content string
+	if err := db.QueryRow(`SELECT content FROM guardrails WHERE ref=? OR name=?`, ref, ref).Scan(&content); err != nil {
+		t.Fatalf("guardrail content %s: %v", ref, err)
+	}
+	return content
+}
+
 func storableFeedback(db *sql.DB, workspace string) (store.SelfImprovementFeedback, error) {
 	return store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
 		WorkspaceID:      workspace,

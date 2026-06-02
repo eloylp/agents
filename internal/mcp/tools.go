@@ -302,6 +302,73 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolListImprovementRecommendationsWithProposals(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("create_improvement_proposal_bundle",
+				mcpgo.WithDescription("Create inert editable staging records for one accepted self-improvement recommendation. This does not create catalog versions or affect runtime prompt composition."),
+				mcpgo.WithString("recommendation_id", mcpgo.Required(), mcpgo.Description("Accepted recommendation id.")),
+			),
+			toolCreateImprovementProposalBundle(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("get_improvement_proposal_bundle",
+				mcpgo.WithDescription("Fetch an editable self-improvement proposal bundle by recommendation id or bundle id."),
+				mcpgo.WithString("recommendation_id", mcpgo.Description("Recommendation id.")),
+				mcpgo.WithString("bundle_id", mcpgo.Description("Proposal bundle id.")),
+			),
+			toolGetImprovementProposalBundle(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("edit_improvement_proposal_bundle_item",
+				mcpgo.WithDescription("Edit one pending proposal bundle item. Existing-asset items allow body edits; create-new items also allow proposed ref/name/scope edits."),
+				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
+				mcpgo.WithString("item_id", mcpgo.Required(), mcpgo.Description("Proposal bundle item id.")),
+				mcpgo.WithString("proposed_body", mcpgo.Required(), mcpgo.Description("Edited staged body.")),
+				mcpgo.WithString("proposed_ref", mcpgo.Description("Edited ref for create-new items.")),
+				mcpgo.WithString("proposed_name", mcpgo.Description("Edited display name for create-new items.")),
+				mcpgo.WithString("proposed_scope", mcpgo.Description("Edited scope for create-new items.")),
+			),
+			toolEditImprovementProposalBundleItem(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("reject_improvement_proposal_bundle_item",
+				mcpgo.WithDescription("Reject one pending proposal bundle item and preserve the reason as review evidence."),
+				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
+				mcpgo.WithString("item_id", mcpgo.Required(), mcpgo.Description("Proposal bundle item id.")),
+				mcpgo.WithString("reason", mcpgo.Description("Optional rejection reason.")),
+			),
+			toolRejectImprovementProposalBundleItem(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("link_improvement_proposal_bundle_item",
+				mcpgo.WithDescription("Convert a create-new proposal bundle item into a link-existing decision."),
+				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
+				mcpgo.WithString("item_id", mcpgo.Required(), mcpgo.Description("Proposal bundle item id.")),
+				mcpgo.WithString("asset_id", mcpgo.Required(), mcpgo.Description("Existing catalog asset id/ref to link.")),
+				mcpgo.WithString("reason", mcpgo.Description("Optional link-existing explanation.")),
+			),
+			toolLinkImprovementProposalBundleItem(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("publish_improvement_proposal_bundle",
+				mcpgo.WithDescription("Atomically publish every accepted proposal bundle item. Stale or invalid items fail closed and roll back the whole bundle."),
+				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
+			),
+			toolPublishImprovementProposalBundle(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("discard_improvement_proposal_bundle",
+				mcpgo.WithDescription("Discard a pending proposal bundle without touching catalog versions."),
+				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
+			),
+			toolDiscardImprovementProposalBundle(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("list_improvement_recommendations_with_bundles",
+				mcpgo.WithDescription("List self-improvement recommendations that already have linked proposal bundles."),
+				mcpgo.WithString("workspace", mcpgo.Description("Optional workspace id or display name. Defaults to default.")),
+			),
+			toolListImprovementRecommendationsWithBundles(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("list_traces",
 				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",

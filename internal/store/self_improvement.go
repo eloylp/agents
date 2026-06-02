@@ -1117,7 +1117,7 @@ func nonConvertibleRecommendationType(typ string) bool {
 	}
 }
 
-func readSkill(db *sql.DB, ref string) (fleet.Skill, error) {
+func readSkill(db querier, ref string) (fleet.Skill, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return fleet.Skill{}, &ErrValidation{Msg: "skill id is required"}
