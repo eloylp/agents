@@ -1,7 +1,11 @@
 // Package selfimprovement owns recommendation and proposal-bundle use cases.
 package selfimprovement
 
-import "github.com/eloylp/agents/internal/store"
+import (
+	"errors"
+
+	"github.com/eloylp/agents/internal/store"
+)
 
 // Service coordinates self-improvement recommendation workflows over the
 // persistence primitives exposed by store.
@@ -20,6 +24,30 @@ func (s *Service) CreateProposal(id string) (store.SelfImprovementProposal, erro
 
 func (s *Service) CreateProposalBundle(id string) (store.SelfImprovementProposalBundle, error) {
 	return createSelfImprovementProposalBundle(s.store, id)
+}
+
+func (s *Service) GetProposalBundle(id string) (store.SelfImprovementProposalBundle, error) {
+	return getSelfImprovementProposalBundleFromStore(s.store, id)
+}
+
+func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([]store.SelfImprovementRecommendation, error) {
+	recs, err := s.store.ListSelfImprovementRecommendations(workspace, "", limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range recs {
+		bundle, err := s.GetProposalBundle(recs[i].ID)
+		if err == nil {
+			recs[i].ProposalBundle = &bundle
+			continue
+		}
+		var nf *store.ErrNotFound
+		if errors.As(err, &nf) {
+			continue
+		}
+		return nil, err
+	}
+	return recs, nil
 }
 
 func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in store.SelfImprovementBundleItemUpdate, actor string) (store.SelfImprovementProposalBundle, error) {

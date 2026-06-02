@@ -321,7 +321,7 @@ func (h *Handler) HandleCreateImprovementProposalBundle(w http.ResponseWriter, r
 }
 
 func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.GetSelfImprovementProposalBundle(mux.Vars(r)["id"])
+	bundle, err := h.improve.GetProposalBundle(mux.Vars(r)["id"])
 	if err != nil {
 		var notFound *store.ErrNotFound
 		if errors.As(err, &notFound) {

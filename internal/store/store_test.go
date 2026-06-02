@@ -956,9 +956,9 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 	if _, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusRejected); err != nil {
 		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
 	}
-	changed, err := store.GetSelfImprovementProposalBundle(db, bundle.ID)
+	changed, err := svc.GetProposalBundle(bundle.ID)
 	if err != nil {
-		t.Fatalf("GetSelfImprovementProposalBundle: %v", err)
+		t.Fatalf("GetProposalBundle: %v", err)
 	}
 	if !changed.RecommendationChanged {
 		t.Fatalf("RecommendationChanged = false, want true after recommendation drift")

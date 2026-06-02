@@ -258,7 +258,7 @@ func toolGetImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("recommendation_id or bundle_id is required"), nil
 		}
-		bundle, err := deps.Store.GetSelfImprovementProposalBundle(id)
+		bundle, err := deps.Improvements.GetProposalBundle(id)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get improvement proposal bundle", err), nil
 		}
@@ -389,7 +389,7 @@ func toolDiscardImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
 func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace, _ := trimmedStringOptional(req, "workspace")
-		rows, err := deps.Store.ListSelfImprovementRecommendationsWithBundles(workspace, 100)
+		rows, err := deps.Improvements.ListRecommendationsWithBundles(workspace, 100)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with bundles", err), nil
 		}

@@ -49,7 +49,7 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 	if rec.Status != store.RecommendationStatusAccepted {
 		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
 	}
-	if existing, err := st.GetSelfImprovementProposalBundle(rec.ID); err == nil {
+	if existing, err := getSelfImprovementProposalBundleFromStore(st, rec.ID); err == nil {
 		return existing, nil
 	} else {
 		var nf *store.ErrNotFound
@@ -104,11 +104,25 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	return st.GetSelfImprovementProposalBundle(rec.ID)
+	return getSelfImprovementProposalBundleFromStore(st, rec.ID)
 }
 
-func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
-	return getSelfImprovementProposalBundle(db, id)
+func getSelfImprovementProposalBundleFromStore(st *store.Store, id string) (SelfImprovementProposalBundle, error) {
+	bundle, err := st.GetSelfImprovementProposalBundle(id)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	rec, err := st.GetSelfImprovementRecommendation(bundle.RecommendationID)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	hash, err := recommendationSnapshotHash(rec)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	bundle.RecommendationChanged = rec.UpdatedAt != bundle.RecommendationUpdatedAtSnapshot || hash != bundle.RecommendationSnapshotHash
+	bundle.Recommendation = &rec
+	return bundle, nil
 }
 
 func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProposalBundle, error) {
@@ -211,7 +225,7 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	return st.GetSelfImprovementProposalBundle(bundle.ID)
+	return getSelfImprovementProposalBundleFromStore(st, bundle.ID)
 }
 
 func rejectSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
@@ -281,7 +295,7 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	return st.GetSelfImprovementProposalBundle(publishedID)
+	return getSelfImprovementProposalBundleFromStore(st, publishedID)
 }
 
 func discardSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, actor string) (SelfImprovementProposalBundle, error) {
@@ -315,11 +329,7 @@ func discardSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	return st.GetSelfImprovementProposalBundle(discardedID)
-}
-
-func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
-	return store.ListSelfImprovementRecommendationsWithBundles(db, workspace, limit)
+	return getSelfImprovementProposalBundleFromStore(st, discardedID)
 }
 
 func recommendationBundleItems(rec SelfImprovementRecommendation) ([]SelfImprovementBundleItemInput, error) {
@@ -503,11 +513,11 @@ func decideSelfImprovementProposalBundleItem(st *store.Store, bundleID, itemID, 
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	return st.GetSelfImprovementProposalBundle(bundle.ID)
+	return getSelfImprovementProposalBundleFromStore(st, bundle.ID)
 }
 
 func getBundleAndItem(st *store.Store, bundleID, itemID string) (SelfImprovementProposalBundle, SelfImprovementBundleItem, error) {
-	bundle, err := st.GetSelfImprovementProposalBundle(bundleID)
+	bundle, err := getSelfImprovementProposalBundleFromStore(st, bundleID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, SelfImprovementBundleItem{}, err
 	}

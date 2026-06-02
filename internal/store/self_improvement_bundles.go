@@ -1,10 +1,7 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -126,74 +123,12 @@ func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProp
 	if err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
 	}
-	if db, ok := q.(*sql.DB); ok {
-		rec, err := GetSelfImprovementRecommendation(db, bundle.RecommendationID)
-		if err == nil {
-			if hash, hashErr := recommendationSnapshotHash(rec); hashErr == nil {
-				bundle.RecommendationChanged = rec.UpdatedAt != bundle.RecommendationUpdatedAtSnapshot || hash != bundle.RecommendationSnapshotHash
-			}
-			bundle.Recommendation = &rec
-		}
-	}
 	items, err := listSelfImprovementProposalBundleItems(q, bundle.ID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	bundle.Items = items
 	return bundle, nil
-}
-
-type recommendationSnapshot struct {
-	Type                    string         `json:"type"`
-	Status                  string         `json:"status"`
-	Confidence              string         `json:"confidence"`
-	Risk                    string         `json:"risk"`
-	Finding                 string         `json:"finding"`
-	NormalizedLesson        string         `json:"normalized_lesson"`
-	Rationale               string         `json:"rationale"`
-	EvidenceFeedbackIDs     []int64        `json:"evidence_feedback_ids"`
-	EvidenceSourceURLs      []string       `json:"evidence_source_urls"`
-	AttributionConfidence   string         `json:"attribution_confidence"`
-	TargetAssetType         string         `json:"target_asset_type"`
-	TargetAssetID           string         `json:"target_asset_id"`
-	TargetBaseVersionID     string         `json:"target_base_version_id"`
-	ProposedPatch           string         `json:"proposed_patch"`
-	ProposedNewBody         string         `json:"proposed_new_body"`
-	SuggestedRolloutScope   string         `json:"suggested_rollout_scope"`
-	AnalyzerPromptRef       string         `json:"analyzer_prompt_ref"`
-	AnalyzerPromptVersionID string         `json:"analyzer_prompt_version_id"`
-	StructuredOutput        map[string]any `json:"structured_output"`
-	Error                   string         `json:"error"`
-}
-
-func recommendationSnapshotHash(rec SelfImprovementRecommendation) (string, error) {
-	data, err := json.Marshal(recommendationSnapshot{
-		Type:                    rec.Type,
-		Status:                  rec.Status,
-		Confidence:              rec.Confidence,
-		Risk:                    rec.Risk,
-		Finding:                 rec.Finding,
-		NormalizedLesson:        rec.NormalizedLesson,
-		Rationale:               rec.Rationale,
-		EvidenceFeedbackIDs:     rec.EvidenceFeedbackIDs,
-		EvidenceSourceURLs:      rec.EvidenceSourceURLs,
-		AttributionConfidence:   rec.AttributionConfidence,
-		TargetAssetType:         rec.TargetAssetType,
-		TargetAssetID:           rec.TargetAssetID,
-		TargetBaseVersionID:     rec.TargetBaseVersionID,
-		ProposedPatch:           rec.ProposedPatch,
-		ProposedNewBody:         rec.ProposedNewBody,
-		SuggestedRolloutScope:   rec.SuggestedRolloutScope,
-		AnalyzerPromptRef:       rec.AnalyzerPromptRef,
-		AnalyzerPromptVersionID: rec.AnalyzerPromptVersionID,
-		StructuredOutput:        rec.StructuredOutput,
-		Error:                   rec.Error,
-	})
-	if err != nil {
-		return "", fmt.Errorf("store: hash recommendation snapshot: %w", err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfImprovementBundleItem, error) {
