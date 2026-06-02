@@ -21,6 +21,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -133,8 +134,10 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	reposH := daemonrepos.New(st, maxBody, zerolog.Nop())
 	configH := daemonconfig.New(st, cfg.Daemon, zerolog.Nop())
 	runnersH := daemonrunners.New(st, channels, obs, zerolog.Nop())
+	improvementService := selfimprovement.New(st)
 	return Deps{
 		Store:        st,
+		Improvements: improvementService,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON: func() ([]byte, error) {
 			// Mirror the wire shape internal/daemon.Daemon.StatusJSON returns

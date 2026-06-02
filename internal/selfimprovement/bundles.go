@@ -1,6 +1,7 @@
-package store
+package selfimprovement
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -10,111 +11,48 @@ import (
 	"strings"
 
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 const (
-	ProposalBundleStatusPending   = "pending"
-	ProposalBundleStatusPublished = "published"
-	ProposalBundleStatusDiscarded = "discarded"
+	ProposalBundleStatusPending   = store.ProposalBundleStatusPending
+	ProposalBundleStatusPublished = store.ProposalBundleStatusPublished
+	ProposalBundleStatusDiscarded = store.ProposalBundleStatusDiscarded
 
-	ProposalBundleOperationUpdateExisting = "update_existing"
-	ProposalBundleOperationCreateNew      = "create_new"
+	ProposalBundleOperationUpdateExisting = store.ProposalBundleOperationUpdateExisting
+	ProposalBundleOperationCreateNew      = store.ProposalBundleOperationCreateNew
 
-	ProposalBundleDecisionPending        = "pending"
-	ProposalBundleDecisionAccepted       = "accepted"
-	ProposalBundleDecisionRejected       = "rejected"
-	ProposalBundleDecisionLinkedExisting = "linked_existing"
-	ProposalBundleDecisionPublished      = "published"
-	ProposalBundleDecisionDiscarded      = "discarded"
+	ProposalBundleDecisionPending        = store.ProposalBundleDecisionPending
+	ProposalBundleDecisionAccepted       = store.ProposalBundleDecisionAccepted
+	ProposalBundleDecisionRejected       = store.ProposalBundleDecisionRejected
+	ProposalBundleDecisionLinkedExisting = store.ProposalBundleDecisionLinkedExisting
+	ProposalBundleDecisionPublished      = store.ProposalBundleDecisionPublished
+	ProposalBundleDecisionDiscarded      = store.ProposalBundleDecisionDiscarded
 )
 
-type SelfImprovementProposalBundle struct {
-	ID                              string                         `json:"id"`
-	WorkspaceID                     string                         `json:"workspace"`
-	RecommendationID                string                         `json:"recommendation_id"`
-	RecommendationUpdatedAtSnapshot string                         `json:"recommendation_updated_at_snapshot"`
-	RecommendationSnapshotHash      string                         `json:"recommendation_snapshot_hash"`
-	RecommendationChanged           bool                           `json:"recommendation_changed"`
-	Status                          string                         `json:"status"`
-	CreatedAt                       string                         `json:"created_at"`
-	UpdatedAt                       string                         `json:"updated_at"`
-	Recommendation                  *SelfImprovementRecommendation `json:"recommendation,omitempty"`
-	Items                           []SelfImprovementBundleItem    `json:"items"`
-}
+type SelfImprovementProposalBundle = store.SelfImprovementProposalBundle
+type SelfImprovementBundleItem = store.SelfImprovementBundleItem
+type SelfImprovementBundleItemInput = store.SelfImprovementBundleItemInput
+type SelfImprovementBundleItemUpdate = store.SelfImprovementBundleItemUpdate
+type SelfImprovementRecommendation = store.SelfImprovementRecommendation
 
-type SelfImprovementBundleItem struct {
-	ID                  string                `json:"id"`
-	BundleID            string                `json:"bundle_id"`
-	Operation           string                `json:"operation"`
-	AssetType           string                `json:"asset_type"`
-	AssetID             string                `json:"asset_id,omitempty"`
-	BaseVersionID       string                `json:"base_version_id,omitempty"`
-	ProposedRef         string                `json:"proposed_ref,omitempty"`
-	ProposedName        string                `json:"proposed_name,omitempty"`
-	ProposedScope       string                `json:"proposed_scope,omitempty"`
-	ProposedBody        string                `json:"proposed_body"`
-	ProposedDescription string                `json:"proposed_description,omitempty"`
-	ProposedEnabled     bool                  `json:"proposed_enabled"`
-	ProposedPosition    int                   `json:"proposed_position"`
-	AnalystProposedBody string                `json:"analyst_proposed_body"`
-	DuplicateRisk       string                `json:"duplicate_risk,omitempty"`
-	Rationale           string                `json:"rationale,omitempty"`
-	Decision            string                `json:"decision"`
-	DecisionReason      string                `json:"decision_reason,omitempty"`
-	PublishedVersionID  string                `json:"published_version_id,omitempty"`
-	CreatedAt           string                `json:"created_at"`
-	UpdatedAt           string                `json:"updated_at"`
-	BaseVersion         *fleet.CatalogVersion `json:"base_version,omitempty"`
-	CurrentVersionID    string                `json:"current_version_id,omitempty"`
-	Stale               bool                  `json:"stale"`
-}
-
-type SelfImprovementBundleItemInput struct {
-	Operation           string `json:"operation"`
-	AssetType           string `json:"asset_type"`
-	AssetID             string `json:"asset_id"`
-	BaseVersionID       string `json:"base_version_id"`
-	ProposedRef         string `json:"proposed_ref"`
-	ProposedName        string `json:"proposed_name"`
-	ProposedScope       string `json:"proposed_scope"`
-	ProposedBody        string `json:"proposed_body"`
-	ProposedDescription string `json:"proposed_description"`
-	ProposedEnabled     *bool  `json:"proposed_enabled"`
-	ProposedPosition    int    `json:"proposed_position"`
-	DuplicateRisk       string `json:"duplicate_risk"`
-	Rationale           string `json:"rationale"`
-}
-
-type SelfImprovementBundleItemUpdate struct {
-	ProposedRef         *string `json:"proposed_ref"`
-	ProposedName        *string `json:"proposed_name"`
-	ProposedScope       *string `json:"proposed_scope"`
-	ProposedBody        string  `json:"proposed_body"`
-	ProposedDescription *string `json:"proposed_description"`
-	ProposedEnabled     *bool   `json:"proposed_enabled"`
-	ProposedPosition    *int    `json:"proposed_position"`
-}
-
-func (s *Store) GetSelfImprovementProposalBundle(id string) (SelfImprovementProposalBundle, error) {
-	return GetSelfImprovementProposalBundle(s.db, id)
-}
-
-func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
-	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
-	rec, err := GetSelfImprovementRecommendation(db, id)
+	rec, err := store.GetSelfImprovementRecommendation(db, id)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	if rec.Status != RecommendationStatusAccepted {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
+	if rec.Status != store.RecommendationStatusAccepted {
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
 	}
 	if existing, err := GetSelfImprovementProposalBundle(db, rec.ID); err == nil {
 		return existing, nil
 	} else {
-		var nf *ErrNotFound
+		var nf *store.ErrNotFound
 		if !errors.As(err, &nf) {
 			return SelfImprovementProposalBundle{}, err
 		}
@@ -179,7 +117,7 @@ func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementPro
 func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProposalBundle, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
 	}
 	var bundle SelfImprovementProposalBundle
 	err := q.QueryRow(`
@@ -190,7 +128,7 @@ func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProp
 		Scan(&bundle.ID, &bundle.WorkspaceID, &bundle.RecommendationID, &bundle.RecommendationUpdatedAtSnapshot,
 			&bundle.RecommendationSnapshotHash, &bundle.Status, &bundle.CreatedAt, &bundle.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementProposalBundle{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
+		return SelfImprovementProposalBundle{}, &store.ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
 	}
 	if err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
@@ -221,11 +159,11 @@ func UpdateSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, item
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundle items can be edited"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundle items can be edited"}
 	}
 	body := strings.TrimSpace(in.ProposedBody)
 	if body == "" {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "proposal bundle item body is required"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "proposal bundle item body is required"}
 	}
 	ref, name, scope := item.ProposedRef, item.ProposedName, item.ProposedScope
 	description, enabled, position := item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition
@@ -305,7 +243,7 @@ func LinkSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, assetID
 func LinkSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "linked asset id is required"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "linked asset id is required"}
 	}
 	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionLinkedExisting, assetID, reason, actor)
 }
@@ -325,7 +263,7 @@ func PublishSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor s
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundles can be published"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundles can be published"}
 	}
 	for _, item := range bundle.Items {
 		before := bundleItemAuditSnapshot(item)
@@ -342,7 +280,7 @@ func PublishSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor s
 			continue
 		case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
 		default:
-			return SelfImprovementProposalBundle{}, &ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
+			return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
 		}
 		versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
 		if err != nil {
@@ -388,7 +326,7 @@ func DiscardSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor s
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundles can be discarded"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundles can be discarded"}
 	}
 	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundles SET status=?, updated_at=datetime('now') WHERE id=?`, ProposalBundleStatusDiscarded, bundle.ID); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: %w", err)
@@ -413,28 +351,7 @@ func DiscardSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor s
 }
 
 func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	workspaceID := fleet.NormalizeWorkspaceID(workspace)
-	rows, err := db.Query(recommendationSelectSQL()+`
-		WHERE r.workspace_id=? AND EXISTS (
-			SELECT 1 FROM self_improvement_proposal_bundles b WHERE b.recommendation_id=r.id
-		)
-		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SelfImprovementRecommendation
-	for rows.Next() {
-		rec, err := scanSelfImprovementRecommendation(rows, false)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rec)
-	}
-	return out, rows.Err()
+	return store.ListSelfImprovementRecommendationsWithBundles(db, workspace, limit)
 }
 
 func recommendationBundleItems(rec SelfImprovementRecommendation) ([]SelfImprovementBundleItemInput, error) {
@@ -442,15 +359,15 @@ func recommendationBundleItems(rec SelfImprovementRecommendation) ([]SelfImprove
 	if raw, ok := rec.StructuredOutput["changes"]; ok {
 		data, err := json.Marshal(raw)
 		if err != nil {
-			return nil, &ErrValidation{Msg: fmt.Sprintf("proposal bundle changes: %v", err)}
+			return nil, &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle changes: %v", err)}
 		}
 		if err := json.Unmarshal(data, &items); err != nil {
-			return nil, &ErrValidation{Msg: fmt.Sprintf("proposal bundle changes: %v", err)}
+			return nil, &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle changes: %v", err)}
 		}
 	}
 	if len(items) == 0 {
 		if nonConvertibleRecommendationType(rec.Type) {
-			return nil, &ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
+			return nil, &store.ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
 		}
 		items = []SelfImprovementBundleItemInput{{
 			Operation:     ProposalBundleOperationUpdateExisting,
@@ -466,12 +383,12 @@ func recommendationBundleItems(rec SelfImprovementRecommendation) ([]SelfImprove
 
 func validateBundleItemForCreate(q querier, workspaceID string, item SelfImprovementBundleItemInput) error {
 	if strings.TrimSpace(item.ProposedBody) == "" {
-		return &ErrValidation{Msg: "proposal bundle item body is required"}
+		return &store.ErrValidation{Msg: "proposal bundle item body is required"}
 	}
 	switch strings.TrimSpace(item.AssetType) {
 	case "prompt", "skill", "guardrail":
 	default:
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
 	}
 	switch strings.TrimSpace(item.Operation) {
 	case ProposalBundleOperationUpdateExisting:
@@ -479,33 +396,33 @@ func validateBundleItemForCreate(q querier, workspaceID string, item SelfImprove
 	case ProposalBundleOperationCreateNew:
 		return validateBundleCreateNew(q, workspaceID, item)
 	default:
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
 	}
 }
 
 func validateBundleUpdateExisting(q querier, item SelfImprovementBundleItemInput) error {
 	if strings.TrimSpace(item.AssetID) == "" {
-		return &ErrValidation{Msg: "proposal bundle update item asset id is required"}
+		return &store.ErrValidation{Msg: "proposal bundle update item asset id is required"}
 	}
 	if strings.TrimSpace(item.BaseVersionID) == "" {
-		return &ErrValidation{Msg: "proposal bundle update item base version is required"}
+		return &store.ErrValidation{Msg: "proposal bundle update item base version is required"}
 	}
 	current, err := currentCatalogVersionID(q, item.AssetType, item.AssetID)
 	if err != nil {
 		return err
 	}
 	if item.BaseVersionID != current {
-		return &ErrValidation{Msg: "proposal bundle update item base version is stale; re-analyze feedback before creating a bundle"}
+		return &store.ErrValidation{Msg: "proposal bundle update item base version is stale; re-analyze feedback before creating a bundle"}
 	}
 	return nil
 }
 
 func validateBundleCreateNew(q querier, workspaceID string, item SelfImprovementBundleItemInput) error {
 	if strings.TrimSpace(item.ProposedRef) == "" || strings.TrimSpace(item.ProposedName) == "" {
-		return &ErrValidation{Msg: "proposal bundle create-new item requires proposed ref and name"}
+		return &store.ErrValidation{Msg: "proposal bundle create-new item requires proposed ref and name"}
 	}
 	if strings.TrimSpace(item.ProposedScope) == "" {
-		return &ErrValidation{Msg: "proposal bundle create-new item requires proposed scope"}
+		return &store.ErrValidation{Msg: "proposal bundle create-new item requires proposed scope"}
 	}
 	return validateBundleScope(q, item.ProposedScope, workspaceID)
 }
@@ -514,7 +431,7 @@ func hydrateBundleItemMetadata(q querier, item SelfImprovementBundleItemInput) (
 	if item.AssetType != "guardrail" || item.Operation != ProposalBundleOperationUpdateExisting {
 		return item, nil
 	}
-	guardrail, err := GetGuardrailFrom(q, item.AssetID)
+	guardrail, err := getGuardrailFrom(q, item.AssetID)
 	if err != nil {
 		return item, err
 	}
@@ -587,11 +504,11 @@ func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decis
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundle items can be changed"}
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundle items can be changed"}
 	}
 	if decision == ProposalBundleDecisionLinkedExisting {
 		if item.Operation != ProposalBundleOperationCreateNew {
-			return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only create-new proposal bundle items can link existing assets"}
+			return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only create-new proposal bundle items can link existing assets"}
 		}
 		if _, err := currentCatalogVersionID(db, item.AssetType, linkedAssetID); err != nil {
 			return SelfImprovementProposalBundle{}, err
@@ -637,7 +554,7 @@ func getBundleAndItem(db *sql.DB, bundleID, itemID string) (SelfImprovementPropo
 			return bundle, item, nil
 		}
 	}
-	return SelfImprovementProposalBundle{}, SelfImprovementBundleItem{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle item %q not found", itemID)}
+	return SelfImprovementProposalBundle{}, SelfImprovementBundleItem{}, &store.ErrNotFound{Msg: fmt.Sprintf("proposal bundle item %q not found", itemID)}
 }
 
 func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, workspaceID, recommendationID string) (string, error) {
@@ -658,13 +575,13 @@ func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, worksp
 			return "", err
 		}
 		if current != item.BaseVersionID {
-			return "", &ErrValidation{Msg: "proposal bundle item base version is stale; re-analyze feedback before publishing"}
+			return "", &store.ErrValidation{Msg: "proposal bundle item base version is stale; re-analyze feedback before publishing"}
 		}
 		return publishBundleUpdateExisting(tx, item, meta)
 	case ProposalBundleOperationCreateNew:
 		return publishBundleCreateNew(tx, item, workspaceID, meta)
 	default:
-		return "", &ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle operation %q", item.Operation)}
+		return "", &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle operation %q", item.Operation)}
 	}
 }
 
@@ -678,11 +595,11 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 		if err != nil {
 			return "", err
 		}
-		version, err = CreatePromptDraftTx(tx, prompt.ID, prompt.Description, item.ProposedBody, meta)
+		version, err = store.CreatePromptDraftTx(tx, prompt.ID, prompt.Description, item.ProposedBody, meta)
 	case "skill":
-		version, err = CreateSkillDraftTx(tx, item.AssetID, item.ProposedBody, meta)
+		version, err = store.CreateSkillDraftTx(tx, item.AssetID, item.ProposedBody, meta)
 	case "guardrail":
-		guardrail, err := GetGuardrailFrom(tx, item.AssetID)
+		guardrail, err := getGuardrailFrom(tx, item.AssetID)
 		if err != nil {
 			return "", err
 		}
@@ -690,20 +607,20 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 		guardrail.Content = item.ProposedBody
 		guardrail.Enabled = item.ProposedEnabled
 		guardrail.Position = normalizedBundlePosition(item.ProposedPosition)
-		version, err = CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
+		version, err = store.CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
 	default:
-		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
+		return "", &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
 	}
 	if err != nil {
 		return "", err
 	}
 	switch item.AssetType {
 	case "prompt":
-		_, err = PublishPromptVersionTx(tx, version.ID)
+		_, err = store.PublishPromptVersionTx(tx, version.ID)
 	case "skill":
-		_, _, err = PublishSkillVersionTx(tx, version.ID)
+		_, _, err = store.PublishSkillVersionTx(tx, version.ID)
 	case "guardrail":
-		_, err = PublishGuardrailVersionTx(tx, version.ID)
+		_, err = store.PublishGuardrailVersionTx(tx, version.ID)
 	}
 	return version.ID, err
 }
@@ -715,7 +632,7 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspac
 	}
 	switch item.AssetType {
 	case "prompt":
-		prompt, err := UpsertPromptTx(tx, fleet.Prompt{ID: item.ProposedRef, Name: item.ProposedName, WorkspaceID: scope, Repo: repo, Content: item.ProposedBody})
+		prompt, err := store.UpsertPromptTx(tx, fleet.Prompt{ID: item.ProposedRef, Name: item.ProposedName, WorkspaceID: scope, Repo: repo, Content: item.ProposedBody})
 		if err != nil {
 			return "", err
 		}
@@ -724,7 +641,7 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspac
 		}
 		return prompt.VersionID, nil
 	case "skill":
-		if err := UpsertSkillTx(tx, item.ProposedRef, fleet.Skill{Name: item.ProposedName, WorkspaceID: scope, Repo: repo, Prompt: item.ProposedBody}); err != nil {
+		if err := store.UpsertSkillTx(tx, item.ProposedRef, fleet.Skill{Name: item.ProposedName, WorkspaceID: scope, Repo: repo, Prompt: item.ProposedBody}); err != nil {
 			return "", err
 		}
 		skill, err := readSkill(tx, item.ProposedRef)
@@ -736,14 +653,14 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspac
 		}
 		return skill.VersionID, nil
 	case "guardrail":
-		if err := UpsertGuardrailTx(tx, fleet.Guardrail{
+		if err := store.UpsertGuardrailTx(tx, fleet.Guardrail{
 			ID: item.ProposedRef, Name: item.ProposedName, WorkspaceID: scope,
 			Description: item.ProposedDescription, Content: item.ProposedBody,
 			Enabled: item.ProposedEnabled, Position: normalizedBundlePosition(item.ProposedPosition),
 		}); err != nil {
 			return "", err
 		}
-		guardrail, err := GetGuardrailFrom(tx, item.ProposedRef)
+		guardrail, err := getGuardrailFrom(tx, item.ProposedRef)
 		if err != nil {
 			return "", err
 		}
@@ -752,7 +669,7 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspac
 		}
 		return guardrail.VersionID, nil
 	default:
-		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
+		return "", &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
 	}
 }
 
@@ -771,7 +688,7 @@ func updatePublishedCatalogVersionMetadata(tx *sql.Tx, assetType, versionID stri
 	case "guardrail":
 		table = "guardrail_versions"
 	default:
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
 	}
 	res, err := tx.Exec(
 		fmt.Sprintf(`UPDATE %s SET source_type=?, source_ref=?, author=?, changelog=? WHERE id=? AND state='published'`, table),
@@ -785,7 +702,7 @@ func updatePublishedCatalogVersionMetadata(tx *sql.Tx, assetType, versionID stri
 		return fmt.Errorf("store: update proposal bundle create-new version metadata: %w", err)
 	}
 	if affected == 0 {
-		return &ErrNotFound{Msg: fmt.Sprintf("%s version %q not found", assetType, versionID)}
+		return &store.ErrNotFound{Msg: fmt.Sprintf("%s version %q not found", assetType, versionID)}
 	}
 	return nil
 }
@@ -807,7 +724,7 @@ func bundleItemInputEnabled(item SelfImprovementBundleItemInput) bool {
 func ensureBundleCreateNewRefAvailable(q querier, assetType, ref string) error {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return &ErrValidation{Msg: "proposal bundle create-new item ref is required"}
+		return &store.ErrValidation{Msg: "proposal bundle create-new item ref is required"}
 	}
 	var exists bool
 	var err error
@@ -819,13 +736,13 @@ func ensureBundleCreateNewRefAvailable(q querier, assetType, ref string) error {
 	case "guardrail":
 		err = q.QueryRow(`SELECT EXISTS(SELECT 1 FROM guardrails WHERE ref=?)`, ref).Scan(&exists)
 	default:
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
 	}
 	if err != nil {
 		return fmt.Errorf("store: check proposal bundle create-new ref: %w", err)
 	}
 	if exists {
-		return &ErrConflict{Msg: fmt.Sprintf("%s %q already exists", assetType, ref)}
+		return &store.ErrConflict{Msg: fmt.Sprintf("%s %q already exists", assetType, ref)}
 	}
 	return nil
 }
@@ -841,13 +758,13 @@ func currentCatalogVersionID(q querier, assetType, assetID string) (string, erro
 	case "guardrail":
 		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM guardrails WHERE id=? OR ref=? OR name=?`, assetID, assetID, fleet.NormalizeGuardrailName(assetID)).Scan(&id)
 	default:
-		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
+		return "", &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
 	}
 	if err != nil {
 		return "", catalogReadErr(assetType, assetID, err)
 	}
 	if id == "" {
-		return "", &ErrValidation{Msg: fmt.Sprintf("%s %q has no current version", assetType, assetID)}
+		return "", &store.ErrValidation{Msg: fmt.Sprintf("%s %q has no current version", assetType, assetID)}
 	}
 	return id, nil
 }
@@ -855,7 +772,7 @@ func currentCatalogVersionID(q querier, assetType, assetID string) (string, erro
 func readPromptFrom(q querier, ref string) (fleet.Prompt, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return fleet.Prompt{}, &ErrValidation{Msg: "prompt id is required"}
+		return fleet.Prompt{}, &store.ErrValidation{Msg: "prompt id is required"}
 	}
 	var p fleet.Prompt
 	err := q.QueryRow(`
@@ -866,7 +783,7 @@ func readPromptFrom(q querier, ref string) (fleet.Prompt, error) {
 		WHERE p.id=? OR p.ref=?`, ref, ref).
 		Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
+		return fleet.Prompt{}, &store.ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
 	}
 	if err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s: %w", ref, err)
@@ -905,19 +822,19 @@ func validateBundleScope(q querier, raw, currentWorkspace string) error {
 		return fmt.Errorf("store: validate proposal bundle scope workspace: %w", err)
 	}
 	if !exists {
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle scope workspace %q does not exist", workspace)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle scope workspace %q does not exist", workspace)}
 	}
 	if repo == "" {
 		return nil
 	}
 	if len(strings.Split(raw, "/")) != 3 || repo == "" {
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle repo scope %q is invalid", raw)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle repo scope %q is invalid", raw)}
 	}
 	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)`, workspace, repo).Scan(&exists); err != nil {
 		return fmt.Errorf("store: validate proposal bundle scope repo: %w", err)
 	}
 	if !exists {
-		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle scope repo %q does not exist", repo)}
+		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle scope repo %q does not exist", repo)}
 	}
 	return nil
 }
@@ -976,8 +893,33 @@ func recommendationSnapshotHash(rec SelfImprovementRecommendation) (string, erro
 }
 
 func getSelfImprovementRecommendation(q querier, id string) (SelfImprovementRecommendation, error) {
-	row := q.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
-	return scanSelfImprovementRecommendation(row, true)
+	var rec SelfImprovementRecommendation
+	var evidenceIDs, evidenceURLs, structured string
+	err := q.QueryRow(`
+		SELECT id, workspace_id, feedback_event_id, type, status, confidence, risk,
+		       finding, normalized_lesson, rationale, evidence_feedback_ids, evidence_source_urls,
+		       attribution_confidence, target_asset_type, target_asset_id, target_base_version_id,
+		       proposed_patch, proposed_new_body, suggested_rollout_scope, analyzer_prompt_ref,
+		       analyzer_prompt_version_id, structured_output, error, created_at, updated_at
+		FROM self_improvement_recommendations
+		WHERE id=?`, strings.TrimSpace(id)).
+		Scan(&rec.ID, &rec.WorkspaceID, &rec.FeedbackEventID, &rec.Type, &rec.Status, &rec.Confidence, &rec.Risk,
+			&rec.Finding, &rec.NormalizedLesson, &rec.Rationale, &evidenceIDs, &evidenceURLs,
+			&rec.AttributionConfidence, &rec.TargetAssetType, &rec.TargetAssetID, &rec.TargetBaseVersionID,
+			&rec.ProposedPatch, &rec.ProposedNewBody, &rec.SuggestedRolloutScope, &rec.AnalyzerPromptRef,
+			&rec.AnalyzerPromptVersionID, &structured, &rec.Error, &rec.CreatedAt, &rec.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SelfImprovementRecommendation{}, &store.ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+	}
+	if err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	rec.EvidenceFeedbackIDs = splitInt64CSV(evidenceIDs)
+	rec.EvidenceSourceURLs = splitCSV(evidenceURLs)
+	if structured != "" {
+		_ = json.Unmarshal([]byte(structured), &rec.StructuredOutput)
+	}
+	return rec, nil
 }
 
 func insertBundleItemEvent(tx *sql.Tx, bundleID, itemID, eventType, actor, reason string, before, after any) error {
@@ -1061,9 +1003,170 @@ func bundleItemAuditSnapshot(item SelfImprovementBundleItem) map[string]any {
 }
 
 func randomHexID() string {
-	id, err := newCatalogInternalID("")
-	if err != nil {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
 		return "fallback"
 	}
-	return strings.TrimPrefix(id, "_")
+	return hex.EncodeToString(b[:])
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func nonConvertibleRecommendationType(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case "needs_more_context", "no_action", "split_agent", "change_dispatch_wiring":
+		return true
+	default:
+		return false
+	}
+}
+
+func recommendationProposalChangelog(rec SelfImprovementRecommendation) string {
+	for _, value := range []string{rec.NormalizedLesson, rec.Rationale, rec.Finding} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return "Self-improvement recommendation " + rec.ID
+}
+
+func getGuardrailFrom(q querier, ref string) (fleet.Guardrail, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fleet.Guardrail{}, &store.ErrValidation{Msg: "guardrail id is required"}
+	}
+	var g fleet.Guardrail
+	var enabled int
+	err := q.QueryRow(`
+		SELECT ref, COALESCE(workspace_id, ''), name, description, content, enabled, position, COALESCE(current_version_id, '')
+		FROM guardrails
+		WHERE id=? OR ref=? OR name=?`, ref, ref, fleet.NormalizeGuardrailName(ref)).
+		Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &enabled, &g.Position, &g.VersionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Guardrail{}, &store.ErrNotFound{Msg: fmt.Sprintf("guardrail %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Guardrail{}, fmt.Errorf("store: read guardrail %s: %w", ref, err)
+	}
+	g.Enabled = enabled != 0
+	return g, nil
+}
+
+func readSkill(q querier, ref string) (fleet.Skill, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fleet.Skill{}, &store.ErrValidation{Msg: "skill id is required"}
+	}
+	var skill fleet.Skill
+	err := q.QueryRow(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id
+		WHERE s.id=? OR s.ref=? OR s.name=?`, ref, ref, fleet.NormalizeSkillName(ref)).
+		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Skill{}, fmt.Errorf("store: read skill %s: %w", ref, err)
+	}
+	return skill, nil
+}
+
+func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID string) (fleet.CatalogVersion, error) {
+	var version fleet.CatalogVersion
+	var err error
+	switch targetType {
+	case "prompt":
+		err = q.QueryRow(`
+			SELECT id, prompt_id, version_number, state, description, content, source_type, source_ref, author, changelog,
+			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM prompt_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
+				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
+				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+	case "skill":
+		err = q.QueryRow(`
+			SELECT id, skill_id, version_number, state, prompt, source_type, source_ref, author, changelog,
+			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM skill_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Prompt,
+				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
+				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+	case "guardrail":
+		var enabled int
+		err = q.QueryRow(`
+			SELECT id, guardrail_id, version_number, state, description, content, enabled, position, source_type, source_ref,
+			       author, changelog, COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM guardrail_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
+				&enabled, &version.Position, &version.SourceType, &version.SourceRef,
+				&version.Author, &version.Changelog, &version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+		version.Enabled = enabled != 0
+	default:
+		return fleet.CatalogVersion{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.CatalogVersion{}, &store.ErrNotFound{Msg: fmt.Sprintf("%s version %q not found", targetType, versionID)}
+	}
+	if err != nil {
+		return fleet.CatalogVersion{}, fmt.Errorf("store: read %s version %s: %w", targetType, versionID, err)
+	}
+	return version, nil
+}
+
+func normalizeNewCatalogVersionMetadata(meta fleet.CatalogVersionMetadata, defaultState string) (fleet.CatalogVersionMetadata, error) {
+	meta.State = strings.TrimSpace(meta.State)
+	if meta.State == "" {
+		meta.State = defaultState
+	}
+	meta.SourceType = strings.TrimSpace(meta.SourceType)
+	meta.SourceRef = strings.TrimSpace(meta.SourceRef)
+	meta.Author = strings.TrimSpace(meta.Author)
+	meta.Changelog = strings.TrimSpace(meta.Changelog)
+	return meta, nil
+}
+
+func catalogReadErr(kind, ref string, err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return &store.ErrNotFound{Msg: fmt.Sprintf("%s %q not found", kind, ref)}
+	}
+	return fmt.Errorf("store: read %s %s: %w", kind, ref, err)
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func splitInt64CSV(s string) []int64 {
+	parts := splitCSV(s)
+	out := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		var value int64
+		if _, err := fmt.Sscan(part, &value); err == nil && value > 0 {
+			out = append(out, value)
+		}
+	}
+	return out
 }

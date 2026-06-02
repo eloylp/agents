@@ -206,10 +206,6 @@ func (s *Store) UpsertSelfImprovementClarification(recommendationID, author, bod
 	return UpsertSelfImprovementClarification(s.db, recommendationID, author, body)
 }
 
-func (s *Store) CreateSelfImprovementProposal(id string) (SelfImprovementProposal, error) {
-	return CreateSelfImprovementProposal(s.db, id)
-}
-
 func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposal, error) {
 	return ListSelfImprovementProposals(s.db, id)
 }

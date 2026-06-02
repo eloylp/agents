@@ -29,6 +29,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -38,6 +39,7 @@ import (
 type Handler struct {
 	events    *obstore.Store // events/traces/SSE pub-sub
 	store     *store.Store   // fleet data access (agents for graph nodes)
+	improve   *selfimprovement.Service
 	sched     *scheduler.Scheduler
 	engine    *workflow.Engine
 	channels  *workflow.DataChannels
@@ -59,6 +61,7 @@ func New(
 	return &Handler{
 		events:    events,
 		store:     st,
+		improve:   selfimprovement.New(st),
 		sched:     sched,
 		engine:    engine,
 		channels:  channels,
@@ -285,7 +288,7 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 }
 
 func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposal, err := h.store.CreateSelfImprovementProposal(mux.Vars(r)["id"])
+	proposal, err := h.improve.CreateProposal(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -308,7 +311,7 @@ func (h *Handler) HandleImprovementProposal(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) HandleCreateImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.CreateSelfImprovementProposalBundle(mux.Vars(r)["id"])
+	bundle, err := h.improve.CreateProposalBundle(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -340,7 +343,7 @@ func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWrite
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.UpdateSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req, "dashboard")
+	bundle, err := h.improve.UpdateProposalBundleItem(vars["id"], vars["item_id"], req, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -358,7 +361,7 @@ func (h *Handler) HandleRejectImprovementProposalBundleItem(w http.ResponseWrite
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.RejectSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req.Reason, "dashboard")
+	bundle, err := h.improve.RejectProposalBundleItem(vars["id"], vars["item_id"], req.Reason, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -377,7 +380,7 @@ func (h *Handler) HandleLinkImprovementProposalBundleItem(w http.ResponseWriter,
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.LinkSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req.AssetID, req.Reason, "dashboard")
+	bundle, err := h.improve.LinkProposalBundleItem(vars["id"], vars["item_id"], req.AssetID, req.Reason, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -387,7 +390,7 @@ func (h *Handler) HandleLinkImprovementProposalBundleItem(w http.ResponseWriter,
 }
 
 func (h *Handler) HandlePublishImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.PublishSelfImprovementProposalBundleWithActor(mux.Vars(r)["id"], "dashboard")
+	bundle, err := h.improve.PublishProposalBundle(mux.Vars(r)["id"], "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -397,7 +400,7 @@ func (h *Handler) HandlePublishImprovementProposalBundle(w http.ResponseWriter, 
 }
 
 func (h *Handler) HandleDiscardImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.DiscardSelfImprovementProposalBundleWithActor(mux.Vars(r)["id"], "dashboard")
+	bundle, err := h.improve.DiscardProposalBundle(mux.Vars(r)["id"], "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
