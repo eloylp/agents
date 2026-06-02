@@ -112,6 +112,7 @@ interface ProposalBundleItem {
 interface ProposalBundle {
   id?: string
   recommendation_id?: string
+  recommendation_changed?: boolean
   status?: string
   items?: ProposalBundleItem[]
 }
@@ -435,10 +436,10 @@ export default function ImprovementsPage() {
                 {bundles[row.id]?.id && (
                   <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', color: 'var(--text-muted)' }}>
-                      <span>Bundle {bundles[row.id].id} · {bundles[row.id].status}</span>
+                      <span>Bundle {bundles[row.id].id} · {bundles[row.id].status}{bundles[row.id].recommendation_changed ? ' · recommendation changed' : ''}</span>
                       {bundles[row.id].status === 'pending' && (
                         <span style={{ display: 'flex', gap: 6 }}>
-                          <button onClick={() => postBundleAction(bundles[row.id].id!, 'publish')} style={{ padding: '5px 7px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Publish Bundle</button>
+                          <button onClick={() => postBundleAction(bundles[row.id].id!, 'publish')} style={{ padding: '5px 7px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Finalize Bundle</button>
                           <button onClick={() => postBundleAction(bundles[row.id].id!, 'discard')} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Discard Bundle</button>
                         </span>
                       )}

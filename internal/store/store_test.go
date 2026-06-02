@@ -861,6 +861,148 @@ func TestSelfImprovementProposalBundleCreateNewUsesBundleWorkspaceAndProvenance(
 	}
 }
 
+func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.UpsertRepo(db, fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  683004,
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		RawBody:          "create scoped prompt /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           "team-a",
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "create repo scoped prompt",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{"changes": []map[string]any{{
+			"operation": "create_new", "asset_type": "prompt", "proposed_ref": "prompt_repo_bundle_new",
+			"proposed_name": "repo bundle prompt", "proposed_scope": "team-a/owner/repo", "proposed_body": "repo prompt body",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
+	}
+	if bundle.RecommendationUpdatedAtSnapshot == "" || bundle.RecommendationSnapshotHash == "" || bundle.RecommendationChanged {
+		t.Fatalf("bundle snapshot = updated_at %q hash %q changed %v, want stored unchanged snapshot", bundle.RecommendationUpdatedAtSnapshot, bundle.RecommendationSnapshotHash, bundle.RecommendationChanged)
+	}
+	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "created"); got != 1 {
+		t.Fatalf("created event count = %d, want 1", got)
+	}
+	item := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "prompt_repo_bundle_new" })
+	if _, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+		ProposedScope: stringPtr("missing-workspace"),
+		ProposedBody:  "repo prompt body",
+	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "workspace") {
+		t.Fatalf("UpdateSelfImprovementProposalBundleItem invalid scope error = %v, want workspace validation", err)
+	}
+	edited, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+		ProposedScope: stringPtr("team-a/owner/repo"),
+		ProposedBody:  "repo prompt body edited",
+	}, "dashboard")
+	if err != nil {
+		t.Fatalf("UpdateSelfImprovementProposalBundleItem: %v", err)
+	}
+	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "edited"); got != 1 {
+		t.Fatalf("edited event count = %d, want 1", got)
+	}
+	editedItem := bundleItemByMatch(t, edited, func(candidate store.SelfImprovementBundleItem) bool { return candidate.ID == item.ID })
+	if editedItem.ProposedBody == "" {
+		t.Fatalf("edited item = %+v, want populated item", editedItem)
+	}
+	if _, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusRejected); err != nil {
+		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
+	}
+	changed, err := store.GetSelfImprovementProposalBundle(db, bundle.ID)
+	if err != nil {
+		t.Fatalf("GetSelfImprovementProposalBundle: %v", err)
+	}
+	if !changed.RecommendationChanged {
+		t.Fatalf("RecommendationChanged = false, want true after recommendation drift")
+	}
+}
+
+func TestSelfImprovementProposalBundleRejectLinkPublishEvents(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if err := store.UpsertSkill(db, "event-existing-skill", fleet.Skill{Name: "event-existing-skill", Prompt: "existing"}); err != nil {
+		t.Fatalf("seed existing skill: %v", err)
+	}
+	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  683005,
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		RawBody:          "decision audit /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:       fleet.DefaultWorkspaceID,
+		FeedbackEventID:   feedback.ID,
+		Type:              "catalog_patch_bundle",
+		Status:            store.RecommendationStatusAccepted,
+		Finding:           "decision audit",
+		AnalyzerPromptRef: "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{"changes": []map[string]any{
+			{"operation": "create_new", "asset_type": "prompt", "proposed_ref": "event_prompt_new", "proposed_name": "event prompt", "proposed_scope": "workspace", "proposed_body": "prompt"},
+			{"operation": "create_new", "asset_type": "skill", "proposed_ref": "event_skill_link", "proposed_name": "event skill", "proposed_scope": "workspace", "proposed_body": "skill"},
+			{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "event_guardrail_reject", "proposed_name": "event guardrail", "proposed_scope": "workspace", "proposed_body": "guardrail"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
+	}
+	linkItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_skill_link" })
+	rejectItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_guardrail_reject" })
+	if _, err := store.LinkSelfImprovementProposalBundleItemWithActor(db, bundle.ID, linkItem.ID, "event-existing-skill", "already exists", "mcp"); err != nil {
+		t.Fatalf("LinkSelfImprovementProposalBundleItem: %v", err)
+	}
+	if _, err := store.RejectSelfImprovementProposalBundleItemWithActor(db, bundle.ID, rejectItem.ID, "too broad", "dashboard"); err != nil {
+		t.Fatalf("RejectSelfImprovementProposalBundleItem: %v", err)
+	}
+	if _, err := store.PublishSelfImprovementProposalBundleWithActor(db, bundle.ID, "dashboard"); err != nil {
+		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
+	}
+	for eventType, want := range map[string]int{"linked_existing": 1, "rejected": 1, "published": 1, "finalized": 2} {
+		if got := proposalBundleEventCountForTest(t, db, bundle.ID, eventType); got != want {
+			t.Fatalf("%s event count = %d, want %d", eventType, got, want)
+		}
+	}
+}
+
 func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) string {
 	t.Helper()
 	var id string
@@ -879,6 +1021,15 @@ func bundleItemByMatch(t *testing.T, bundle store.SelfImprovementProposalBundle,
 	}
 	t.Fatalf("bundle item not found in %+v", bundle.Items)
 	return store.SelfImprovementBundleItem{}
+}
+
+func proposalBundleEventCountForTest(t *testing.T, db *sql.DB, bundleID, eventType string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM self_improvement_proposal_bundle_item_events WHERE bundle_id=? AND event_type=?`, bundleID, eventType).Scan(&count); err != nil {
+		t.Fatalf("proposal bundle event count: %v", err)
+	}
+	return count
 }
 
 func countCatalogVersionsForTest(t *testing.T, db *sql.DB) int {

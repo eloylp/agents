@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +19,6 @@ const (
 
 	ProposalBundleOperationUpdateExisting = "update_existing"
 	ProposalBundleOperationCreateNew      = "create_new"
-	ProposalBundleOperationLinkExisting   = "link_existing"
 
 	ProposalBundleDecisionPending        = "pending"
 	ProposalBundleDecisionAccepted       = "accepted"
@@ -28,14 +29,17 @@ const (
 )
 
 type SelfImprovementProposalBundle struct {
-	ID               string                         `json:"id"`
-	WorkspaceID      string                         `json:"workspace"`
-	RecommendationID string                         `json:"recommendation_id"`
-	Status           string                         `json:"status"`
-	CreatedAt        string                         `json:"created_at"`
-	UpdatedAt        string                         `json:"updated_at"`
-	Recommendation   *SelfImprovementRecommendation `json:"recommendation,omitempty"`
-	Items            []SelfImprovementBundleItem    `json:"items"`
+	ID                              string                         `json:"id"`
+	WorkspaceID                     string                         `json:"workspace"`
+	RecommendationID                string                         `json:"recommendation_id"`
+	RecommendationUpdatedAtSnapshot string                         `json:"recommendation_updated_at_snapshot"`
+	RecommendationSnapshotHash      string                         `json:"recommendation_snapshot_hash"`
+	RecommendationChanged           bool                           `json:"recommendation_changed"`
+	Status                          string                         `json:"status"`
+	CreatedAt                       string                         `json:"created_at"`
+	UpdatedAt                       string                         `json:"updated_at"`
+	Recommendation                  *SelfImprovementRecommendation `json:"recommendation,omitempty"`
+	Items                           []SelfImprovementBundleItem    `json:"items"`
 }
 
 type SelfImprovementBundleItem struct {
@@ -103,20 +107,40 @@ func (s *Store) UpdateSelfImprovementProposalBundleItem(bundleID, itemID string,
 	return UpdateSelfImprovementProposalBundleItem(s.db, bundleID, itemID, in)
 }
 
+func (s *Store) UpdateSelfImprovementProposalBundleItemWithActor(bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
+	return UpdateSelfImprovementProposalBundleItemWithActor(s.db, bundleID, itemID, in, actor)
+}
+
 func (s *Store) RejectSelfImprovementProposalBundleItem(bundleID, itemID, reason string) (SelfImprovementProposalBundle, error) {
 	return RejectSelfImprovementProposalBundleItem(s.db, bundleID, itemID, reason)
+}
+
+func (s *Store) RejectSelfImprovementProposalBundleItemWithActor(bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
+	return RejectSelfImprovementProposalBundleItemWithActor(s.db, bundleID, itemID, reason, actor)
 }
 
 func (s *Store) LinkSelfImprovementProposalBundleItem(bundleID, itemID, assetID, reason string) (SelfImprovementProposalBundle, error) {
 	return LinkSelfImprovementProposalBundleItem(s.db, bundleID, itemID, assetID, reason)
 }
 
+func (s *Store) LinkSelfImprovementProposalBundleItemWithActor(bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
+	return LinkSelfImprovementProposalBundleItemWithActor(s.db, bundleID, itemID, assetID, reason, actor)
+}
+
 func (s *Store) PublishSelfImprovementProposalBundle(bundleID string) (SelfImprovementProposalBundle, error) {
 	return PublishSelfImprovementProposalBundle(s.db, bundleID)
 }
 
+func (s *Store) PublishSelfImprovementProposalBundleWithActor(bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	return PublishSelfImprovementProposalBundleWithActor(s.db, bundleID, actor)
+}
+
 func (s *Store) DiscardSelfImprovementProposalBundle(bundleID string) (SelfImprovementProposalBundle, error) {
 	return DiscardSelfImprovementProposalBundle(s.db, bundleID)
+}
+
+func (s *Store) DiscardSelfImprovementProposalBundleWithActor(bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	return DiscardSelfImprovementProposalBundleWithActor(s.db, bundleID, actor)
 }
 
 func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
@@ -143,6 +167,10 @@ func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovement
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
+	snapshotHash, err := recommendationSnapshotHash(rec)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle: begin: %w", err)
@@ -150,30 +178,36 @@ func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovement
 	defer tx.Rollback()
 	bundleID := "bundle_" + randomHexID()
 	if _, err := tx.Exec(`
-		INSERT INTO self_improvement_proposal_bundles (id, workspace_id, recommendation_id)
-		VALUES (?, ?, ?)`, bundleID, rec.WorkspaceID, rec.ID); err != nil {
+		INSERT INTO self_improvement_proposal_bundles (
+			id, workspace_id, recommendation_id, recommendation_updated_at_snapshot, recommendation_snapshot_hash
+		) VALUES (?, ?, ?, ?, ?)`, bundleID, rec.WorkspaceID, rec.ID, rec.UpdatedAt, snapshotHash); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle: %w", err)
 	}
 	for _, item := range items {
-		if err := validateBundleItemForCreate(tx, item); err != nil {
+		if err := validateBundleItemForCreate(tx, rec.WorkspaceID, item); err != nil {
 			return SelfImprovementProposalBundle{}, err
 		}
 		item, err = hydrateBundleItemMetadata(tx, item)
 		if err != nil {
 			return SelfImprovementProposalBundle{}, err
 		}
+		itemID := "bundleitem_" + randomHexID()
 		if _, err := tx.Exec(`
 			INSERT INTO self_improvement_proposal_bundle_items (
 				id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
 				proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
 				analyst_proposed_body, duplicate_risk, rationale, decision
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			"bundleitem_"+randomHexID(), bundleID, item.Operation, item.AssetType, item.AssetID, item.BaseVersionID,
+			itemID, bundleID, item.Operation, item.AssetType, item.AssetID, item.BaseVersionID,
 			item.ProposedRef, item.ProposedName, item.ProposedScope, item.ProposedBody, item.ProposedDescription,
 			boolToInt(bundleItemInputEnabled(item)), normalizedBundlePosition(item.ProposedPosition), item.ProposedBody,
 			item.DuplicateRisk, item.Rationale, ProposalBundleDecisionAccepted,
 		); err != nil {
 			return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle item: %w", err)
+		}
+		after := bundleItemInputAuditSnapshot(bundleID, itemID, item)
+		if err := insertBundleItemEvent(tx, bundleID, itemID, "created", "system", "", nil, after); err != nil {
+			return SelfImprovementProposalBundle{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -183,27 +217,37 @@ func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovement
 }
 
 func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
+	return getSelfImprovementProposalBundle(db, id)
+}
+
+func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProposalBundle, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
 	}
 	var bundle SelfImprovementProposalBundle
-	err := db.QueryRow(`
-		SELECT id, workspace_id, recommendation_id, status, created_at, updated_at
+	err := q.QueryRow(`
+		SELECT id, workspace_id, recommendation_id, recommendation_updated_at_snapshot,
+		       recommendation_snapshot_hash, status, created_at, updated_at
 		FROM self_improvement_proposal_bundles
 		WHERE id=? OR recommendation_id=?`, id, id).
-		Scan(&bundle.ID, &bundle.WorkspaceID, &bundle.RecommendationID, &bundle.Status, &bundle.CreatedAt, &bundle.UpdatedAt)
+		Scan(&bundle.ID, &bundle.WorkspaceID, &bundle.RecommendationID, &bundle.RecommendationUpdatedAtSnapshot,
+			&bundle.RecommendationSnapshotHash, &bundle.Status, &bundle.CreatedAt, &bundle.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SelfImprovementProposalBundle{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
 	}
 	if err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
 	}
-	rec, err := GetSelfImprovementRecommendation(db, bundle.RecommendationID)
+	rec, err := getSelfImprovementRecommendation(q, bundle.RecommendationID)
 	if err == nil {
+		hash, hashErr := recommendationSnapshotHash(rec)
+		if hashErr == nil {
+			bundle.RecommendationChanged = rec.UpdatedAt != bundle.RecommendationUpdatedAtSnapshot || hash != bundle.RecommendationSnapshotHash
+		}
 		bundle.Recommendation = &rec
 	}
-	items, err := listSelfImprovementProposalBundleItems(db, bundle.ID)
+	items, err := listSelfImprovementProposalBundleItems(q, bundle.ID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
@@ -212,6 +256,10 @@ func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementPro
 }
 
 func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string, in SelfImprovementBundleItemUpdate) (SelfImprovementProposalBundle, error) {
+	return UpdateSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, in, "system")
+}
+
+func UpdateSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
 	bundle, item, err := getBundleAndItem(db, bundleID, itemID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
@@ -248,7 +296,7 @@ func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string
 		}
 	}
 	if item.Operation == ProposalBundleOperationCreateNew {
-		if err := validateBundleCreateNew(SelfImprovementBundleItemInput{
+		if err := validateBundleCreateNew(db, bundle.WorkspaceID, SelfImprovementBundleItemInput{
 			Operation:           item.Operation,
 			AssetType:           item.AssetType,
 			ProposedRef:         ref,
@@ -261,7 +309,12 @@ func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string
 			return SelfImprovementProposalBundle{}, err
 		}
 	}
-	_, err = db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: begin: %w", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
 		UPDATE self_improvement_proposal_bundle_items
 		SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,
 		    proposed_description=?, proposed_enabled=?, proposed_position=?, updated_at=datetime('now')
@@ -269,39 +322,67 @@ func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string
 	if err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: %w", err)
 	}
+	after := item
+	after.ProposedRef, after.ProposedName, after.ProposedScope = ref, name, scope
+	after.ProposedBody, after.ProposedDescription, after.ProposedEnabled, after.ProposedPosition = body, description, enabled, position
+	if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "edited", actor, "", bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after)); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: commit: %w", err)
+	}
 	return GetSelfImprovementProposalBundle(db, bundle.ID)
 }
 
 func RejectSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, reason string) (SelfImprovementProposalBundle, error) {
-	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionRejected, "", reason)
+	return RejectSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, reason, "system")
+}
+
+func RejectSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
+	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionRejected, "", reason, actor)
 }
 
 func LinkSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, assetID, reason string) (SelfImprovementProposalBundle, error) {
+	return LinkSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, assetID, reason, "system")
+}
+
+func LinkSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
 		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "linked asset id is required"}
 	}
-	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionLinkedExisting, assetID, reason)
+	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionLinkedExisting, assetID, reason, actor)
 }
 
 func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImprovementProposalBundle, error) {
-	bundle, err := GetSelfImprovementProposalBundle(db, bundleID)
+	return PublishSelfImprovementProposalBundleWithActor(db, bundleID, "system")
+}
+
+func PublishSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: publish proposal bundle: begin: %w", err)
+	}
+	defer tx.Rollback()
+	bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
 		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundles can be published"}
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: publish proposal bundle: begin: %w", err)
-	}
-	defer tx.Rollback()
 	for _, item := range bundle.Items {
+		before := bundleItemAuditSnapshot(item)
 		switch item.Decision {
 		case ProposalBundleDecisionRejected:
+			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+				return SelfImprovementProposalBundle{}, err
+			}
 			continue
 		case ProposalBundleDecisionLinkedExisting:
+			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+				return SelfImprovementProposalBundle{}, err
+			}
 			continue
 		case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
 		default:
@@ -317,6 +398,12 @@ func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImpr
 			WHERE id=?`, ProposalBundleDecisionPublished, versionID, item.ID); err != nil {
 			return SelfImprovementProposalBundle{}, fmt.Errorf("store: mark proposal bundle item published: %w", err)
 		}
+		after := item
+		after.Decision = ProposalBundleDecisionPublished
+		after.PublishedVersionID = versionID
+		if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "published", actor, "", before, bundleItemAuditSnapshot(after)); err != nil {
+			return SelfImprovementProposalBundle{}, err
+		}
 	}
 	if _, err := tx.Exec(`
 		UPDATE self_improvement_proposal_bundles
@@ -331,23 +418,37 @@ func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImpr
 }
 
 func DiscardSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImprovementProposalBundle, error) {
-	bundle, err := GetSelfImprovementProposalBundle(db, bundleID)
+	return DiscardSelfImprovementProposalBundleWithActor(db, bundleID, "system")
+}
+
+func DiscardSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: begin: %w", err)
+	}
+	defer tx.Rollback()
+	bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
 		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "only pending proposal bundles can be discarded"}
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: begin: %w", err)
-	}
-	defer tx.Rollback()
 	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundles SET status=?, updated_at=datetime('now') WHERE id=?`, ProposalBundleStatusDiscarded, bundle.ID); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, ProposalBundleDecisionDiscarded, bundle.ID); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle items: %w", err)
+	}
+	for _, item := range bundle.Items {
+		before := bundleItemAuditSnapshot(item)
+		after := item
+		if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
+			after.Decision = ProposalBundleDecisionDiscarded
+		}
+		if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", actor, "bundle discarded", before, bundleItemAuditSnapshot(after)); err != nil {
+			return SelfImprovementProposalBundle{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: commit: %w", err)
@@ -407,7 +508,7 @@ func recommendationBundleItems(rec SelfImprovementRecommendation) ([]SelfImprove
 	return items, nil
 }
 
-func validateBundleItemForCreate(q querier, item SelfImprovementBundleItemInput) error {
+func validateBundleItemForCreate(q querier, workspaceID string, item SelfImprovementBundleItemInput) error {
 	if strings.TrimSpace(item.ProposedBody) == "" {
 		return &ErrValidation{Msg: "proposal bundle item body is required"}
 	}
@@ -420,7 +521,7 @@ func validateBundleItemForCreate(q querier, item SelfImprovementBundleItemInput)
 	case ProposalBundleOperationUpdateExisting:
 		return validateBundleUpdateExisting(q, item)
 	case ProposalBundleOperationCreateNew:
-		return validateBundleCreateNew(item)
+		return validateBundleCreateNew(q, workspaceID, item)
 	default:
 		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
 	}
@@ -443,14 +544,14 @@ func validateBundleUpdateExisting(q querier, item SelfImprovementBundleItemInput
 	return nil
 }
 
-func validateBundleCreateNew(item SelfImprovementBundleItemInput) error {
+func validateBundleCreateNew(q querier, workspaceID string, item SelfImprovementBundleItemInput) error {
 	if strings.TrimSpace(item.ProposedRef) == "" || strings.TrimSpace(item.ProposedName) == "" {
 		return &ErrValidation{Msg: "proposal bundle create-new item requires proposed ref and name"}
 	}
 	if strings.TrimSpace(item.ProposedScope) == "" {
 		return &ErrValidation{Msg: "proposal bundle create-new item requires proposed scope"}
 	}
-	return nil
+	return validateBundleScope(q, item.ProposedScope, workspaceID)
 }
 
 func hydrateBundleItemMetadata(q querier, item SelfImprovementBundleItemInput) (SelfImprovementBundleItemInput, error) {
@@ -473,8 +574,8 @@ func hydrateBundleItemMetadata(q querier, item SelfImprovementBundleItemInput) (
 	return item, nil
 }
 
-func listSelfImprovementProposalBundleItems(db *sql.DB, bundleID string) ([]SelfImprovementBundleItem, error) {
-	rows, err := db.Query(`
+func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfImprovementBundleItem, error) {
+	rows, err := q.Query(`
 		SELECT id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
 		       proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
 		       analyst_proposed_body, duplicate_risk, rationale, decision,
@@ -511,12 +612,12 @@ func listSelfImprovementProposalBundleItems(db *sql.DB, bundleID string) ([]Self
 		if out[i].BaseVersionID == "" {
 			continue
 		}
-		base, err := readSelfImprovementProposalBaseVersion(db, out[i].AssetType, out[i].BaseVersionID)
+		base, err := readSelfImprovementProposalBaseVersion(q, out[i].AssetType, out[i].BaseVersionID)
 		if err != nil {
 			return nil, err
 		}
 		out[i].BaseVersion = &base
-		if current, err := currentCatalogVersionID(db, out[i].AssetType, out[i].AssetID); err == nil {
+		if current, err := currentCatalogVersionID(q, out[i].AssetType, out[i].AssetID); err == nil {
 			out[i].CurrentVersionID = current
 			out[i].Stale = current != out[i].BaseVersionID
 		}
@@ -524,7 +625,7 @@ func listSelfImprovementProposalBundleItems(db *sql.DB, bundleID string) ([]Self
 	return out, nil
 }
 
-func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decision, linkedAssetID, reason string) (SelfImprovementProposalBundle, error) {
+func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decision, linkedAssetID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	bundle, item, err := getBundleAndItem(db, bundleID, itemID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
@@ -540,11 +641,32 @@ func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decis
 			return SelfImprovementProposalBundle{}, err
 		}
 	}
-	if _, err := db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
 		UPDATE self_improvement_proposal_bundle_items
 		SET decision=?, asset_id=CASE WHEN ? <> '' THEN ? ELSE asset_id END, decision_reason=?, updated_at=datetime('now')
 		WHERE id=? AND bundle_id=?`, decision, linkedAssetID, linkedAssetID, strings.TrimSpace(reason), item.ID, bundle.ID); err != nil {
 		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: %w", err)
+	}
+	after := item
+	after.Decision = decision
+	after.DecisionReason = strings.TrimSpace(reason)
+	if linkedAssetID != "" {
+		after.AssetID = linkedAssetID
+	}
+	eventType := "rejected"
+	if decision == ProposalBundleDecisionLinkedExisting {
+		eventType = "linked_existing"
+	}
+	if err := insertBundleItemEvent(tx, bundle.ID, item.ID, eventType, actor, strings.TrimSpace(reason), bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after)); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: commit: %w", err)
 	}
 	return GetSelfImprovementProposalBundle(db, bundle.ID)
 }
@@ -798,10 +920,11 @@ func readPromptFrom(q querier, ref string) (fleet.Prompt, error) {
 
 func parseBundleScope(raw, currentWorkspace string) (workspace, repo string) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "global" {
+	scope := strings.ToLower(raw)
+	if scope == "" || scope == "global" {
 		return "", ""
 	}
-	if raw == "workspace" {
+	if scope == "workspace" {
 		return fleet.NormalizeWorkspaceID(currentWorkspace), ""
 	}
 	parts := strings.Split(raw, "/")
@@ -809,6 +932,176 @@ func parseBundleScope(raw, currentWorkspace string) (workspace, repo string) {
 		return fleet.NormalizeWorkspaceID(parts[0]), fleet.NormalizeRepoName(strings.Join(parts[1:], "/"))
 	}
 	return fleet.NormalizeWorkspaceID(raw), ""
+}
+
+func validateBundleScope(q querier, raw, currentWorkspace string) error {
+	raw = strings.TrimSpace(raw)
+	scope := strings.ToLower(raw)
+	if scope == "global" || scope == "workspace" {
+		return nil
+	}
+	workspace, repo := parseBundleScope(raw, currentWorkspace)
+	if workspace == "" && repo == "" {
+		return nil
+	}
+	var exists bool
+	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?)`, workspace).Scan(&exists); err != nil {
+		return fmt.Errorf("store: validate proposal bundle scope workspace: %w", err)
+	}
+	if !exists {
+		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle scope workspace %q does not exist", workspace)}
+	}
+	if repo == "" {
+		return nil
+	}
+	if len(strings.Split(raw, "/")) != 3 || repo == "" {
+		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle repo scope %q is invalid", raw)}
+	}
+	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)`, repo).Scan(&exists); err != nil {
+		return fmt.Errorf("store: validate proposal bundle scope repo: %w", err)
+	}
+	if !exists {
+		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle scope repo %q does not exist", repo)}
+	}
+	return nil
+}
+
+type recommendationSnapshot struct {
+	Type                    string         `json:"type"`
+	Status                  string         `json:"status"`
+	Confidence              string         `json:"confidence"`
+	Risk                    string         `json:"risk"`
+	Finding                 string         `json:"finding"`
+	NormalizedLesson        string         `json:"normalized_lesson"`
+	Rationale               string         `json:"rationale"`
+	EvidenceFeedbackIDs     []int64        `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs      []string       `json:"evidence_source_urls"`
+	AttributionConfidence   string         `json:"attribution_confidence"`
+	TargetAssetType         string         `json:"target_asset_type"`
+	TargetAssetID           string         `json:"target_asset_id"`
+	TargetBaseVersionID     string         `json:"target_base_version_id"`
+	ProposedPatch           string         `json:"proposed_patch"`
+	ProposedNewBody         string         `json:"proposed_new_body"`
+	SuggestedRolloutScope   string         `json:"suggested_rollout_scope"`
+	AnalyzerPromptRef       string         `json:"analyzer_prompt_ref"`
+	AnalyzerPromptVersionID string         `json:"analyzer_prompt_version_id"`
+	StructuredOutput        map[string]any `json:"structured_output"`
+	Error                   string         `json:"error"`
+}
+
+func recommendationSnapshotHash(rec SelfImprovementRecommendation) (string, error) {
+	data, err := json.Marshal(recommendationSnapshot{
+		Type:                    rec.Type,
+		Status:                  rec.Status,
+		Confidence:              rec.Confidence,
+		Risk:                    rec.Risk,
+		Finding:                 rec.Finding,
+		NormalizedLesson:        rec.NormalizedLesson,
+		Rationale:               rec.Rationale,
+		EvidenceFeedbackIDs:     rec.EvidenceFeedbackIDs,
+		EvidenceSourceURLs:      rec.EvidenceSourceURLs,
+		AttributionConfidence:   rec.AttributionConfidence,
+		TargetAssetType:         rec.TargetAssetType,
+		TargetAssetID:           rec.TargetAssetID,
+		TargetBaseVersionID:     rec.TargetBaseVersionID,
+		ProposedPatch:           rec.ProposedPatch,
+		ProposedNewBody:         rec.ProposedNewBody,
+		SuggestedRolloutScope:   rec.SuggestedRolloutScope,
+		AnalyzerPromptRef:       rec.AnalyzerPromptRef,
+		AnalyzerPromptVersionID: rec.AnalyzerPromptVersionID,
+		StructuredOutput:        rec.StructuredOutput,
+		Error:                   rec.Error,
+	})
+	if err != nil {
+		return "", fmt.Errorf("store: hash recommendation snapshot: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func getSelfImprovementRecommendation(q querier, id string) (SelfImprovementRecommendation, error) {
+	row := q.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
+	return scanSelfImprovementRecommendation(row, true)
+}
+
+func insertBundleItemEvent(tx *sql.Tx, bundleID, itemID, eventType, actor, reason string, before, after any) error {
+	beforeJSON, err := bundleEventJSON(before)
+	if err != nil {
+		return err
+	}
+	afterJSON, err := bundleEventJSON(after)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(actor) == "" {
+		actor = "system"
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO self_improvement_proposal_bundle_item_events (
+			id, bundle_id, item_id, event_type, actor, reason, before_json, after_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"bundleevent_"+randomHexID(), bundleID, itemID, strings.TrimSpace(eventType),
+		strings.TrimSpace(actor), strings.TrimSpace(reason), beforeJSON, afterJSON,
+	); err != nil {
+		return fmt.Errorf("store: insert proposal bundle item event: %w", err)
+	}
+	return nil
+}
+
+func bundleEventJSON(v any) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("store: marshal proposal bundle item event: %w", err)
+	}
+	return string(data), nil
+}
+
+func bundleItemInputAuditSnapshot(bundleID, itemID string, item SelfImprovementBundleItemInput) map[string]any {
+	return map[string]any{
+		"id":                   itemID,
+		"bundle_id":            bundleID,
+		"operation":            item.Operation,
+		"asset_type":           item.AssetType,
+		"asset_id":             item.AssetID,
+		"base_version_id":      item.BaseVersionID,
+		"proposed_ref":         item.ProposedRef,
+		"proposed_name":        item.ProposedName,
+		"proposed_scope":       item.ProposedScope,
+		"proposed_body":        item.ProposedBody,
+		"proposed_description": item.ProposedDescription,
+		"proposed_enabled":     bundleItemInputEnabled(item),
+		"proposed_position":    normalizedBundlePosition(item.ProposedPosition),
+		"duplicate_risk":       item.DuplicateRisk,
+		"rationale":            item.Rationale,
+		"decision":             ProposalBundleDecisionAccepted,
+	}
+}
+
+func bundleItemAuditSnapshot(item SelfImprovementBundleItem) map[string]any {
+	return map[string]any{
+		"id":                    item.ID,
+		"bundle_id":             item.BundleID,
+		"operation":             item.Operation,
+		"asset_type":            item.AssetType,
+		"asset_id":              item.AssetID,
+		"base_version_id":       item.BaseVersionID,
+		"proposed_ref":          item.ProposedRef,
+		"proposed_name":         item.ProposedName,
+		"proposed_scope":        item.ProposedScope,
+		"proposed_body":         item.ProposedBody,
+		"proposed_description":  item.ProposedDescription,
+		"proposed_enabled":      item.ProposedEnabled,
+		"proposed_position":     item.ProposedPosition,
+		"analyst_proposed_body": item.AnalystProposedBody,
+		"duplicate_risk":        item.DuplicateRisk,
+		"rationale":             item.Rationale,
+		"decision":              item.Decision,
+		"decision_reason":       item.DecisionReason,
+		"published_version_id":  item.PublishedVersionID,
+	}
 }
 
 func randomHexID() string {

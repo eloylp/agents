@@ -340,7 +340,7 @@ func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWrite
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.UpdateSelfImprovementProposalBundleItem(vars["id"], vars["item_id"], req)
+	bundle, err := h.store.UpdateSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -358,7 +358,7 @@ func (h *Handler) HandleRejectImprovementProposalBundleItem(w http.ResponseWrite
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.RejectSelfImprovementProposalBundleItem(vars["id"], vars["item_id"], req.Reason)
+	bundle, err := h.store.RejectSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req.Reason, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -377,7 +377,7 @@ func (h *Handler) HandleLinkImprovementProposalBundleItem(w http.ResponseWriter,
 		return
 	}
 	vars := mux.Vars(r)
-	bundle, err := h.store.LinkSelfImprovementProposalBundleItem(vars["id"], vars["item_id"], req.AssetID, req.Reason)
+	bundle, err := h.store.LinkSelfImprovementProposalBundleItemWithActor(vars["id"], vars["item_id"], req.AssetID, req.Reason, "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -387,7 +387,7 @@ func (h *Handler) HandleLinkImprovementProposalBundleItem(w http.ResponseWriter,
 }
 
 func (h *Handler) HandlePublishImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.PublishSelfImprovementProposalBundle(mux.Vars(r)["id"])
+	bundle, err := h.store.PublishSelfImprovementProposalBundleWithActor(mux.Vars(r)["id"], "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -397,7 +397,7 @@ func (h *Handler) HandlePublishImprovementProposalBundle(w http.ResponseWriter, 
 }
 
 func (h *Handler) HandleDiscardImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.store.DiscardSelfImprovementProposalBundle(mux.Vars(r)["id"])
+	bundle, err := h.store.DiscardSelfImprovementProposalBundleWithActor(mux.Vars(r)["id"], "dashboard")
 	if err != nil {
 		h.writeStoreError(w, err)
 		return

@@ -308,7 +308,7 @@ func toolEditImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 		} else {
 			update.ProposedPosition = v
 		}
-		bundle, err := deps.Store.UpdateSelfImprovementProposalBundleItem(bundleID, itemID, update)
+		bundle, err := deps.Store.UpdateSelfImprovementProposalBundleItemWithActor(bundleID, itemID, update, "mcp")
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("edit improvement proposal bundle item", err), nil
 		}
@@ -327,7 +327,7 @@ func toolRejectImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("item_id is required"), nil
 		}
 		reason, _ := trimmedStringOptional(req, "reason")
-		bundle, err := deps.Store.RejectSelfImprovementProposalBundleItem(bundleID, itemID, reason)
+		bundle, err := deps.Store.RejectSelfImprovementProposalBundleItemWithActor(bundleID, itemID, reason, "mcp")
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("reject improvement proposal bundle item", err), nil
 		}
@@ -350,7 +350,7 @@ func toolLinkImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("asset_id is required"), nil
 		}
 		reason, _ := trimmedStringOptional(req, "reason")
-		bundle, err := deps.Store.LinkSelfImprovementProposalBundleItem(bundleID, itemID, assetID, reason)
+		bundle, err := deps.Store.LinkSelfImprovementProposalBundleItemWithActor(bundleID, itemID, assetID, reason, "mcp")
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("link improvement proposal bundle item", err), nil
 		}
@@ -364,7 +364,7 @@ func toolPublishImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("bundle_id is required"), nil
 		}
-		bundle, err := deps.Store.PublishSelfImprovementProposalBundle(id)
+		bundle, err := deps.Store.PublishSelfImprovementProposalBundleWithActor(id, "mcp")
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("publish improvement proposal bundle", err), nil
 		}
@@ -378,7 +378,7 @@ func toolDiscardImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("bundle_id is required"), nil
 		}
-		bundle, err := deps.Store.DiscardSelfImprovementProposalBundle(id)
+		bundle, err := deps.Store.DiscardSelfImprovementProposalBundleWithActor(id, "mcp")
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("discard improvement proposal bundle", err), nil
 		}
