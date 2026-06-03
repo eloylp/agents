@@ -37,6 +37,10 @@ func TestRuntimeSettingsRoundTrip(t *testing.T) {
 			TimeoutSeconds: 900,
 			NetworkMode:    "bridge",
 		},
+		SelfImprovementAnalyst: fleet.SelfImprovementAnalystRuntimeSettings{
+			Backend: "codex",
+			Model:   "gpt-5.5",
+		},
 	})
 	if err != nil {
 		t.Fatalf("WriteRuntimeSettings: %v", err)
@@ -69,6 +73,10 @@ func TestPatchRuntimeSettingsPreservesOmittedFields(t *testing.T) {
 			TimeoutSeconds: 900,
 			NetworkMode:    "bridge",
 		},
+		SelfImprovementAnalyst: fleet.SelfImprovementAnalystRuntimeSettings{
+			Backend: "codex",
+			Model:   "gpt-5.5",
+		},
 	})
 	if err != nil {
 		t.Fatalf("WriteRuntimeSettings: %v", err)
@@ -77,11 +85,15 @@ func TestPatchRuntimeSettingsPreservesOmittedFields(t *testing.T) {
 	timeout := 1200
 	cpus := ""
 	network := ""
+	model := "gpt-5.6"
 	updated, err := st.PatchRuntimeSettings(store.RuntimeSettingsPatch{
 		Constraints: store.RuntimeConstraintsPatch{
 			CPUs:           &cpus,
 			TimeoutSeconds: &timeout,
 			NetworkMode:    &network,
+		},
+		SelfImprovementAnalyst: store.SelfImprovementAnalystRuntimePatch{
+			Model: &model,
 		},
 	})
 	if err != nil {
@@ -96,6 +108,10 @@ func TestPatchRuntimeSettingsPreservesOmittedFields(t *testing.T) {
 			PidsLimit:      256,
 			TimeoutSeconds: 1200,
 			NetworkMode:    "",
+		},
+		SelfImprovementAnalyst: fleet.SelfImprovementAnalystRuntimeSettings{
+			Backend: "codex",
+			Model:   "gpt-5.6",
 		},
 	}
 	if updated != want {

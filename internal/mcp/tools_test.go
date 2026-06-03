@@ -3377,8 +3377,10 @@ func TestToolUpdateRuntimePreservesOmittedFields(t *testing.T) {
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"timeout_seconds": float64(1200),
-		"pids_limit":      float64(0),
+		"timeout_seconds":                  float64(1200),
+		"pids_limit":                       float64(0),
+		"self_improvement_analyst_backend": "codex",
+		"self_improvement_analyst_model":   "gpt-5.5",
 	}
 	res, err := toolUpdateRuntime(deps)(context.Background(), req)
 	if err != nil || res.IsError {
@@ -3396,6 +3398,9 @@ func TestToolUpdateRuntimePreservesOmittedFields(t *testing.T) {
 	}
 	if got.Constraints.PidsLimit != 0 || got.Constraints.TimeoutSeconds != 1200 {
 		t.Fatalf("numeric constraints = %+v, want pids 0 timeout 1200", got.Constraints)
+	}
+	if got.SelfImprovementAnalyst.Backend != "codex" || got.SelfImprovementAnalyst.Model != "gpt-5.5" {
+		t.Fatalf("self improvement analyst settings = %+v, want codex/gpt-5.5", got.SelfImprovementAnalyst)
 	}
 }
 

@@ -79,9 +79,15 @@ interface RuntimeConstraints {
   network_mode?: string
 }
 
+interface SelfImprovementAnalystRuntimeSettings {
+  backend?: string
+  model?: string
+}
+
 interface RuntimeSettings {
   runner_image: string
   constraints: RuntimeConstraints
+  self_improvement_analyst?: SelfImprovementAnalystRuntimeSettings
 }
 
 interface WorkspaceRuntime {
@@ -268,7 +274,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'backends' | 'import-export' | 'tokens'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'improvement-analyst' | 'backends' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [tools, setTools] = useState<ToolStatus[]>([])
@@ -343,7 +349,7 @@ export default function ConfigPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const requestedTab = params.get('tab')
-    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'backends' || requestedTab === 'import-export' || requestedTab === 'tokens') {
+    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'improvement-analyst' || requestedTab === 'backends' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
     setLbRepo(params.get('repo') ?? '')
@@ -401,6 +407,10 @@ export default function ConfigPage() {
   }
 
   const configWorkspaces = ((config?.workspaces as WorkspaceRuntime[] | undefined) ?? [])
+  const configBackends = sortBackends(Object.entries((config?.backends as Record<string, Omit<Backend, 'name'>> | undefined) ?? {}).map(([name, backend]) => ({ name, ...backend })))
+  const runtimeBackendOptions = backends.length > 0 ? backends : configBackends
+  const selectedAnalystBackend = runtimeBackendOptions.find(b => b.name === runtimeForm.self_improvement_analyst?.backend)
+  const analystModelOptions = selectedAnalystBackend?.models ?? []
   const runtimeWorkspaces = configWorkspaces.length > 0 ? configWorkspaces : (workspaceCatalog as WorkspaceRuntime[])
   const selectedWorkspaceRuntime = runtimeWorkspaces.find(w => w.id === selectedRuntimeWorkspace)
   const selectedRuntimeWorkspaceLabel = selectedWorkspaceRuntime?.name || selectedRuntimeWorkspace || defaultWorkspaceID
@@ -438,7 +448,7 @@ export default function ConfigPage() {
         return r.json()
       })
       .then((data: RuntimeSettings) => {
-        const normalized = { ...data, constraints: data.constraints ?? {} }
+        const normalized = { ...data, constraints: data.constraints ?? {}, self_improvement_analyst: data.self_improvement_analyst ?? {} }
         setRuntime(normalized)
         setRuntimeForm(normalized)
         setWorkspaceRunnerImage(selectedWorkspaceRuntime?.runner_image ?? '')
@@ -451,7 +461,7 @@ export default function ConfigPage() {
   }
 
   useEffect(() => {
-    if (tab === 'runtime' && !runtime && !runtimeLoading) {
+    if ((tab === 'runtime' || tab === 'improvement-analyst') && !runtime && !runtimeLoading) {
       loadRuntime()
     }
   }, [tab, runtime, runtimeLoading])
@@ -474,6 +484,16 @@ export default function ConfigPage() {
     })
   }
 
+  const updateImprovementAnalystRuntime = (key: keyof SelfImprovementAnalystRuntimeSettings, value: string) => {
+    setRuntimeForm(prev => ({
+      ...prev,
+      self_improvement_analyst: {
+        ...(prev.self_improvement_analyst ?? {}),
+        [key]: value,
+      },
+    }))
+  }
+
   const saveRuntime = () => {
     setRuntimeSaving(true)
     setRuntimeError('')
@@ -488,7 +508,7 @@ export default function ConfigPage() {
         return r.json()
       })
       .then((data: RuntimeSettings) => {
-        const normalized = { ...data, constraints: data.constraints ?? {} }
+        const normalized = { ...data, constraints: data.constraints ?? {}, self_improvement_analyst: data.self_improvement_analyst ?? {} }
         setRuntime(normalized)
         setRuntimeForm(normalized)
         setRuntimeStatus('Runtime settings saved.')
@@ -911,6 +931,7 @@ export default function ConfigPage() {
         <button style={tabStyle('inspector')} onClick={() => setTab('inspector')}>Inspector</button>
         <button style={tabStyle('authentication')} onClick={() => setTab('authentication')}>Authentication</button>
         <button style={tabStyle('runtime')} onClick={() => setTab('runtime')}>Runtime</button>
+        <button style={tabStyle('improvement-analyst')} onClick={() => setTab('improvement-analyst')}>Improvement analyst</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
         <button style={tabStyle('tokens')} onClick={() => setTab('tokens')}>Token usage and limits</button>
@@ -1053,6 +1074,73 @@ export default function ConfigPage() {
                 Save override for {selectedRuntimeWorkspaceLabel}
               </button>
             </div>
+          </div>
+        </Card>
+      )}
+
+      {tab === 'improvement-analyst' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ display: 'grid', gap: '1rem', maxWidth: '720px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+              <div>
+                <h2 style={{ fontSize: '1rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Internal catalog analyst</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  Select the backend and model used when /agents improve feedback is analyzed.
+                </p>
+              </div>
+              <button
+                onClick={loadRuntime}
+                disabled={runtimeLoading}
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 12px', borderRadius: '6px', cursor: runtimeLoading ? 'default' : 'pointer', fontSize: '0.8rem' }}
+              >
+                {runtimeLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+
+            {runtimeError && <div style={{ color: 'var(--text-danger)', fontSize: '0.875rem' }}>{runtimeError}</div>}
+            {runtimeStatus && <div style={{ color: 'var(--text-success)', fontSize: '0.875rem' }}>{runtimeStatus}</div>}
+
+            <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+              Backend
+              <select
+                value={runtimeForm.self_improvement_analyst?.backend ?? ''}
+                onChange={e => updateImprovementAnalystRuntime('backend', e.target.value)}
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}
+              >
+                <option value="">Automatic</option>
+                {runtimeBackendOptions.map(backend => (
+                  <option key={backend.name} value={backend.name}>{backend.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+              Model
+              <input
+                list="improvement-analyst-models"
+                value={runtimeForm.self_improvement_analyst?.model ?? ''}
+                onChange={e => updateImprovementAnalystRuntime('model', e.target.value)}
+                placeholder={analystModelOptions[0] || 'Backend default'}
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}
+              />
+              {analystModelOptions.length > 0 && (
+                <datalist id="improvement-analyst-models">
+                  {analystModelOptions.map(model => <option key={model} value={model} />)}
+                </datalist>
+              )}
+            </label>
+
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>
+              Empty backend keeps automatic selection. Empty model uses the selected backend default, with a best-effort inference from existing agents on that backend.
+            </p>
+
+            <button
+              onClick={saveRuntime}
+              disabled={runtimeSaving || runtimeLoading}
+              style={{ justifySelf: 'start', background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: runtimeSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            >
+              {runtimeSaving ? 'Saving…' : 'Save analyst runtime'}
+            </button>
           </div>
         </Card>
       )}

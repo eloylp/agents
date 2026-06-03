@@ -1,5 +1,9 @@
 package fleet
 
+import "strings"
+
+const InternalAgentNamePrefix = "internal-"
+
 // Agent is a named capability: a backend, a set of skills, and a prompt
 // catalog reference. Agents are pure definitions, they don't run on their own.
 // Repos bind them to triggers.
@@ -62,4 +66,8 @@ type Agent struct {
 // agents authored before this field existed retain their previous behaviour.
 func (a Agent) IsAllowMemory() bool {
 	return a.AllowMemory == nil || *a.AllowMemory
+}
+
+func IsReservedAgentName(name string) bool {
+	return strings.HasPrefix(NormalizeAgentName(name), InternalAgentNamePrefix)
 }

@@ -68,6 +68,9 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		if a.Name == "" {
 			return errors.New("config: agent name is required")
 		}
+		if fleet.IsReservedAgentName(a.Name) {
+			return fmt.Errorf("config: agent name %q is reserved for daemon-managed internal agents", a.Name)
+		}
 		agentKey := workspaceNameKey(a.WorkspaceID, a.Name)
 		if _, dup := seen[agentKey]; dup {
 			return fmt.Errorf("config: duplicate agent name %q in workspace %q", a.Name, fleet.NormalizeWorkspaceID(a.WorkspaceID))

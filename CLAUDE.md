@@ -68,7 +68,7 @@ The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daem
 
 The daemon image itself defaults to the non-root `agents` user, but the shipped Compose file sets `user: "0:0"` so Docker socket access works on hosts where `/var/run/docker.sock` belongs to a host-specific `docker` group ID. Operators who replace this with a group-based setup must ensure the daemon can create and remove runner containers before enabling scheduled runs.
 
-YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`. Imports that omit `runtime:` preserve the existing runner image and container constraints.
+YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`. Imports that omit `runtime:` preserve the existing runner image, container constraints, and internal analyst backend/model.
 
 ## Environment Variables
 

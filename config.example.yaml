@@ -55,6 +55,15 @@ backends:
     max_prompt_chars: 12000
 
 # ──────────────────────────────────────────────
+# runtime, global runner settings
+# ──────────────────────────────────────────────
+runtime:
+  runner_image: ghcr.io/eloylp/agents-runner:latest
+  self_improvement_analyst:
+    backend: codex
+    model: ""
+
+# ──────────────────────────────────────────────
 # skills, reusable guidance blocks
 #
 # Each map key is the stable public skill ref agents should reference. The optional

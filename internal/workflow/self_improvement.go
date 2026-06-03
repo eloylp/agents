@@ -16,6 +16,7 @@ import (
 
 const selfImprovementPromptRef = "prompt_self-improvement-analyst"
 const selfImprovementEventKind = "agents.improvement"
+const selfImprovementInternalAgentName = "internal-catalog-analyst"
 const selfImprovementAnalysisModeInitial = "initial"
 const selfImprovementAnalysisModeClarification = "clarification"
 
@@ -157,7 +158,7 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, fmt.Errorf("read self-improvement analyst prompt: %w", err)
 	}
-	backendName, backend, err := e.selfImprovementBackend()
+	backendName, backend, model, err := e.selfImprovementBackend()
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, err
@@ -167,7 +168,7 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, err
 	}
-	resp, err := e.runSelfImprovementAnalyst(ctx, feedback, prompt, backendName, backend, string(payload))
+	resp, err := e.runSelfImprovementAnalyst(ctx, feedback, prompt, backendName, backend, model, string(payload))
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, err
@@ -180,12 +181,13 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 	return selfimprovement.New(e.store).RecordRecommendation(in)
 }
 
-func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, payload string) (ai.Response, error) {
+func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, model string, payload string) (ai.Response, error) {
 	allowMemory := false
 	agent := fleet.Agent{
 		WorkspaceID: feedback.WorkspaceID,
-		Name:        "self-improvement-analyst",
+		Name:        selfImprovementInternalAgentName,
 		Backend:     backendName,
+		Model:       model,
 		PromptID:    selfImprovementPromptRef,
 		ScopeType:   "repo",
 		ScopeRepo:   strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/"),
@@ -256,10 +258,25 @@ func (e *Engine) handleSelfImprovementEvent(ctx context.Context, ev Event) error
 	return err
 }
 
-func (e *Engine) selfImprovementBackend() (string, fleet.Backend, error) {
+func (e *Engine) selfImprovementBackend() (string, fleet.Backend, string, error) {
+	runtime, err := e.store.ReadRuntimeSettings()
+	if err != nil {
+		return "", fleet.Backend{}, "", fmt.Errorf("read runtime settings: %w", err)
+	}
 	backends, err := e.store.ReadBackends()
 	if err != nil {
-		return "", fleet.Backend{}, fmt.Errorf("read backends: %w", err)
+		return "", fleet.Backend{}, "", fmt.Errorf("read backends: %w", err)
+	}
+	if runtime.SelfImprovementAnalyst.Backend != "" {
+		backend, ok := backends[runtime.SelfImprovementAnalyst.Backend]
+		if !ok || strings.TrimSpace(backend.Command) == "" {
+			return "", fleet.Backend{}, "", fmt.Errorf("self-improvement analyst backend %q is not configured", runtime.SelfImprovementAnalyst.Backend)
+		}
+		model, err := e.selfImprovementModel(runtime.SelfImprovementAnalyst.Backend, backend, runtime.SelfImprovementAnalyst.Model)
+		if err != nil {
+			return "", fleet.Backend{}, "", err
+		}
+		return runtime.SelfImprovementAnalyst.Backend, backend, model, nil
 	}
 	names := make([]string, 0, len(backends))
 	for name, backend := range backends {
@@ -271,13 +288,44 @@ func (e *Engine) selfImprovementBackend() (string, fleet.Backend, error) {
 	sort.Strings(names)
 	for _, preferred := range []string{"codex", "claude"} {
 		if backend, ok := backends[preferred]; ok && strings.TrimSpace(backend.Command) != "" {
-			return preferred, backend, nil
+			model, err := e.selfImprovementModel(preferred, backend, runtime.SelfImprovementAnalyst.Model)
+			if err != nil {
+				return "", fleet.Backend{}, "", err
+			}
+			return preferred, backend, model, nil
 		}
 	}
 	if len(names) == 0 {
-		return "", fleet.Backend{}, fmt.Errorf("no AI backend is configured for self-improvement analysis")
+		return "", fleet.Backend{}, "", fmt.Errorf("no AI backend is configured for self-improvement analysis")
 	}
-	return names[0], backends[names[0]], nil
+	model, err := e.selfImprovementModel(names[0], backends[names[0]], runtime.SelfImprovementAnalyst.Model)
+	if err != nil {
+		return "", fleet.Backend{}, "", err
+	}
+	return names[0], backends[names[0]], model, nil
+}
+
+func (e *Engine) selfImprovementModel(backendName string, backend fleet.Backend, configured string) (string, error) {
+	if configured != "" {
+		if fleet.IsPinnedModelUnavailable(configured, backend) {
+			return "", fmt.Errorf("self-improvement analyst model %q is not available on backend %q", configured, backendName)
+		}
+		return configured, nil
+	}
+	agents, err := e.store.ReadAgents()
+	if err != nil {
+		return "", fmt.Errorf("read agents for self-improvement analyst model inference: %w", err)
+	}
+	for _, agent := range agents {
+		if agent.Backend != backendName || strings.TrimSpace(agent.Model) == "" {
+			continue
+		}
+		if fleet.IsPinnedModelUnavailable(agent.Model, backend) {
+			continue
+		}
+		return agent.Model, nil
+	}
+	return "", nil
 }
 
 func selfImprovementSystemPrompt(content string) string {

@@ -1072,6 +1072,10 @@ func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
 			"timeout_seconds": 900,
 			"network_mode":    "bridge",
 		},
+		"self_improvement_analyst": map[string]any{
+			"backend": "codex",
+			"model":   "gpt-5.5",
+		},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("PUT /runtime: got %d, %s", rr.Code, rr.Body.String())
 	}
@@ -1102,6 +1106,9 @@ func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
 	}
 	if out.Constraints.PidsLimit != 0 || out.Constraints.TimeoutSeconds != 1200 {
 		t.Fatalf("numeric constraints = %+v, want pids 0 timeout 1200", out.Constraints)
+	}
+	if out.SelfImprovementAnalyst.Backend != "codex" || out.SelfImprovementAnalyst.Model != "gpt-5.5" {
+		t.Fatalf("analyst runtime settings = %+v, want preserved codex/gpt-5.5", out.SelfImprovementAnalyst)
 	}
 }
 
