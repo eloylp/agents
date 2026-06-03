@@ -49,11 +49,11 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
-| `GET` | `/improvements/feedback` | Stored `/agents improve` feedback events. Query params: `workspace`, optional `status` (`new`, `ignored`, etc.). |
-| `GET` | `/improvements/recommendations` | Review-only self-improvement recommendations. Query params: `workspace`, optional recommendation `status`. |
+| `GET` | `/improvements/feedback` | Stored `/agents improve` feedback events. Global by default; query params: optional `workspace`, optional `status` (`new`, `ignored`, etc.). |
+| `GET` | `/improvements/recommendations` | Review-only self-improvement recommendations. Global by default; query params: optional `workspace`, optional recommendation `status`. |
 | `GET` | `/improvements/recommendations/{id}` | One recommendation with linked feedback evidence. |
 | `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the recommendation for one feedback event. |
-| `POST` | `/improvements/recommendations/{id}/status` | Update recommendation status (`accepted`, `rejected`, `deferred`, `duplicate`, etc.). |
+| `POST` | `/improvements/recommendations/{id}/status` | Accept or reject a recommendation. Accepted/rejected decisions are terminal. |
 | `POST` | `/improvements/recommendations/{id}/clarification` | Replace the recommendation's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Body: `{ "body": "...", "author": "optional" }`. |
 | `GET` | `/improvements/recommendations/{id}/proposal` | Catalog proposal versions linked to a recommendation. |
 | `POST` | `/improvements/recommendations/{id}/proposal` | Create an inert catalog proposal version from an accepted recommendation. Does not publish or affect runtime composition. |

@@ -1,7 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import WorkspaceSelect from '@/components/WorkspaceSelect'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { withWorkspace } from '@/lib/workspace'
 
 interface FeedbackEvent {
   id: number
@@ -37,6 +36,7 @@ interface Clarification {
 
 interface Recommendation {
   id: string
+  workspace?: string
   feedback_event_id: number
   type: string
   status: string
@@ -224,15 +224,17 @@ function bundleItemDraftBody(item: ProposalBundleItem, draft: BundleItemDraft) {
 }
 
 export default function ImprovementsPage() {
-  const { workspace } = useSelectedWorkspace()
   const [feedback, setFeedback] = useState<FeedbackEvent[]>([])
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [proposals, setProposals] = useState<Record<string, ImprovementProposal[]>>({})
   const [bundles, setBundles] = useState<Record<string, ProposalBundle>>({})
   const [itemDrafts, setItemDrafts] = useState<Record<string, BundleItemDraft>>({})
+  const [collapsedRecommendations, setCollapsedRecommendations] = useState<Set<string>>(new Set())
   const [tab, setTab] = useState<Tab>('inbox')
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(true)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [linkingSkillItem, setLinkingSkillItem] = useState<string | null>(null)
   const [clarifying, setClarifying] = useState<Recommendation | null>(null)
   const [clarificationBody, setClarificationBody] = useState('')
   const [clarificationSaving, setClarificationSaving] = useState(false)
@@ -243,8 +245,8 @@ export default function ImprovementsPage() {
     setLoading(true)
     const suffix = status ? `?status=${encodeURIComponent(status)}` : ''
     Promise.all([
-      fetch(withWorkspace(`/improvements/feedback${suffix}`, workspace), { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
-      fetch(withWorkspace(`/improvements/recommendations${suffix}`, workspace), { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(`/improvements/feedback${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(`/improvements/recommendations${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
     ])
       .then(([feedbackRows, recommendationRows]) => {
         setFeedback(feedbackRows ?? [])
@@ -269,7 +271,7 @@ export default function ImprovementsPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [workspace, status])
+  useEffect(() => { load() }, [status])
 
   const counts = useMemo(() => recommendations.reduce<Record<string, number>>((acc, row) => {
     acc[row.status] = (acc[row.status] ?? 0) + 1
@@ -401,6 +403,46 @@ export default function ImprovementsPage() {
     if (res.ok) load()
   }
 
+  const skillRefForItem = (item: ProposalBundleItem) => (item.asset_id || item.proposed_ref || '').trim()
+
+  const canLinkPublishedSkill = (row: Recommendation, item: ProposalBundleItem) =>
+    item.asset_type === 'skill' &&
+    item.operation === 'create_new' &&
+    item.decision === 'published' &&
+    skillRefForItem(item) !== '' &&
+    Boolean(row.feedback?.linked_agent_name)
+
+  const linkPublishedSkillToAgent = async (row: Recommendation, item: ProposalBundleItem) => {
+    const agentName = (row.feedback?.linked_agent_name || '').trim()
+    const skillRef = skillRefForItem(item)
+    const targetWorkspace = row.feedback?.workspace || row.workspace || 'default'
+    if (!agentName || !skillRef || linkingSkillItem) return
+    setLinkingSkillItem(item.id)
+    setActionMessage(null)
+    try {
+      const url = withWorkspace(`/agents/${encodeURIComponent(agentName)}`, targetWorkspace)
+      const read = await fetch(url, { cache: 'no-store' })
+      if (!read.ok) throw new Error(`read agent returned HTTP ${read.status}`)
+      const agent = await read.json()
+      const currentSkills = Array.isArray(agent.skills) ? agent.skills : []
+      if (currentSkills.includes(skillRef)) {
+        setActionMessage(`${skillRef} is already linked to ${agentName}.`)
+        return
+      }
+      const write = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: [...currentSkills, skillRef] }),
+      })
+      if (!write.ok) throw new Error(`update agent returned HTTP ${write.status}`)
+      setActionMessage(`Linked ${skillRef} to ${agentName}.`)
+    } catch (err) {
+      setActionMessage(`Could not link ${skillRef} to ${agentName}: ${(err as Error).message}`)
+    } finally {
+      setLinkingSkillItem(null)
+    }
+  }
+
   const canCreateProposal = (row: Recommendation) =>
     row.status === 'accepted' &&
     ['prompt', 'skill', 'guardrail'].includes(row.target_asset_type || '') &&
@@ -410,6 +452,19 @@ export default function ImprovementsPage() {
   const shownRecommendations = tab === 'inbox'
     ? recommendations.filter(row => row.status === 'recommended' || row.status === 'needs_user_input')
     : recommendations
+
+  const toggleRecommendationCollapsed = (id: string) => {
+    setCollapsedRecommendations(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const setShownRecommendationsCollapsed = (collapsed: boolean) => {
+    setCollapsedRecommendations(collapsed ? new Set(shownRecommendations.map(row => row.id)) : new Set())
+  }
 
   return (
     <main style={{ display: 'grid', gap: '1rem' }}>
@@ -422,18 +477,28 @@ export default function ImprovementsPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <WorkspaceSelect />
+          {shownRecommendations.length > 0 && (
+            <>
+              <button onClick={() => setShownRecommendationsCollapsed(true)} style={{ padding: '7px 9px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Collapse all</button>
+              <button onClick={() => setShownRecommendationsCollapsed(false)} style={{ padding: '7px 9px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Expand all</button>
+            </>
+          )}
           <select value={status} onChange={e => setStatus(e.target.value)} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 9px' }}>
             <option value="">All statuses</option>
             <option value="recommended">Recommended</option>
             <option value="needs_user_input">Needs input</option>
             <option value="accepted">Accepted</option>
             <option value="rejected">Rejected</option>
-            <option value="deferred">Deferred</option>
-            <option value="duplicate">Duplicate</option>
           </select>
         </div>
       </section>
+
+      {actionMessage && (
+        <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem 0.85rem', color: 'var(--text)', fontSize: '0.84rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+          <span>{actionMessage}</span>
+          <button onClick={() => setActionMessage(null)} style={{ padding: '5px 8px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Dismiss</button>
+        </section>
+      )}
 
       <nav style={{ display: 'flex', gap: 8 }}>
         {(['inbox', 'recommendations', 'history'] as Tab[]).map(next => (
@@ -454,16 +519,18 @@ export default function ImprovementsPage() {
             const proposal = proposals[row.id]?.[0]
             const readiness = proposalReadiness(row)
             const diff = proposal ? diffLines(versionBody(proposal.target_asset_type, proposal.base_version), versionBody(proposal.target_asset_type, proposal.version)) : []
+            const isCollapsed = collapsedRecommendations.has(row.id)
+            const terminalDecision = row.status === 'accepted' || row.status === 'rejected'
             return (
             <article key={row.id} style={{ display: 'grid', gridTemplateColumns: '130px 92px 1fr 150px 190px', gap: '0.75rem', padding: '0.75rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.8rem', alignItems: 'start' }}>
               <time style={{ color: 'var(--text-faint)' }}>{new Date(row.updated_at).toLocaleString()}</time>
               <span style={{ color: row.status === 'recommended' ? 'var(--success)' : 'var(--text-muted)', fontWeight: 700 }}>{row.status}</span>
               <div style={{ display: 'grid', gap: 6 }}>
                 <strong style={{ color: 'var(--text-heading)' }}>{row.finding}</strong>
-                <span style={{ color: 'var(--text)' }}>{row.rationale}</span>
-                {row.feedback?.source_url && <a href={row.feedback.source_url} target="_blank" rel="noreferrer">{row.feedback.repo_owner}/{row.feedback.repo_name} feedback #{row.feedback_event_id}</a>}
-                {(row.proposed_patch || row.proposed_new_body) && <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'var(--text)', fontSize: '0.76rem' }}>{row.proposed_patch || row.proposed_new_body}</pre>}
-                {proposal && (
+                {!isCollapsed && <span style={{ color: 'var(--text)' }}>{row.rationale}</span>}
+                {!isCollapsed && row.feedback?.source_url && <a href={row.feedback.source_url} target="_blank" rel="noreferrer">{row.feedback.repo_owner}/{row.feedback.repo_name} feedback #{row.feedback_event_id}</a>}
+                {!isCollapsed && (row.proposed_patch || row.proposed_new_body) && <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'var(--text)', fontSize: '0.76rem' }}>{row.proposed_patch || row.proposed_new_body}</pre>}
+                {!isCollapsed && proposal && (
                   <div style={{ display: 'grid', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 6, color: 'var(--text-muted)' }}>
                       <span>Recommendation {proposal.recommendation_id}</span>
@@ -484,7 +551,7 @@ export default function ImprovementsPage() {
                     </div>
                   </div>
                 )}
-                {bundles[row.id]?.id && (
+                {!isCollapsed && bundles[row.id]?.id && (
                   <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', color: 'var(--text-muted)' }}>
                       <span>Bundle {bundles[row.id].id} · {bundles[row.id].status}{bundles[row.id].recommendation_changed ? ' · recommendation changed' : ''}</span>
@@ -545,6 +612,17 @@ export default function ImprovementsPage() {
                               {item.operation === 'create_new' && <button onClick={() => openLinkBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
                             </div>
                           )}
+                          {canLinkPublishedSkill(row, item) && (
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button
+                                disabled={linkingSkillItem === item.id}
+                                onClick={() => linkPublishedSkillToAgent(row, item)}
+                                style={{ padding: '5px 7px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6, opacity: linkingSkillItem === item.id ? 0.6 : 1 }}
+                              >
+                                {linkingSkillItem === item.id ? 'Linking...' : `Add ${skillRefForItem(item)} to ${row.feedback?.linked_agent_name}`}
+                              </button>
+                            </div>
+                          )}
                         </section>
                       )
                     })}
@@ -559,12 +637,14 @@ export default function ImprovementsPage() {
                 <span>{row.attribution_confidence}</span>
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button onClick={() => toggleRecommendationCollapsed(row.id)} style={{ padding: '6px 8px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>{isCollapsed ? 'Expand' : 'Collapse'}</button>
                 {row.status === 'needs_user_input' && (
                   <button onClick={() => openClarification(row)} style={{ padding: '6px 8px', border: '1px solid var(--border)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>clarify</button>
                 )}
-                {['accepted', 'rejected', 'deferred', 'duplicate'].map(next => (
+                {!terminalDecision && (['accepted', 'rejected'] as const).map(next => (
                   <button key={next} onClick={() => updateStatus(row.id, next)} style={{ padding: '6px 8px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>{next}</button>
                 ))}
+                {terminalDecision && <span style={{ color: 'var(--text-faint)', fontSize: '0.76rem', alignSelf: 'center' }}>Decision locked</span>}
                 {canCreateProposal(row) && !proposals[row.id]?.length && (
                   <button onClick={() => createProposal(row.id)} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Create Proposal</button>
                 )}

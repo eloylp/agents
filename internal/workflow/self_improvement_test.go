@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -173,6 +174,40 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != selfImprovementInternalAgentName {
 		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
+	}
+}
+
+func TestSelfImprovementRunEventPreservesQueuedEventIdentity(t *testing.T) {
+	t.Parallel()
+
+	enqueuedAt := time.Now().Add(-time.Minute)
+	feedback := store.SelfImprovementFeedback{
+		ID:          42,
+		WorkspaceID: "team-a",
+		RepoOwner:   "owner",
+		RepoName:    "repo",
+		PRNumber:    17,
+		AuthorLogin: "maintainer",
+		SourceURL:   "https://github.com/owner/repo/pull/17#discussion_r1",
+	}
+	queued := Event{
+		ID:          "delivery-1:improvement",
+		QueueID:     99,
+		WorkspaceID: "team-a",
+		Repo:        RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:        selfImprovementEventKind,
+		Number:      17,
+		Actor:       "maintainer",
+		EnqueuedAt:  enqueuedAt,
+	}
+
+	ev := selfImprovementRunEvent(feedback, selfImprovementInternalAgentName, `{"feedback_event_id":42}`, &queued)
+
+	if ev.ID != queued.ID || ev.QueueID != queued.QueueID || !ev.EnqueuedAt.Equal(enqueuedAt) {
+		t.Fatalf("event identity = id %q queue %d enqueued %s, want queued event", ev.ID, ev.QueueID, ev.EnqueuedAt)
+	}
+	if ev.Payload["target_agent"] != selfImprovementInternalAgentName || ev.Payload["structured_schema"] == "" {
+		t.Fatalf("event payload = %+v, want analyst target and schema", ev.Payload)
 	}
 }
 

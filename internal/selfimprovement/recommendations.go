@@ -1,6 +1,7 @@
 package selfimprovement
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,8 +14,6 @@ const (
 	RecommendationStatusNeedsUserInput = "needs_user_input"
 	RecommendationStatusAccepted       = "accepted"
 	RecommendationStatusRejected       = "rejected"
-	RecommendationStatusDeferred       = "deferred"
-	RecommendationStatusDuplicate      = "duplicate"
 	RecommendationStatusFailed         = "failed"
 )
 
@@ -164,6 +163,21 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	in.Risk = defaultString(in.Risk, "low")
 	in.AttributionConfidence = defaultString(in.AttributionConfidence, "unresolved")
 	in.AnalyzerPromptRef = defaultString(in.AnalyzerPromptRef, "prompt_self-improvement-analyst")
+	if existing, err := s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID); err == nil {
+		if terminalRecommendationStatus(existing.Status) {
+			if err := s.store.Transact(func(tx *store.Tx) error {
+				return store.UpdateSelfImprovementFeedbackStatusRow(tx, in.FeedbackEventID, store.FeedbackStatusAnalyzed)
+			}); err != nil {
+				return SelfImprovementRecommendation{}, err
+			}
+			return recommendationFromRow(existing), nil
+		}
+	} else {
+		var nf *store.ErrNotFound
+		if !errors.As(err, &nf) {
+			return SelfImprovementRecommendation{}, err
+		}
+	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		if err := store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in)); err != nil {
 			return err
@@ -178,8 +192,18 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 
 func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
 	status = strings.TrimSpace(status)
-	if !validRecommendationStatus(status) {
-		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
+	if !validHumanRecommendationStatus(status) {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported recommendation decision %q", status)}
+	}
+	current, err := s.GetRecommendation(id)
+	if err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	if terminalRecommendationStatus(current.Status) {
+		if current.Status == status {
+			return current, nil
+		}
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be changed", id, current.Status)}
 	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		return store.UpdateSelfImprovementRecommendationStatusRow(tx, id, status)
@@ -198,8 +222,12 @@ func (s *Service) UpsertClarification(recommendationID, author, body string) (Se
 	if body == "" {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: "clarification body is required"}
 	}
-	if _, err := s.store.GetSelfImprovementRecommendation(recommendationID); err != nil {
+	rec, err := s.GetRecommendation(recommendationID)
+	if err != nil {
 		return SelfImprovementRecommendation{}, err
+	}
+	if terminalRecommendationStatus(rec.Status) {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be clarified", recommendationID, rec.Status)}
 	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		if err := store.UpsertSelfImprovementClarificationRow(tx, recommendationID, author, body); err != nil {
@@ -369,7 +397,25 @@ func recommendationTarget(feedback store.SelfImprovementFeedback) (assetType, as
 
 func validRecommendationStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAccepted, RecommendationStatusRejected, RecommendationStatusDeferred, RecommendationStatusDuplicate, RecommendationStatusFailed:
+	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAccepted, RecommendationStatusRejected, RecommendationStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validHumanRecommendationStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case RecommendationStatusAccepted, RecommendationStatusRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalRecommendationStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case RecommendationStatusAccepted, RecommendationStatusRejected:
 		return true
 	default:
 		return false

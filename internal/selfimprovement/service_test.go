@@ -71,6 +71,17 @@ func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 		t.Fatalf("analyzed feedback = %+v, want feedback %d", rows, feedback.ID)
 	}
 
+	clarified, err := svc.UpsertClarification(rec.ID, "dashboard", "Apply this only to reviewer guidance.")
+	if err != nil {
+		t.Fatalf("UpsertClarification: %v", err)
+	}
+	if clarified.Status != RecommendationStatusNeedsUserInput {
+		t.Fatalf("clarified status = %q, want needs_user_input", clarified.Status)
+	}
+	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this only to reviewer guidance." {
+		t.Fatalf("clarification = %+v, want stored body", clarified.Clarification)
+	}
+
 	accepted, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusAccepted)
 	if err != nil {
 		t.Fatalf("UpdateRecommendationStatus: %v", err)
@@ -81,16 +92,11 @@ func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 	if _, err := svc.UpdateRecommendationStatus(rec.ID, "unknown"); err == nil {
 		t.Fatal("UpdateRecommendationStatus unknown status succeeded, want validation error")
 	}
-
-	clarified, err := svc.UpsertClarification(rec.ID, "dashboard", "Apply this only to reviewer guidance.")
-	if err != nil {
-		t.Fatalf("UpsertClarification: %v", err)
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected); err == nil {
+		t.Fatal("UpdateRecommendationStatus changed accepted recommendation, want validation error")
 	}
-	if clarified.Status != RecommendationStatusNeedsUserInput {
-		t.Fatalf("clarified status = %q, want needs_user_input", clarified.Status)
-	}
-	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this only to reviewer guidance." {
-		t.Fatalf("clarification = %+v, want stored body", clarified.Clarification)
+	if _, err := svc.UpsertClarification(rec.ID, "dashboard", "Re-open this decision."); err == nil {
+		t.Fatal("UpsertClarification on terminal recommendation succeeded, want validation error")
 	}
 }
 
@@ -284,9 +290,10 @@ func TestCreateProposalRejectsUnsafeStatesAndTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
+	missingBaseFeedback := seedFeedback(t, st, "team-a", 683104)
 	missingBase, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
 		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
+		FeedbackEventID:       missingBaseFeedback.ID,
 		Type:                  "prompt_guidance",
 		Status:                RecommendationStatusAccepted,
 		Finding:               "tighten prompt guidance",

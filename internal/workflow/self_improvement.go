@@ -149,10 +149,10 @@ type selfImprovementInput struct {
 }
 
 func (e *Engine) AnalyzeSelfImprovementFeedback(ctx context.Context, feedback store.SelfImprovementFeedback) (selfimprovement.SelfImprovementRecommendation, error) {
-	return e.analyzeSelfImprovementFeedback(ctx, feedback, nil, nil)
+	return e.analyzeSelfImprovementFeedback(ctx, feedback, nil, nil, nil)
 }
 
-func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback store.SelfImprovementFeedback, prior *selfimprovement.SelfImprovementRecommendation, clarification *selfimprovement.SelfImprovementClarification) (selfimprovement.SelfImprovementRecommendation, error) {
+func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback store.SelfImprovementFeedback, prior *selfimprovement.SelfImprovementRecommendation, clarification *selfimprovement.SelfImprovementClarification, queuedEvent *Event) (selfimprovement.SelfImprovementRecommendation, error) {
 	prompt, err := e.store.ReadPrompt(selfImprovementPromptRef)
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
@@ -168,7 +168,7 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, err
 	}
-	resp, err := e.runSelfImprovementAnalyst(ctx, feedback, prompt, backendName, backend, model, string(payload))
+	resp, err := e.runSelfImprovementAnalyst(ctx, feedback, prompt, backendName, backend, model, string(payload), queuedEvent)
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return selfimprovement.SelfImprovementRecommendation{}, err
@@ -181,7 +181,7 @@ func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback st
 	return selfimprovement.New(e.store).RecordRecommendation(in)
 }
 
-func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, model string, payload string) (ai.Response, error) {
+func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, model string, payload string, queuedEvent *Event) (ai.Response, error) {
 	allowMemory := false
 	agent := fleet.Agent{
 		WorkspaceID: feedback.WorkspaceID,
@@ -202,25 +202,47 @@ func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.S
 	cfg.Daemon.AIBackends[backendName] = backend
 	cfg.Agents = append(cfg.Agents, agent)
 	cfg.Prompts = replacePrompt(cfg.Prompts, prompt)
+	ev := selfImprovementRunEvent(feedback, agent.Name, payload, queuedEvent)
+	return e.runAgentResult(ctx, ev, agent, cfg)
+}
+
+func selfImprovementRunEvent(feedback store.SelfImprovementFeedback, agentName, payload string, queuedEvent *Event) Event {
+	repo := strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/")
 	ev := Event{
 		ID:          fmt.Sprintf("self-improvement-%d", feedback.ID),
 		WorkspaceID: feedback.WorkspaceID,
-		Repo:        RepoRef{FullName: strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/"), Enabled: true},
+		Repo:        RepoRef{FullName: repo, Enabled: true},
 		Kind:        selfImprovementEventKind,
 		Number:      max(feedback.PRNumber, feedback.IssueNumber),
 		Actor:       feedback.AuthorLogin,
-		Payload: map[string]any{
-			"feedback_event_id":   feedback.ID,
-			"analysis_input_json": payload,
-			"structured_schema":   selfImprovementRecommendationSchema,
-			"target_agent":        agent.Name,
-			"source_url":          feedback.SourceURL,
-			"attribution_comment": "stored self-improvement feedback",
-			"no_auto_apply":       true,
-			"requested_output":    "structured self-improvement recommendation JSON",
-		},
 	}
-	return e.runAgentResult(ctx, ev, agent, cfg)
+	if queuedEvent != nil {
+		ev.ID = queuedEvent.ID
+		ev.QueueID = queuedEvent.QueueID
+		ev.EnqueuedAt = queuedEvent.EnqueuedAt
+		ev.WorkspaceID = queuedEvent.WorkspaceID
+		ev.Kind = queuedEvent.Kind
+		if queuedEvent.Repo.FullName != "" {
+			ev.Repo = queuedEvent.Repo
+		}
+		if queuedEvent.Number > 0 {
+			ev.Number = queuedEvent.Number
+		}
+		if queuedEvent.Actor != "" {
+			ev.Actor = queuedEvent.Actor
+		}
+	}
+	ev.Payload = map[string]any{
+		"feedback_event_id":   feedback.ID,
+		"analysis_input_json": payload,
+		"structured_schema":   selfImprovementRecommendationSchema,
+		"target_agent":        agentName,
+		"source_url":          feedback.SourceURL,
+		"attribution_comment": "stored self-improvement feedback",
+		"no_auto_apply":       true,
+		"requested_output":    "structured self-improvement recommendation JSON",
+	}
+	return ev
 }
 
 func replacePrompt(prompts []fleet.Prompt, prompt fleet.Prompt) []fleet.Prompt {
@@ -254,7 +276,7 @@ func (e *Engine) handleSelfImprovementEvent(ctx context.Context, ev Event) error
 		prior = &rec
 		clarification = rec.Clarification
 	}
-	_, err = e.analyzeSelfImprovementFeedback(ctx, feedback, prior, clarification)
+	_, err = e.analyzeSelfImprovementFeedback(ctx, feedback, prior, clarification, &ev)
 	return err
 }
 

@@ -175,8 +175,7 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 // tagged feedback events that later recommendation runs consume.
 func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Request) {
 	limit := 100
-	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
-	rows, err := h.store.ListSelfImprovementFeedback(workspaceID, r.URL.Query().Get("status"), limit)
+	rows, err := h.store.ListSelfImprovementFeedback(improvementWorkspaceFilter(r), r.URL.Query().Get("status"), limit)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement feedback")
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -192,7 +191,7 @@ func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Reque
 // HandleImprovementRecommendations serves GET /improvements/recommendations,
 // the durable review inbox generated from stored feedback evidence.
 func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.improve.ListRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
+	rows, err := h.improve.ListRecommendations(improvementWorkspaceFilter(r), r.URL.Query().Get("status"), 100)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement recommendations")
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -203,6 +202,13 @@ func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *htt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
+}
+
+func improvementWorkspaceFilter(r *http.Request) string {
+	if _, ok := r.URL.Query()["workspace"]; !ok {
+		return store.SelfImprovementAllWorkspaces
+	}
+	return fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 }
 
 func (h *Handler) HandleImprovementRecommendation(w http.ResponseWriter, r *http.Request) {

@@ -14,10 +14,10 @@ describe('<ImprovementsPage />', () => {
       if (url === '/workspaces') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'default', name: 'Default' }]) } as Response)
       }
-      if (url === '/improvements/feedback?workspace=default') {
+      if (url === '/improvements/feedback') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations?workspace=default') {
+      if (url === '/improvements/recommendations') {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -121,10 +121,10 @@ describe('<ImprovementsPage />', () => {
       if (url === '/workspaces') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'default', name: 'Default' }]) } as Response)
       }
-      if (url === '/improvements/feedback?workspace=default') {
+      if (url === '/improvements/feedback') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations?workspace=default') {
+      if (url === '/improvements/recommendations') {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -276,5 +276,98 @@ describe('<ImprovementsPage />', () => {
       '/improvements/proposal-bundles/bundle-1/items/item-skill/link-existing',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ asset_id: 'existing-skill', reason: 'Already covered' }) }),
     ))
+  })
+
+  it('links a published create-new skill to the attributed agent', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/improvements/feedback') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
+      if (url === '/improvements/recommendations') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            {
+              id: 'rec-skill',
+              workspace: 'team-a',
+              feedback_event_id: 10,
+              type: 'catalog_patch_bundle',
+              status: 'accepted',
+              confidence: 'high',
+              risk: 'low',
+              finding: 'Create Go API skill',
+              normalized_lesson: 'Use per-method handlers.',
+              rationale: 'The maintainer asked for a reusable skill.',
+              attribution_confidence: 'exact',
+              updated_at: '2026-06-01T18:20:00Z',
+              feedback: {
+                id: 10,
+                workspace: 'team-a',
+                repo_owner: 'acme',
+                repo_name: 'repo',
+                source_type: 'pull_request_review_comment',
+                source_url: 'https://example.test/review',
+                author_login: 'maintainer',
+                author_authorized: true,
+                raw_body: '/agents improve add go-api',
+                link_confidence: 'exact',
+                linked_agent_name: 'coder',
+                status: 'analyzed',
+                ingested_at: '2026-06-01T18:15:00Z',
+              },
+            },
+          ]),
+        } as Response)
+      }
+      if (url === '/improvements/recommendations/rec-skill/proposal') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
+      if (url === '/improvements/recommendations/rec-skill/proposal-bundle') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            id: 'bundle-skill',
+            recommendation_id: 'rec-skill',
+            status: 'published',
+            items: [
+              {
+                id: 'item-go-api',
+                operation: 'create_new',
+                asset_type: 'skill',
+                proposed_ref: 'go-api',
+                proposed_name: 'Go API',
+                proposed_scope: 'workspace',
+                proposed_body: 'Use one handler per HTTP method.',
+                analyst_proposed_body: 'Use one handler per HTTP method.',
+                decision: 'published',
+                published_version_id: 'skillver-go-api-1',
+              },
+            ],
+          }),
+        } as Response)
+      }
+      if (url === '/agents/coder?workspace=team-a' && (!init || init.method === undefined)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ name: 'coder', skills: ['testing'] }) } as Response)
+      }
+      if (url === '/agents/coder?workspace=team-a' && init?.method === 'PATCH') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ name: 'coder', skills: ['testing', 'go-api'] }) } as Response)
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ImprovementsPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'recommendations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add go-api to coder' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/agents/coder?workspace=team-a',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ skills: ['testing', 'go-api'] }),
+      }),
+    ))
+    expect(await screen.findByText('Linked go-api to coder.')).toBeInTheDocument()
   })
 })
