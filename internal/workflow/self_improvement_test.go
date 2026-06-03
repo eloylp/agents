@@ -47,8 +47,20 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	t.Parallel()
 
 	st := newTempStore(t)
-	if err := st.UpsertBackend("codex", fleet.Backend{Command: "codex"}); err != nil {
+	if err := st.UpsertBackend("codex", fleet.Backend{Command: "codex", Models: []string{"gpt-5.3-codex", "gpt-5.5"}}); err != nil {
 		t.Fatalf("upsert backend: %v", err)
+	}
+	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "coder", Content: "Do coding work."}); err != nil {
+		t.Fatalf("upsert prompt: %v", err)
+	}
+	if err := st.UpsertAgent(fleet.Agent{
+		Name:        "coder",
+		Backend:     "codex",
+		Model:       "gpt-5.5",
+		PromptRef:   "coder",
+		Description: "writes code",
+	}); err != nil {
+		t.Fatalf("upsert agent: %v", err)
 	}
 	feedback, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
 		WorkspaceID:           "default",
@@ -135,6 +147,9 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if !strings.Contains(runner.req.System, "Hard contract") || runner.req.Schema == "" {
 		t.Fatalf("assistant request missing hard contract/schema: %+v", runner.req)
 	}
+	if runner.req.Model != "gpt-5.5" {
+		t.Fatalf("assistant model = %q, want inferred configured agent model", runner.req.Model)
+	}
 	inputJSON := renderedPayloadBlock(t, runner.req.User, "analysis_input_json")
 	var input selfImprovementInput
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
@@ -153,10 +168,10 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if !ok {
 		t.Fatal("self-improvement analyst run did not record a trace span")
 	}
-	if span.Agent != "self-improvement-analyst" || span.EventKind != selfImprovementEventKind || span.PromptVersionID != rec.AnalyzerPromptVersionID {
+	if span.Agent != selfImprovementInternalAgentName || span.EventKind != selfImprovementEventKind || span.PromptVersionID != rec.AnalyzerPromptVersionID {
 		t.Fatalf("trace span = %+v, want observable analyst run", span)
 	}
-	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != "self-improvement-analyst" {
+	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != selfImprovementInternalAgentName {
 		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
 	}
 }
@@ -182,6 +197,35 @@ func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
 	}
 	if input.PriorRecommendation != prior || input.Clarification != clarification {
 		t.Fatalf("assistant input prior=%+v clarification=%+v, want provided objects", input.PriorRecommendation, input.Clarification)
+	}
+}
+
+func TestSelfImprovementBackendUsesRuntimeAnalystSettings(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	if err := st.UpsertBackend("codex", fleet.Backend{Command: "codex", Models: []string{"gpt-5.5"}}); err != nil {
+		t.Fatalf("upsert codex backend: %v", err)
+	}
+	if err := st.UpsertBackend("claude", fleet.Backend{Command: "claude", Models: []string{"claude-sonnet-4-5"}}); err != nil {
+		t.Fatalf("upsert claude backend: %v", err)
+	}
+	if _, err := st.WriteRuntimeSettings(fleet.RuntimeSettings{
+		SelfImprovementAnalyst: fleet.SelfImprovementAnalystRuntimeSettings{
+			Backend: "claude",
+			Model:   "claude-sonnet-4-5",
+		},
+	}); err != nil {
+		t.Fatalf("write runtime settings: %v", err)
+	}
+
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+	backendName, backend, model, err := e.selfImprovementBackend()
+	if err != nil {
+		t.Fatalf("selfImprovementBackend: %v", err)
+	}
+	if backendName != "claude" || backend.Command != "claude" || model != "claude-sonnet-4-5" {
+		t.Fatalf("selection = (%q, %+v, %q), want configured claude/claude-sonnet-4-5", backendName, backend, model)
 	}
 }
 

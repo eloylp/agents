@@ -491,6 +491,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithNumber("pids_limit", mcpgo.Description("Optional process limit for runner containers.")),
 				mcpgo.WithNumber("timeout_seconds", mcpgo.Description("Optional maximum runner lifetime in seconds.")),
 				mcpgo.WithString("network_mode", mcpgo.Description("Optional Docker network mode, such as bridge, none, or host.")),
+				mcpgo.WithString("self_improvement_analyst_backend", mcpgo.Description("Optional backend name for the internal catalog analyst. Empty keeps automatic backend selection.")),
+				mcpgo.WithString("self_improvement_analyst_model", mcpgo.Description("Optional model for the internal catalog analyst. Empty lets the selected backend or inferred fleet model apply.")),
 			),
 			toolUpdateRuntime(deps),
 		)

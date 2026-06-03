@@ -100,11 +100,16 @@ runtime:
     pids_limit: 256
     timeout_seconds: 3600
     network_mode: bridge
+  self_improvement_analyst:
+    backend: codex
+    model: gpt-5.5
 ```
 
-Runtime settings are fleet state because operators may need to switch runner images or constraints without rebuilding the daemon. They are stored in SQLite, returned by `/config`, included in export, and editable through Config -> Runtime, REST, and MCP. They are not startup env overrides; use the database-backed surfaces for runner image and container policy changes. YAML import updates runtime only when the payload explicitly includes a `runtime:` section; fleet-only imports preserve the existing runtime settings.
+Runtime settings are fleet state because operators may need to switch runner images, constraints, or internal analyst backend/model without rebuilding the daemon. They are stored in SQLite, returned by `/config`, included in export, and editable through Config -> Runtime, Config -> Improvement analyst, REST, and MCP. They are not startup env overrides; use the database-backed surfaces for runner image and container policy changes. YAML import updates runtime only when the payload explicitly includes a `runtime:` section; fleet-only imports preserve the existing runtime settings.
 
 The global runner image applies to every run unless a workspace sets `runner_image`. In the dashboard, workspace runner image overrides are edited from Config -> Runtime with the local workspace selector in the Workspace override section. Constraints are passed to Docker where supported: CPU, memory, PID limit, timeout, and network mode. The default runner execution timeout is 3600 seconds. Advanced egress filtering is not part of the v1 runtime settings.
+
+`self_improvement_analyst` controls the internal catalog analyst used for `/agents improve` recommendation runs. Empty `backend` keeps automatic backend selection (`codex`, then `claude`, then the first configured backend). Empty `model` lets the engine infer a model from existing agents that use the selected backend; if no suitable model is found, the backend CLI default applies. Set both fields when a backend default is unsuitable for the daemon's auth mode.
 When patching global runtime settings through REST or MCP, omitted fields are preserved. Empty string clears string constraints such as `cpus`, `memory`, and `network_mode`; empty `runner_image` resets to the built-in default because the global image cannot be unset.
 
 ## `backends`

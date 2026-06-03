@@ -24,6 +24,10 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	}
 	refs := make([]agentRefs, 0, len(agents))
 	for _, a := range agents {
+		fleet.NormalizeAgent(&a)
+		if fleet.IsReservedAgentName(a.Name) {
+			return &ErrValidation{Msg: fmt.Sprintf("config: agent name %q is reserved for daemon-managed internal agents", a.Name)}
+		}
 		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
 		scopeType := a.ScopeType
 		if scopeType == "" {

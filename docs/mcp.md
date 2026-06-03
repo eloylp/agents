@@ -126,8 +126,8 @@ These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-mana
 | Tool | Description |
 |---|---|
 | `get_config` | Current fleet config snapshot. |
-| `get_runtime` | Read global runner image and container constraints. |
-| `update_runtime` | Patch global runner image and basic constraints, preserving omitted settings. Secret values are not accepted. |
+| `get_runtime` | Read global runner image, container constraints, and internal analyst backend/model. |
+| `update_runtime` | Patch global runner image, basic constraints, and internal analyst backend/model, preserving omitted settings. Secret values are not accepted. |
 | `update_workspace_runtime` | Set or clear one workspace's runner image override. |
 | `export_config` | Fleet config as YAML (round-trippable via `import_config`). |
 | `import_config` | Import YAML config. `mode=replace` prunes missing entries. |

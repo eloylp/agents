@@ -81,6 +81,12 @@ func runtimeSettingsPatchFromRequest(req mcpgo.CallToolRequest) (store.RuntimeSe
 	if network, ok := trimmedStringOptional(req, "network_mode"); ok {
 		patch.Constraints.NetworkMode = &network
 	}
+	if backend, ok := trimmedStringOptional(req, "self_improvement_analyst_backend"); ok {
+		patch.SelfImprovementAnalyst.Backend = &backend
+	}
+	if model, ok := trimmedStringOptional(req, "self_improvement_analyst_model"); ok {
+		patch.SelfImprovementAnalyst.Model = &model
+	}
 	if pids, ok, err := optionalIntArg(req, "pids_limit"); err != nil {
 		return store.RuntimeSettingsPatch{}, err
 	} else if ok {

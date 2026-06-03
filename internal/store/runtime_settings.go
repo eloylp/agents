@@ -14,8 +14,9 @@ import (
 const runtimeConfigKey = "runtime"
 
 type RuntimeSettingsPatch struct {
-	RunnerImage *string                 `json:"runner_image,omitempty"`
-	Constraints RuntimeConstraintsPatch `json:"constraints,omitempty"`
+	RunnerImage            *string                            `json:"runner_image,omitempty"`
+	Constraints            RuntimeConstraintsPatch            `json:"constraints,omitempty"`
+	SelfImprovementAnalyst SelfImprovementAnalystRuntimePatch `json:"self_improvement_analyst,omitempty"`
 }
 
 type RuntimeConstraintsPatch struct {
@@ -24,6 +25,11 @@ type RuntimeConstraintsPatch struct {
 	PidsLimit      *int64  `json:"pids_limit,omitempty"`
 	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 	NetworkMode    *string `json:"network_mode,omitempty"`
+}
+
+type SelfImprovementAnalystRuntimePatch struct {
+	Backend *string `json:"backend,omitempty"`
+	Model   *string `json:"model,omitempty"`
 }
 
 func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
@@ -112,6 +118,12 @@ func PatchRuntimeSettingsTx(tx *sql.Tx, patch RuntimeSettingsPatch) (fleet.Runti
 	if patch.Constraints.NetworkMode != nil {
 		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
 	}
+	if patch.SelfImprovementAnalyst.Backend != nil {
+		current.SelfImprovementAnalyst.Backend = *patch.SelfImprovementAnalyst.Backend
+	}
+	if patch.SelfImprovementAnalyst.Model != nil {
+		current.SelfImprovementAnalyst.Model = *patch.SelfImprovementAnalyst.Model
+	}
 	return WriteRuntimeSettingsTx(tx, current)
 }
 
@@ -156,6 +168,12 @@ func validateRuntimeSettings(settings fleet.RuntimeSettings) error {
 	}
 	if settings.Constraints.TimeoutSeconds < 0 {
 		return &ErrValidation{Msg: "timeout_seconds must be non-negative"}
+	}
+	if strings.ContainsAny(settings.SelfImprovementAnalyst.Backend, "\r\n\t ") {
+		return &ErrValidation{Msg: "self_improvement_analyst.backend must not contain whitespace"}
+	}
+	if strings.ContainsAny(settings.SelfImprovementAnalyst.Model, "\r\n\t") {
+		return &ErrValidation{Msg: "self_improvement_analyst.model must not contain control whitespace"}
 	}
 	return nil
 }

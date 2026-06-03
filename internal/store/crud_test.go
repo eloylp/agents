@@ -2576,6 +2576,29 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 }
 
+func TestUpsertAgentRejectsInternalName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedBackend(t, db, "claude")
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "coder", Content: "prompt"}); err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+
+	err := store.UpsertAgent(db, fleet.Agent{
+		Name:        "internal-catalog-analyst",
+		Backend:     "claude",
+		PromptRef:   "coder",
+		Description: "reserved internal agent",
+	})
+	if err == nil {
+		t.Fatal("UpsertAgent with reserved internal name succeeded, want validation error")
+	}
+	var validation *store.ErrValidation
+	if !errors.As(err, &validation) || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("UpsertAgent error = %v, want reserved validation", err)
+	}
+}
+
 // TestUpsertSkillNormalizesPrompt verifies that UpsertSkill trims Prompt
 // before persisting, matching the normalization startup applies. A
 // whitespace-only prompt must be trimmed to "" and then rejected by
