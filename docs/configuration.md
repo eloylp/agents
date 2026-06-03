@@ -162,6 +162,12 @@ skills:
   security:
     prompt: |
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
+
+  go-api:
+    prompt: |
+      For Go HTTP APIs, route each HTTP method to a distinct handler function.
+      Keep handlers thin: decode and validate input, call the service layer, and encode the response.
+      Avoid combined method-switch handlers; method policy should stay explicit and testable at the route boundary.
 ```
 
 Skills are keyed by stable public ref. For compatibility, agents may reference a visible
@@ -187,7 +193,7 @@ workspaces:
       - name: coder
         backend: claude
         description: Implements fixes and features
-        skills: [architect, testing]
+        skills: [architect, testing, go-api]
         prompt_ref: coder
         scope_type: workspace
         allow_prs: true

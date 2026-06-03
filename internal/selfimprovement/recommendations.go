@@ -46,6 +46,7 @@ type SelfImprovementRecommendation struct {
 	Feedback                *store.SelfImprovementFeedback `json:"feedback,omitempty"`
 	Clarification           *SelfImprovementClarification  `json:"clarification,omitempty"`
 	ProposalBundle          *SelfImprovementProposalBundle `json:"proposal_bundle,omitempty"`
+	MemoryInfluences        []AssistantMemory              `json:"memory_influences,omitempty"`
 }
 
 type SelfImprovementClarification struct {
@@ -178,6 +179,14 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 			return SelfImprovementRecommendation{}, err
 		}
 	}
+	if in.StructuredOutput == nil {
+		in.StructuredOutput = map[string]any{}
+	}
+	if influenceIDs := memoryInfluenceIDsFromStructured(in.StructuredOutput); len(influenceIDs) > 0 {
+		if influences, err := s.ListActiveMemory(in.WorkspaceID, 50); err == nil && len(influences) > 0 {
+			in.StructuredOutput["memory_influences"] = memoryInfluenceSummaries(influences, influenceIDs)
+		}
+	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		if err := store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in)); err != nil {
 			return err
@@ -208,6 +217,13 @@ func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovement
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		return store.UpdateSelfImprovementRecommendationStatusRow(tx, id, status)
 	}); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	rec, err := s.GetRecommendation(id)
+	if err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	if err := s.proposeMemoryFromRecommendationDecision(rec); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
 	return s.GetRecommendation(id)
@@ -283,7 +299,7 @@ func recommendationFromRow(row store.SelfImprovementRecommendationRow) SelfImpro
 		converted := proposalBundleFromRow(*row.ProposalBundle)
 		bundle = &converted
 	}
-	return SelfImprovementRecommendation{
+	rec := SelfImprovementRecommendation{
 		ID:                      row.ID,
 		WorkspaceID:             row.WorkspaceID,
 		FeedbackEventID:         row.FeedbackEventID,
@@ -313,6 +329,8 @@ func recommendationFromRow(row store.SelfImprovementRecommendationRow) SelfImpro
 		Clarification:           clarification,
 		ProposalBundle:          bundle,
 	}
+	rec.MemoryInfluences = memoryInfluencesFromStructured(row.StructuredOutput)
+	return rec
 }
 
 func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) store.SelfImprovementRecommendationRow {
@@ -420,6 +438,212 @@ func terminalRecommendationStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Service) proposeMemoryFromRecommendationDecision(rec SelfImprovementRecommendation) error {
+	evidenceID := rec.ID
+	evidenceURL := ""
+	if rec.Feedback != nil {
+		evidenceURL = rec.Feedback.SourceURL
+	}
+	switch rec.Status {
+	case RecommendationStatusAccepted:
+		if strings.TrimSpace(rec.SuggestedRolloutScope) == "" {
+			return nil
+		}
+		return s.proposeMemoryFromDecision(
+			rec.WorkspaceID,
+			"accepted_recommendation",
+			evidenceID,
+			evidenceURL,
+			"preferred_self_improvement_rollout_scope",
+			fmt.Sprintf("Prefer %s rollout scope when similar self-improvement recommendations are accepted.", rec.SuggestedRolloutScope),
+		)
+	case RecommendationStatusRejected:
+		return s.proposeMemoryFromDecision(
+			rec.WorkspaceID,
+			"rejected_recommendation",
+			evidenceID,
+			evidenceURL,
+			"rejected_recommendation_pattern",
+			fmt.Sprintf("Treat recommendations like %q cautiously unless future feedback supplies stronger evidence.", rec.Type),
+		)
+	default:
+		return nil
+	}
+}
+
+func (s *Service) proposeMemoryFromProposalBundleDecision(bundle SelfImprovementProposalBundle, itemID, evidenceType string) error {
+	workspace := bundle.WorkspaceID
+	evidenceID := bundle.ID
+	evidenceURL := ""
+	recType := "self-improvement"
+	if bundle.Recommendation != nil {
+		workspace = bundle.Recommendation.WorkspaceID
+		recType = bundle.Recommendation.Type
+		if bundle.Recommendation.Feedback != nil {
+			evidenceURL = bundle.Recommendation.Feedback.SourceURL
+		}
+	}
+	item, hasItem := bundleItemByID(bundle.Items, itemID)
+	if hasItem {
+		evidenceID = item.ID
+	}
+	switch evidenceType {
+	case "edited_proposal_bundle_item":
+		if !hasItem {
+			return nil
+		}
+		return s.proposeMemoryFromDecision(
+			workspace,
+			evidenceType,
+			evidenceID,
+			evidenceURL,
+			fmt.Sprintf("edited_%s_%s_proposal_bundle_item", item.Operation, item.AssetType),
+			fmt.Sprintf("Expect maintainers to edit %s %s proposal-bundle items before approval when similar recommendations appear.", item.Operation, item.AssetType),
+		)
+	case "rejected_proposal_bundle_item":
+		if !hasItem {
+			return nil
+		}
+		return s.proposeMemoryFromDecision(
+			workspace,
+			evidenceType,
+			evidenceID,
+			evidenceURL,
+			fmt.Sprintf("rejected_%s_%s_proposal_bundle_item", item.Operation, item.AssetType),
+			fmt.Sprintf("Treat %s %s proposal-bundle items cautiously when similar evidence appears.", item.Operation, item.AssetType),
+		)
+	case "linked_existing_proposal_bundle_item":
+		if !hasItem {
+			return nil
+		}
+		return s.proposeMemoryFromDecision(
+			workspace,
+			evidenceType,
+			evidenceID,
+			evidenceURL,
+			fmt.Sprintf("linked_existing_%s_proposal_bundle_item", item.AssetType),
+			fmt.Sprintf("Prefer linking an existing %s asset over creating a new one when maintainers identify overlap.", item.AssetType),
+		)
+	case "published_proposal_bundle":
+		return s.proposeMemoryFromDecision(
+			workspace,
+			evidenceType,
+			evidenceID,
+			evidenceURL,
+			"published_proposal_bundle_pattern",
+			fmt.Sprintf("Proposal bundles for %q recommendations can be appropriate when item decisions survive maintainer review.", recType),
+		)
+	case "discarded_proposal_bundle":
+		return s.proposeMemoryFromDecision(
+			workspace,
+			evidenceType,
+			evidenceID,
+			evidenceURL,
+			"discarded_proposal_bundle_pattern",
+			fmt.Sprintf("Treat proposal bundles for %q recommendations cautiously when maintainers discard the bundle.", recType),
+		)
+	default:
+		return nil
+	}
+}
+
+func bundleItemByID(items []SelfImprovementBundleItem, id string) (SelfImprovementBundleItem, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return SelfImprovementBundleItem{}, false
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return SelfImprovementBundleItem{}, false
+}
+
+func memoryInfluenceIDsFromStructured(structured map[string]any) map[string]struct{} {
+	raw, ok := structured["memory_influence_ids"]
+	if !ok {
+		return nil
+	}
+	if ids, ok := raw.([]string); ok {
+		out := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				out[id] = struct{}{}
+			}
+		}
+		return out
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		id, ok := item.(string)
+		if !ok {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
+func memoryInfluenceSummaries(memories []AssistantMemory, allowedIDs map[string]struct{}) []map[string]string {
+	out := make([]map[string]string, 0, len(memories))
+	for _, memory := range memories {
+		if memory.Status != MemoryStatusActive {
+			continue
+		}
+		if _, ok := allowedIDs[memory.ID]; !ok {
+			continue
+		}
+		out = append(out, map[string]string{
+			"id":    memory.ID,
+			"key":   memory.Key,
+			"value": memory.Value,
+		})
+	}
+	return out
+}
+
+func memoryInfluencesFromStructured(structured map[string]any) []AssistantMemory {
+	raw, ok := structured["memory_influences"]
+	if !ok {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]AssistantMemory, 0, len(items))
+	for _, item := range items {
+		fields, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		memory := AssistantMemory{
+			ID:     stringField(fields, "id"),
+			Key:    stringField(fields, "key"),
+			Value:  stringField(fields, "value"),
+			Status: MemoryStatusActive,
+		}
+		if memory.ID != "" || memory.Key != "" || memory.Value != "" {
+			out = append(out, memory)
+		}
+	}
+	return out
+}
+
+func stringField(fields map[string]any, key string) string {
+	value, _ := fields[key].(string)
+	return value
 }
 
 func firstFeedbackLine(body string) string {

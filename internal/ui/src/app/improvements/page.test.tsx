@@ -320,6 +320,9 @@ describe('<ImprovementsPage />', () => {
           ]),
         } as Response)
       }
+      if (url === '/improvements/memory') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
       if (url === '/improvements/recommendations/rec-skill/proposal') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
@@ -369,5 +372,106 @@ describe('<ImprovementsPage />', () => {
       }),
     ))
     expect(await screen.findByText('Linked go-api to coder.')).toBeInTheDocument()
+  })
+
+  it('renders and edits assistant preference memory', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/improvements/feedback') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
+      if (url === '/improvements/recommendations') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            {
+              id: 'rec-memory',
+              feedback_event_id: 11,
+              type: 'skill_guidance',
+              status: 'recommended',
+              confidence: 'medium',
+              risk: 'low',
+              finding: 'Extract reusable guidance',
+              normalized_lesson: 'Prefer skills.',
+              rationale: 'Shared guidance should be reusable.',
+              attribution_confidence: 'exact',
+              updated_at: '2026-06-02T12:00:00Z',
+              memory_influences: [{ id: 'mem-1', key: 'prefer_skills', value: 'Prefer reusable skills.' }],
+            },
+          ]),
+        } as Response)
+      }
+      if (url === '/improvements/memory') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            {
+              id: 'mem-1',
+              workspace: 'default',
+              key: 'prefer_skills',
+              value: 'Prefer reusable skills.',
+              status: 'active',
+              evidence_type: 'manual_user_entry',
+              confidence: 'medium',
+              updated_at: '2026-06-02T12:00:00Z',
+            },
+            {
+              id: 'mem-2',
+              workspace: 'default',
+              key: 'broad_rollouts',
+              value: 'Require stronger evidence before broad rollout.',
+              status: 'proposed',
+              evidence_type: 'rejected_recommendation',
+              evidence_id: 'rec-9',
+              evidence_url: 'https://example.test/evidence',
+              confidence: 'low',
+              updated_at: '2026-06-02T12:05:00Z',
+            },
+          ]),
+        } as Response)
+      }
+      if (url.includes('/proposal')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
+      if (url.startsWith('/improvements/memory/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ImprovementsPage />)
+
+    expect(await screen.findByText('Memory prefer_skills: Prefer reusable skills.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'memory' }))
+
+    expect(await screen.findByDisplayValue('Prefer reusable skills.')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Memory key'), { target: { value: 'prefer_short_rules' } })
+    fireEvent.change(screen.getByLabelText('Memory value'), { target: { value: 'Prefer short prompt rules.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add Memory' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/improvements/memory',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          key: 'prefer_short_rules',
+          value: 'Prefer short prompt rules.',
+          confidence: 'medium',
+          status: 'active',
+          evidence_type: 'manual_user_entry',
+        }),
+      }),
+    ))
+
+    fireEvent.change(screen.getByLabelText('Memory confidence for mem-1'), { target: { value: 'high' } })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/improvements/memory/mem-1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ confidence: 'high' }) }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(fetchMock).toHaveBeenCalledWith('/improvements/memory/mem-2/approve', expect.objectContaining({ method: 'POST' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Archive' })[0])
+    expect(fetchMock).toHaveBeenCalledWith('/improvements/memory/mem-1/archive', expect.objectContaining({ method: 'POST' }))
   })
 })
