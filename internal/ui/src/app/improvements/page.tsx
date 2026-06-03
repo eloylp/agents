@@ -450,7 +450,7 @@ export default function ImprovementsPage() {
   const linkPublishedSkillToAgent = async (row: Recommendation, item: ProposalBundleItem) => {
     const agentName = (row.feedback?.linked_agent_name || '').trim()
     const skillRef = skillRefForItem(item)
-    const targetWorkspace = row.feedback?.workspace || row.workspace || 'default'
+    const targetWorkspace = row.feedback?.workspace || 'default'
     if (!agentName || !skillRef || linkingSkillItem) return
     setLinkingSkillItem(item.id)
     setActionMessage(null)
