@@ -10,7 +10,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestSelfImprovementAnalystPromptV2BecomesCurrentOnFreshStore(t *testing.T) {
+func TestSelfImprovementAnalystPromptV3BecomesCurrentOnFreshStore(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -24,8 +24,8 @@ func TestSelfImprovementAnalystPromptV2BecomesCurrentOnFreshStore(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read seeded prompt: %v", err)
 	}
-	if prompt.VersionID != "promptver_self_improvement_analyst_v2" {
-		t.Fatalf("version_id = %q, want v2", prompt.VersionID)
+	if prompt.VersionID != "promptver_self_improvement_analyst_v3" {
+		t.Fatalf("version_id = %q, want v3", prompt.VersionID)
 	}
 	for _, want := range []string{
 		"Supplied context:",
@@ -33,6 +33,8 @@ func TestSelfImprovementAnalystPromptV2BecomesCurrentOnFreshStore(t *testing.T) 
 		"Catalog design heuristics:",
 		"knowledge cluster",
 		"ambiguity debt",
+		"Bundle recommendations:",
+		"catalog_patch_bundle",
 	} {
 		if !strings.Contains(prompt.Content, want) {
 			t.Fatalf("prompt content missing %q", want)
@@ -40,7 +42,7 @@ func TestSelfImprovementAnalystPromptV2BecomesCurrentOnFreshStore(t *testing.T) 
 	}
 }
 
-func TestSelfImprovementAnalystPromptV2MigrationPreservesCustomizedCurrentVersion(t *testing.T) {
+func TestSelfImprovementAnalystPromptV3MigrationPreservesCustomizedCurrentVersion(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -69,7 +71,7 @@ func TestSelfImprovementAnalystPromptV2MigrationPreservesCustomizedCurrentVersio
 		t.Fatalf("commit custom version: %v", err)
 	}
 
-	migration, err := os.ReadFile(filepath.Join("migrations", "039_self_improvement_analyst_prompt_v2.sql"))
+	migration, err := os.ReadFile(filepath.Join("migrations", "042_self_improvement_analyst_prompt_v3_bundles.sql"))
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestSelfImprovementAnalystPromptV2MigrationPreservesCustomizedCurrentVersio
 	}
 }
 
-func TestSelfImprovementAnalystPromptV2UpgradePreservesPreExistingCustomization(t *testing.T) {
+func TestSelfImprovementAnalystPromptV3UpgradePreservesPreExistingCustomization(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "test.db")

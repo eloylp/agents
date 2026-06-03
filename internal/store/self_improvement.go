@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -18,14 +17,6 @@ const (
 	FeedbackStatusAnalyzed = "analyzed"
 	FeedbackStatusFailed   = "failed"
 	FeedbackTag            = "/agents improve"
-
-	RecommendationStatusRecommended    = "recommended"
-	RecommendationStatusNeedsUserInput = "needs_user_input"
-	RecommendationStatusAccepted       = "accepted"
-	RecommendationStatusRejected       = "rejected"
-	RecommendationStatusDeferred       = "deferred"
-	RecommendationStatusDuplicate      = "duplicate"
-	RecommendationStatusFailed         = "failed"
 )
 
 type SelfImprovementFeedback struct {
@@ -98,37 +89,38 @@ type SelfImprovementFeedbackInput struct {
 	Status                    string
 }
 
-type SelfImprovementRecommendation struct {
-	ID                      string                        `json:"id"`
-	WorkspaceID             string                        `json:"workspace"`
-	FeedbackEventID         int64                         `json:"feedback_event_id"`
-	Type                    string                        `json:"type"`
-	Status                  string                        `json:"status"`
-	Confidence              string                        `json:"confidence"`
-	Risk                    string                        `json:"risk"`
-	Finding                 string                        `json:"finding"`
-	NormalizedLesson        string                        `json:"normalized_lesson"`
-	Rationale               string                        `json:"rationale"`
-	EvidenceFeedbackIDs     []int64                       `json:"evidence_feedback_ids"`
-	EvidenceSourceURLs      []string                      `json:"evidence_source_urls"`
-	AttributionConfidence   string                        `json:"attribution_confidence"`
-	TargetAssetType         string                        `json:"target_asset_type,omitempty"`
-	TargetAssetID           string                        `json:"target_asset_id,omitempty"`
-	TargetBaseVersionID     string                        `json:"target_base_version_id,omitempty"`
-	ProposedPatch           string                        `json:"proposed_patch,omitempty"`
-	ProposedNewBody         string                        `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                        `json:"suggested_rollout_scope,omitempty"`
-	AnalyzerPromptRef       string                        `json:"analyzer_prompt_ref"`
-	AnalyzerPromptVersionID string                        `json:"analyzer_prompt_version_id,omitempty"`
-	StructuredOutput        map[string]any                `json:"structured_output,omitempty"`
-	Error                   string                        `json:"error,omitempty"`
-	CreatedAt               string                        `json:"created_at"`
-	UpdatedAt               string                        `json:"updated_at"`
-	Feedback                *SelfImprovementFeedback      `json:"feedback,omitempty"`
-	Clarification           *SelfImprovementClarification `json:"clarification,omitempty"`
+type SelfImprovementRecommendationRow struct {
+	ID                      string                            `json:"id"`
+	WorkspaceID             string                            `json:"workspace"`
+	FeedbackEventID         int64                             `json:"feedback_event_id"`
+	Type                    string                            `json:"type"`
+	Status                  string                            `json:"status"`
+	Confidence              string                            `json:"confidence"`
+	Risk                    string                            `json:"risk"`
+	Finding                 string                            `json:"finding"`
+	NormalizedLesson        string                            `json:"normalized_lesson"`
+	Rationale               string                            `json:"rationale"`
+	EvidenceFeedbackIDs     []int64                           `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs      []string                          `json:"evidence_source_urls"`
+	AttributionConfidence   string                            `json:"attribution_confidence"`
+	TargetAssetType         string                            `json:"target_asset_type,omitempty"`
+	TargetAssetID           string                            `json:"target_asset_id,omitempty"`
+	TargetBaseVersionID     string                            `json:"target_base_version_id,omitempty"`
+	ProposedPatch           string                            `json:"proposed_patch,omitempty"`
+	ProposedNewBody         string                            `json:"proposed_new_body,omitempty"`
+	SuggestedRolloutScope   string                            `json:"suggested_rollout_scope,omitempty"`
+	AnalyzerPromptRef       string                            `json:"analyzer_prompt_ref"`
+	AnalyzerPromptVersionID string                            `json:"analyzer_prompt_version_id,omitempty"`
+	StructuredOutput        map[string]any                    `json:"structured_output,omitempty"`
+	Error                   string                            `json:"error,omitempty"`
+	CreatedAt               string                            `json:"created_at"`
+	UpdatedAt               string                            `json:"updated_at"`
+	Feedback                *SelfImprovementFeedback          `json:"feedback,omitempty"`
+	Clarification           *SelfImprovementClarificationRow  `json:"clarification,omitempty"`
+	ProposalBundle          *SelfImprovementProposalBundleRow `json:"proposal_bundle,omitempty"`
 }
 
-type SelfImprovementClarification struct {
+type SelfImprovementClarificationRow struct {
 	RecommendationID string `json:"recommendation_id"`
 	Author           string `json:"author"`
 	Body             string `json:"body"`
@@ -136,7 +128,7 @@ type SelfImprovementClarification struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
-type SelfImprovementProposal struct {
+type SelfImprovementProposalRow struct {
 	RecommendationID string                `json:"recommendation_id"`
 	TargetAssetType  string                `json:"target_asset_type"`
 	TargetAssetID    string                `json:"target_asset_id"`
@@ -145,7 +137,7 @@ type SelfImprovementProposal struct {
 	Version          fleet.CatalogVersion  `json:"version"`
 }
 
-type SelfImprovementRecommendationInput struct {
+type SelfImprovementRecommendationInputRow struct {
 	WorkspaceID             string
 	FeedbackEventID         int64
 	Type                    string
@@ -186,35 +178,23 @@ func (s *Store) GetSelfImprovementFeedback(id int64) (SelfImprovementFeedback, e
 	return GetSelfImprovementFeedback(s.db, id)
 }
 
-func (s *Store) UpsertSelfImprovementRecommendation(in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
-	return UpsertSelfImprovementRecommendation(s.db, in)
+func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, feedbackID int64) (SelfImprovementRecommendationRow, error) {
+	return getSelfImprovementRecommendationByFeedback(s.db, fleet.NormalizeWorkspaceID(workspaceID), feedbackID)
 }
 
-func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
+func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendations(s.db, workspace, status, limit)
 }
 
-func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendation, error) {
+func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendationRow, error) {
 	return GetSelfImprovementRecommendation(s.db, id)
 }
 
-func (s *Store) UpdateSelfImprovementRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
-	return UpdateSelfImprovementRecommendationStatus(s.db, id, status)
-}
-
-func (s *Store) UpsertSelfImprovementClarification(recommendationID, author, body string) (SelfImprovementRecommendation, error) {
-	return UpsertSelfImprovementClarification(s.db, recommendationID, author, body)
-}
-
-func (s *Store) CreateSelfImprovementProposal(id string) (SelfImprovementProposal, error) {
-	return CreateSelfImprovementProposal(s.db, id)
-}
-
-func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposal, error) {
+func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposalRow, error) {
 	return ListSelfImprovementProposals(s.db, id)
 }
 
-func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendationsWithProposals(s.db, workspace, limit)
 }
 
@@ -297,77 +277,6 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 		workspaceID, strings.TrimSpace(in.SourceType), in.GitHubCommentID, in.GitHubReviewID, tag,
 	)
 	return scanSelfImprovementFeedback(row)
-}
-
-func RecommendationFromFeedback(feedback SelfImprovementFeedback) SelfImprovementRecommendationInput {
-	finding := firstFeedbackLine(feedback.RawBody)
-	if finding == "" {
-		finding = "Review the stored feedback evidence and decide whether a catalog change is warranted."
-	}
-	recType := "needs_more_context"
-	status := RecommendationStatusNeedsUserInput
-	confidence := "low"
-	if feedback.LinkedPromptVersionID != "" || len(feedback.LinkedSkillVersionIDs) > 0 || len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		recType = "deduplicate_guidance"
-		status = RecommendationStatusRecommended
-		confidence = "medium"
-	}
-	targetType, targetID, targetVersion := recommendationTarget(feedback)
-	rationale := fmt.Sprintf("Feedback event %d was captured from %s with %s attribution. The recommendation is review-only and does not publish or mutate catalog assets.", feedback.ID, feedback.SourceURL, feedback.LinkConfidence)
-	lesson := normalizeLesson(finding)
-	structured := map[string]any{
-		"type":                    recType,
-		"status":                  status,
-		"confidence":              confidence,
-		"risk":                    "low",
-		"finding":                 finding,
-		"normalized_lesson":       lesson,
-		"rationale":               rationale,
-		"evidence_feedback_ids":   []int64{feedback.ID},
-		"evidence_source_urls":    []string{feedback.SourceURL},
-		"attribution_confidence":  feedback.LinkConfidence,
-		"target_asset_type":       targetType,
-		"target_asset_id":         targetID,
-		"target_base_version_id":  targetVersion,
-		"proposed_patch":          "",
-		"proposed_new_body":       "",
-		"suggested_rollout_scope": "workspace",
-		"analyzer_prompt_ref":     "prompt_self-improvement-analyst",
-		"no_auto_apply_confirmed": true,
-	}
-	return SelfImprovementRecommendationInput{
-		WorkspaceID:           feedback.WorkspaceID,
-		FeedbackEventID:       feedback.ID,
-		Type:                  recType,
-		Status:                status,
-		Confidence:            confidence,
-		Risk:                  "low",
-		Finding:               finding,
-		NormalizedLesson:      lesson,
-		Rationale:             rationale,
-		EvidenceFeedbackIDs:   []int64{feedback.ID},
-		EvidenceSourceURLs:    []string{feedback.SourceURL},
-		AttributionConfidence: feedback.LinkConfidence,
-		TargetAssetType:       targetType,
-		TargetAssetID:         targetID,
-		TargetBaseVersionID:   targetVersion,
-		SuggestedRolloutScope: "workspace",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		StructuredOutput:      structured,
-	}
-}
-
-func recommendationTarget(feedback SelfImprovementFeedback) (assetType, assetID, versionID string) {
-	if feedback.LinkedPromptVersionID != "" {
-		return "prompt", "", feedback.LinkedPromptVersionID
-	}
-	if len(feedback.LinkedSkillVersionIDs) > 0 {
-		return "skill", "", feedback.LinkedSkillVersionIDs[0]
-	}
-	if len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		return "guardrail", "", feedback.LinkedGuardrailVersionIDs[0]
-	}
-	return "", "", ""
 }
 
 func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) (bool, error) {
@@ -479,46 +388,19 @@ func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, 
 	return ev, err
 }
 
-func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
+func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecommendationInputRow) error {
 	if in.FeedbackEventID <= 0 {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "feedback_event_id is required"}
+		return &ErrValidation{Msg: "feedback_event_id is required"}
 	}
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
-	typ := strings.TrimSpace(in.Type)
-	if typ == "" {
-		typ = "needs_more_context"
-	}
-	status := strings.TrimSpace(in.Status)
-	if status == "" {
-		status = RecommendationStatusRecommended
-	}
-	if !validRecommendationStatus(status) {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
-	}
-	confidence := strings.TrimSpace(in.Confidence)
-	if confidence == "" {
-		confidence = "low"
-	}
-	risk := strings.TrimSpace(in.Risk)
-	if risk == "" {
-		risk = "low"
-	}
-	attribution := strings.TrimSpace(in.AttributionConfidence)
-	if attribution == "" {
-		attribution = "unresolved"
-	}
-	promptRef := strings.TrimSpace(in.AnalyzerPromptRef)
-	if promptRef == "" {
-		promptRef = "prompt_self-improvement-analyst"
-	}
 	structured, err := json.Marshal(in.StructuredOutput)
 	if err != nil {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("structured output: %v", err)}
+		return &ErrValidation{Msg: fmt.Sprintf("structured output: %v", err)}
 	}
 	if string(structured) == "null" {
 		structured = []byte("{}")
 	}
-	_, err = db.Exec(
+	_, err = q.Exec(
 		`INSERT INTO self_improvement_recommendations (
 			id, workspace_id, feedback_event_id, type, status, confidence, risk, finding,
 			normalized_lesson, rationale, evidence_feedback_ids, evidence_source_urls,
@@ -548,23 +430,18 @@ func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommend
 			structured_output=excluded.structured_output,
 			error=excluded.error,
 			updated_at=datetime('now')`,
-		workspaceID, in.FeedbackEventID, typ, status, confidence, risk, strings.TrimSpace(in.Finding),
+		workspaceID, in.FeedbackEventID, strings.TrimSpace(in.Type), strings.TrimSpace(in.Status),
+		strings.TrimSpace(in.Confidence), strings.TrimSpace(in.Risk), strings.TrimSpace(in.Finding),
 		strings.TrimSpace(in.NormalizedLesson), strings.TrimSpace(in.Rationale), joinInt64s(in.EvidenceFeedbackIDs),
-		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), attribution, strings.TrimSpace(in.TargetAssetType),
+		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), strings.TrimSpace(in.AttributionConfidence), strings.TrimSpace(in.TargetAssetType),
 		strings.TrimSpace(in.TargetAssetID), strings.TrimSpace(in.TargetBaseVersionID), strings.TrimSpace(in.ProposedPatch),
-		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), promptRef,
+		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), strings.TrimSpace(in.AnalyzerPromptRef),
 		strings.TrimSpace(in.AnalyzerPromptVersionID), string(structured), strings.TrimSpace(in.Error),
 	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if _, err := db.Exec(`UPDATE self_improvement_feedback SET status=? WHERE id=?`, FeedbackStatusAnalyzed, in.FeedbackEventID); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	return getSelfImprovementRecommendationByFeedback(db, workspaceID, in.FeedbackEventID)
+	return err
 }
 
-func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
+func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -581,7 +458,7 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SelfImprovementRecommendation
+	var out []SelfImprovementRecommendationRow
 	for rows.Next() {
 		rec, err := scanSelfImprovementRecommendation(rows, false)
 		if err != nil {
@@ -592,28 +469,29 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 	return out, rows.Err()
 }
 
-func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendation, error) {
-	row := db.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
+func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendationRow, error) {
+	return GetSelfImprovementRecommendationFrom(db, id)
+}
+
+func GetSelfImprovementRecommendationFrom(q querier, id string) (SelfImprovementRecommendationRow, error) {
+	row := q.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
 	rec, err := scanSelfImprovementRecommendation(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+		return SelfImprovementRecommendationRow{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
 	return rec, err
 }
 
-func UpsertSelfImprovementClarification(db *sql.DB, recommendationID, author, body string) (SelfImprovementRecommendation, error) {
+func UpsertSelfImprovementClarificationRow(q sqlExec, recommendationID, author, body string) error {
 	recommendationID = strings.TrimSpace(recommendationID)
 	body = strings.TrimSpace(body)
 	if recommendationID == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
+		return &ErrValidation{Msg: "recommendation id is required"}
 	}
 	if body == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "clarification body is required"}
+		return &ErrValidation{Msg: "clarification body is required"}
 	}
-	if _, err := GetSelfImprovementRecommendation(db, recommendationID); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	_, err := db.Exec(
+	_, err := q.Exec(
 		`INSERT INTO self_improvement_recommendation_clarifications (
 			recommendation_id, author, body
 		) VALUES (?,?,?)
@@ -623,158 +501,48 @@ func UpsertSelfImprovementClarification(db *sql.DB, recommendationID, author, bo
 			updated_at=datetime('now')`,
 		recommendationID, strings.TrimSpace(author), body,
 	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	res, err := db.Exec(
-		`UPDATE self_improvement_recommendations
-		SET status=?, updated_at=datetime('now')
-		WHERE id=?`,
-		RecommendationStatusNeedsUserInput, recommendationID,
-	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if affected == 0 {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", recommendationID)}
-	}
-	return GetSelfImprovementRecommendation(db, recommendationID)
+	return err
 }
 
-func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (SelfImprovementRecommendation, error) {
+func UpdateSelfImprovementRecommendationStatusRow(q sqlExec, id, status string) error {
 	id = strings.TrimSpace(id)
 	status = strings.TrimSpace(status)
 	if id == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
+		return &ErrValidation{Msg: "recommendation id is required"}
 	}
-	if !validRecommendationStatus(status) {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
-	}
-	res, err := db.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
+	res, err := q.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
 	if err != nil {
-		return SelfImprovementRecommendation{}, err
+		return err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return SelfImprovementRecommendation{}, err
+		return err
 	}
 	if affected == 0 {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+		return &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
-	return GetSelfImprovementRecommendation(db, id)
+	return nil
 }
 
-func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementProposal, error) {
-	rec, err := GetSelfImprovementRecommendation(db, id)
+func UpdateSelfImprovementFeedbackStatusRow(q sqlExec, id int64, status string) error {
+	if id <= 0 {
+		return &ErrValidation{Msg: "feedback id is required"}
+	}
+	res, err := q.Exec(`UPDATE self_improvement_feedback SET status=? WHERE id=?`, strings.TrimSpace(status), id)
 	if err != nil {
-		return SelfImprovementProposal{}, err
+		return err
 	}
-	if rec.Status != RecommendationStatusAccepted {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation must be accepted before creating a proposal"}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if nonConvertibleRecommendationType(rec.Type) {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
+	if affected == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("feedback %d not found", id)}
 	}
-	if existing, err := ListSelfImprovementProposals(db, rec.ID); err != nil {
-		return SelfImprovementProposal{}, err
-	} else if len(existing) > 0 {
-		return existing[0], nil
-	}
-	targetType := strings.TrimSpace(rec.TargetAssetType)
-	targetID := strings.TrimSpace(rec.TargetAssetID)
-	if targetID == "" {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no target catalog asset"}
-	}
-	if strings.TrimSpace(rec.ProposedNewBody) == "" {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no proposed catalog body"}
-	}
-	meta := fleet.CatalogVersionMetadata{
-		State:      "proposal",
-		SourceType: "feedback_recommendation",
-		SourceRef:  rec.ID,
-		Author:     "agents-assistant",
-		Changelog:  recommendationProposalChangelog(rec),
-	}
-	var version fleet.CatalogVersion
-	switch targetType {
-	case "prompt":
-		prompt, err := ReadPrompt(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, prompt.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreatePromptDraftTx(tx, prompt.ID, prompt.Description, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	case "skill":
-		skill, err := readSkill(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, skill.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreateSkillDraftTx(tx, skill.ID, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	case "guardrail":
-		guardrail, err := GetGuardrail(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, guardrail.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		guardrail.Content = rec.ProposedNewBody
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	default:
-		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
-	}
-	return SelfImprovementProposal{
-		RecommendationID: rec.ID,
-		TargetAssetType:  targetType,
-		TargetAssetID:    targetID,
-		BaseVersionID:    version.BaseVersionID,
-		Version:          version,
-	}, nil
+	return nil
 }
 
-func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposal, error) {
+func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposalRow, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, &ErrValidation{Msg: "recommendation id is required"}
@@ -805,9 +573,9 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 	if err != nil {
 		return nil, fmt.Errorf("store: list self-improvement proposals: %w", err)
 	}
-	var out []SelfImprovementProposal
+	var out []SelfImprovementProposalRow
 	for rows.Next() {
-		var proposal SelfImprovementProposal
+		var proposal SelfImprovementProposalRow
 		var enabled int
 		proposal.RecommendationID = id
 		if err := rows.Scan(
@@ -890,7 +658,7 @@ func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID str
 	return version, nil
 }
 
-func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -908,7 +676,7 @@ func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace strin
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SelfImprovementRecommendation
+	var out []SelfImprovementRecommendationRow
 	for rows.Next() {
 		rec, err := scanSelfImprovementRecommendation(rows, false)
 		if err != nil {
@@ -938,12 +706,12 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 		`UPDATE self_improvement_recommendations
 		SET status=?, error=?, updated_at=datetime('now')
 		WHERE feedback_event_id=?`,
-		RecommendationStatusFailed, strings.TrimSpace(cause), id,
+		"failed", strings.TrimSpace(cause), id,
 	)
 	return err
 }
 
-func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {
+func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendationRow, error) {
 	row := db.QueryRow(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.feedback_event_id=?`, workspaceID, feedbackID)
 	return scanSelfImprovementRecommendation(row, true)
 }
@@ -991,10 +759,10 @@ func recommendationSelectSQL() string {
 	LEFT JOIN self_improvement_recommendation_clarifications c ON c.recommendation_id = r.id`
 }
 
-func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedback bool) (SelfImprovementRecommendation, error) {
-	var rec SelfImprovementRecommendation
+func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedback bool) (SelfImprovementRecommendationRow, error) {
+	var rec SelfImprovementRecommendationRow
 	var feedback SelfImprovementFeedback
-	var clarification SelfImprovementClarification
+	var clarification SelfImprovementClarificationRow
 	var evidenceIDs, evidenceURLs, structured string
 	var authorized int
 	var skillIDs, guardrailIDs string
@@ -1014,7 +782,7 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&feedback.LinkDiagnostics, &feedback.Status, &clarification.RecommendationID, &clarification.Author,
 		&clarification.Body, &clarification.CreatedAt, &clarification.UpdatedAt,
 	); err != nil {
-		return SelfImprovementRecommendation{}, err
+		return SelfImprovementRecommendationRow{}, err
 	}
 	rec.EvidenceFeedbackIDs = splitInt64CSV(evidenceIDs)
 	rec.EvidenceSourceURLs = splitCSV(evidenceURLs)
@@ -1088,36 +856,7 @@ func splitInt64CSV(s string) []int64 {
 	return out
 }
 
-func recommendationProposalChangelog(rec SelfImprovementRecommendation) string {
-	for _, value := range []string{rec.NormalizedLesson, rec.Rationale, rec.Finding} {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return "Self-improvement recommendation " + rec.ID
-}
-
-func ensureRecommendationBaseVersion(rec SelfImprovementRecommendation, currentVersionID string) error {
-	if rec.TargetBaseVersionID == "" {
-		return &ErrValidation{Msg: "recommendation base version is required; re-analyze feedback before creating a proposal"}
-	}
-	if rec.TargetBaseVersionID != currentVersionID {
-		return &ErrValidation{Msg: "recommendation base version is stale; re-analyze feedback before creating a proposal"}
-	}
-	return nil
-}
-
-func nonConvertibleRecommendationType(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "needs_more_context", "no_action", "split_agent", "change_dispatch_wiring":
-		return true
-	default:
-		return false
-	}
-}
-
-func readSkill(db *sql.DB, ref string) (fleet.Skill, error) {
+func readSkill(db querier, ref string) (fleet.Skill, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return fleet.Skill{}, &ErrValidation{Msg: "skill id is required"}
@@ -1137,38 +876,4 @@ func readSkill(db *sql.DB, ref string) (fleet.Skill, error) {
 		return fleet.Skill{}, fmt.Errorf("store: read skill %s: %w", ref, err)
 	}
 	return skill, nil
-}
-
-func validRecommendationStatus(status string) bool {
-	return slices.Contains([]string{
-		RecommendationStatusRecommended,
-		RecommendationStatusNeedsUserInput,
-		RecommendationStatusAccepted,
-		RecommendationStatusRejected,
-		RecommendationStatusDeferred,
-		RecommendationStatusDuplicate,
-		RecommendationStatusFailed,
-	}, status)
-}
-
-func firstFeedbackLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(strings.ReplaceAll(line, FeedbackTag, ""))
-		if line != "" {
-			if len(line) > 500 {
-				return line[:500]
-			}
-			return line
-		}
-	}
-	return ""
-}
-
-func normalizeLesson(finding string) string {
-	finding = strings.TrimSpace(strings.ReplaceAll(finding, FeedbackTag, ""))
-	finding = strings.TrimSuffix(finding, ".")
-	if finding == "" {
-		return "Review self-improvement feedback before changing catalog guidance"
-	}
-	return finding
 }

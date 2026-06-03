@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -27,6 +28,9 @@ type Store struct {
 	db *sql.DB
 }
 
+// Tx is the transaction handle Store passes to domain services.
+type Tx = sql.Tx
+
 // New wraps the supplied *sql.DB. The caller owns and closes the
 // connection; Store only borrows it.
 func New(db *sql.DB) *Store {
@@ -37,6 +41,22 @@ func New(db *sql.DB) *Store {
 // occasional administrative script; production callers use the typed
 // methods.
 func (s *Store) DB() *sql.DB { return s.db }
+
+// Transact runs fn inside a store-owned SQL transaction.
+func (s *Store) Transact(fn func(*sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit transaction: %w", err)
+	}
+	return nil
+}
 
 // ── Agents ──────────────────────────────────────────────────────────────
 

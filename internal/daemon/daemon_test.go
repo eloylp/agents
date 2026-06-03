@@ -19,6 +19,8 @@ import (
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/daemon/daemontest"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -136,6 +138,13 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/improvements/recommendations/rec_1"},
 		{http.MethodPost, "/improvements/recommendations/rec_1/status"},
 		{http.MethodPost, "/improvements/recommendations/rec_1/clarification"},
+		{http.MethodPost, "/improvements/recommendations/rec_1/proposal-bundle"},
+		{http.MethodGet, "/improvements/recommendations/rec_1/proposal-bundle"},
+		{http.MethodPatch, "/improvements/proposal-bundles/bundle_1/items/item_1"},
+		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/reject"},
+		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/link-existing"},
+		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/publish"},
+		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/discard"},
 		{http.MethodPost, "/improvements/feedback/1/analyze"},
 		{http.MethodGet, "/runners"},
 		{http.MethodDelete, "/runners/1"},
@@ -151,6 +160,179 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestServer(t, testCfg(nil))
+	recID := seedProposalBundleRecommendation(t, srv, "publish")
+
+	var created selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &created)
+	if created.ID == "" || created.Status != selfimprovement.ProposalBundleStatusPending || len(created.Items) != 3 {
+		t.Fatalf("created bundle = %+v, want pending bundle with three items", created)
+	}
+
+	var fetched selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodGet, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &fetched)
+	if fetched.ID != created.ID {
+		t.Fatalf("fetched bundle id = %q, want %q", fetched.ID, created.ID)
+	}
+
+	guardItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.AssetType == "guardrail" && item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting
+	})
+	var edited selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPatch, "/improvements/proposal-bundles/"+created.ID+"/items/"+guardItem.ID, `{"proposed_body":"guard body edited"}`, http.StatusOK, &edited)
+	guardItem = bundleItemBy(t, edited, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == guardItem.ID })
+	if guardItem.ProposedBody != "guard body edited" || guardItem.ProposedDescription != "guard desc v2" || guardItem.ProposedEnabled || guardItem.ProposedPosition != 17 {
+		t.Fatalf("body-only REST patch guardrail item = %+v, want body edit with metadata preserved", guardItem)
+	}
+
+	promptItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.AssetType == "prompt" })
+	var rejected selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/items/"+promptItem.ID+"/reject", `{"reason":"not needed"}`, http.StatusOK, &rejected)
+	promptItem = bundleItemBy(t, rejected, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == promptItem.ID })
+	if promptItem.Decision != selfimprovement.ProposalBundleDecisionRejected || promptItem.DecisionReason != "not needed" {
+		t.Fatalf("rejected item = decision %q reason %q, want rejected decision", promptItem.Decision, promptItem.DecisionReason)
+	}
+
+	skillItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.AssetType == "skill" })
+	var linked selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/items/"+skillItem.ID+"/link-existing", `{"asset_id":"existing-rest-skill","reason":"already exists"}`, http.StatusOK, &linked)
+	skillItem = bundleItemBy(t, linked, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.ID == skillItem.ID })
+	if skillItem.Decision != selfimprovement.ProposalBundleDecisionLinkedExisting || skillItem.AssetID != "existing-rest-skill" || skillItem.DecisionReason != "already exists" {
+		t.Fatalf("linked item = %+v, want linked_existing decision evidence", skillItem)
+	}
+
+	var published selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+created.ID+"/publish", "", http.StatusOK, &published)
+	if published.Status != selfimprovement.ProposalBundleStatusPublished {
+		t.Fatalf("published status = %q, want published", published.Status)
+	}
+	gotGuardrail, err := srv.Store().GetGuardrail("rest-bundle-guardrail")
+	if err != nil {
+		t.Fatalf("read published guardrail: %v", err)
+	}
+	if gotGuardrail.Description != "guard desc v2" || gotGuardrail.Content != "guard body edited" || gotGuardrail.Enabled || gotGuardrail.Position != 17 {
+		t.Fatalf("published guardrail = %+v, want edited REST body and preserved metadata", gotGuardrail)
+	}
+
+	discardRecID := seedProposalBundleRecommendation(t, srv, "discard")
+	var discardBundle selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+discardRecID+"/proposal-bundle", "", http.StatusOK, &discardBundle)
+	var discarded selfimprovement.SelfImprovementProposalBundle
+	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+discardBundle.ID+"/discard", "", http.StatusOK, &discarded)
+	if discarded.Status != selfimprovement.ProposalBundleStatusDiscarded {
+		t.Fatalf("discarded status = %q, want discarded", discarded.Status)
+	}
+}
+
+func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix string) string {
+	t.Helper()
+	st := srv.Store()
+	prompt, err := st.UpsertPrompt(fleet.Prompt{
+		Name:        "rest-bundle-prompt-" + suffix,
+		Description: "prompt desc",
+		Content:     "prompt v1",
+	})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	if err := st.UpsertSkill("existing-rest-skill", fleet.Skill{Name: "existing-rest-skill", Prompt: "existing skill"}); err != nil {
+		t.Fatalf("seed existing skill: %v", err)
+	}
+	guardrailName := "rest-bundle-guardrail"
+	if suffix != "publish" {
+		guardrailName += "-" + suffix
+	}
+	if err := st.UpsertGuardrail(fleet.Guardrail{
+		Name:        guardrailName,
+		Description: "guard desc v1",
+		Content:     "guard v1",
+		Enabled:     true,
+		Position:    9,
+	}); err != nil {
+		t.Fatalf("seed guardrail: %v", err)
+	}
+	guardrail, err := st.GetGuardrail(guardrailName)
+	if err != nil {
+		t.Fatalf("read seeded guardrail: %v", err)
+	}
+	feedback, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  proposalBundleCommentIDForTest(suffix),
+		SourceURL:        "https://github.com/owner/repo/issues/683#issuecomment-" + suffix,
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      683,
+		RawBody:          "multi asset feedback " + suffix,
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := selfimprovement.New(st).RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                selfimprovement.RecommendationStatusAccepted,
+		Finding:               "coordinated catalog update",
+		Rationale:             "prompt, skill, and guardrail need a narrow update",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": guardrailName, "base_version_id": guardrail.VersionID, "proposed_body": "guard v2", "proposed_description": "guard desc v2", "proposed_enabled": false, "proposed_position": 17},
+				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "new-rest-skill-" + suffix, "proposed_name": "new rest skill " + suffix, "proposed_scope": "workspace", "proposed_body": "new skill"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	return rec.ID
+}
+
+func serveJSON(t *testing.T, srv *daemon.Daemon, method, path, body string, wantStatus int, out any) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != wantStatus {
+		t.Fatalf("%s %s: got status %d body %q, want %d", method, path, rr.Code, rr.Body.String(), wantStatus)
+	}
+	if out != nil {
+		if err := json.NewDecoder(rr.Body).Decode(out); err != nil {
+			t.Fatalf("%s %s: decode response: %v", method, path, err)
+		}
+	}
+}
+
+func proposalBundleCommentIDForTest(suffix string) int64 {
+	if suffix == "publish" {
+		return 683001
+	}
+	return 683002
+}
+
+func bundleItemBy(t *testing.T, bundle selfimprovement.SelfImprovementProposalBundle, match func(selfimprovement.SelfImprovementBundleItem) bool) selfimprovement.SelfImprovementBundleItem {
+	t.Helper()
+	for _, item := range bundle.Items {
+		if match(item) {
+			return item
+		}
+	}
+	t.Fatalf("matching bundle item not found in %+v", bundle.Items)
+	return selfimprovement.SelfImprovementBundleItem{}
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.

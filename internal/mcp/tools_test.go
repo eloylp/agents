@@ -21,6 +21,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -133,8 +134,10 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	reposH := daemonrepos.New(st, maxBody, zerolog.Nop())
 	configH := daemonconfig.New(st, cfg.Daemon, zerolog.Nop())
 	runnersH := daemonrunners.New(st, channels, obs, zerolog.Nop())
+	improvementService := selfimprovement.New(st)
 	return Deps{
 		Store:        st,
+		Improvements: improvementService,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON: func() ([]byte, error) {
 			// Mirror the wire shape internal/daemon.Daemon.StatusJSON returns
@@ -251,11 +254,11 @@ func TestToolImprovementProposalLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Store.UpsertSelfImprovementRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "prompt_guidance",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten prompt guidance",
 		NormalizedLesson:      "Keep guidance concrete.",
 		Rationale:             "Feedback asked for a concrete prompt update.",
@@ -324,6 +327,116 @@ func TestToolImprovementProposalLifecycle(t *testing.T) {
 	res, err = toolListImprovementRecommendationsWithProposals(deps)(context.Background(), listReq)
 	if err != nil {
 		t.Fatalf("list recommendations with proposals: %v", err)
+	}
+	var linked []map[string]any
+	decodeText(t, res, &linked)
+	if len(linked) != 1 || linked[0]["id"] != rec.ID {
+		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
+	}
+}
+
+func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	prompt, err := deps.Store.UpsertPrompt(fleet.Prompt{Name: "bundle-target", Description: "target desc", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "one",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  683010,
+		SourceURL:        "https://github.com/owner/one/issues/683#issuecomment-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      683,
+		RawBody:          "Please improve several assets /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+		Status:           store.FeedbackStatusNew,
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                selfimprovement.RecommendationStatusAccepted,
+		Finding:               "tighten prompt and reuse an existing skill",
+		Rationale:             "Feedback spans more than one catalog item.",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{"changes": []map[string]any{
+			{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "body v2"},
+			{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_candidate", "proposed_name": "bundle-candidate", "proposed_scope": "workspace", "proposed_body": "candidate skill"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
+	res, err := toolCreateImprovementProposalBundle(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	var bundle map[string]any
+	decodeText(t, res, &bundle)
+	bundleID := bundle["id"].(string)
+	items := bundle["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("bundle items = %d, want 2", len(items))
+	}
+	var promptItemID, createItemID string
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		if item["operation"] == "update_existing" {
+			promptItemID = item["id"].(string)
+		} else {
+			createItemID = item["id"].(string)
+		}
+	}
+
+	editReq := mcpgo.CallToolRequest{}
+	editReq.Params.Arguments = map[string]any{"bundle_id": bundleID, "item_id": promptItemID, "proposed_body": "body v2 edited"}
+	if res, err = toolEditImprovementProposalBundleItem(deps)(context.Background(), editReq); err != nil {
+		t.Fatalf("edit item: %v", err)
+	}
+	decodeText(t, res, &bundle)
+
+	linkReq := mcpgo.CallToolRequest{}
+	linkReq.Params.Arguments = map[string]any{"bundle_id": bundleID, "item_id": createItemID, "asset_id": "testing", "reason": "already exists"}
+	if res, err = toolLinkImprovementProposalBundleItem(deps)(context.Background(), linkReq); err != nil {
+		t.Fatalf("link item: %v", err)
+	}
+	decodeText(t, res, &bundle)
+
+	publishReq := mcpgo.CallToolRequest{}
+	publishReq.Params.Arguments = map[string]any{"bundle_id": bundleID}
+	if res, err = toolPublishImprovementProposalBundle(deps)(context.Background(), publishReq); err != nil {
+		t.Fatalf("publish bundle: %v", err)
+	}
+	decodeText(t, res, &bundle)
+	if bundle["status"] != "published" {
+		t.Fatalf("bundle status = %+v, want published", bundle["status"])
+	}
+	updated, err := deps.Store.ReadPrompt(prompt.ID)
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if updated.Content != "body v2 edited" {
+		t.Fatalf("prompt content = %q, want edited body", updated.Content)
+	}
+
+	listReq := mcpgo.CallToolRequest{}
+	listReq.Params.Arguments = map[string]any{"workspace": fleet.DefaultWorkspaceID}
+	res, err = toolListImprovementRecommendationsWithBundles(deps)(context.Background(), listReq)
+	if err != nil {
+		t.Fatalf("list recommendations with bundles: %v", err)
 	}
 	var linked []map[string]any
 	decodeText(t, res, &linked)

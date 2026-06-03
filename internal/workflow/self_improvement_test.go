@@ -11,6 +11,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -85,6 +86,14 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		"target_base_version_id":"promptver_self_improvement_analyst_v1",
 		"proposed_patch":"",
 		"proposed_new_body":"",
+		"changes":[{
+			"operation":"update_existing",
+			"asset_type":"prompt",
+			"asset_id":"prompt_self-improvement-analyst",
+			"base_version_id":"promptver_self_improvement_analyst_v1",
+			"proposed_body":"Prefer files under 800 lines when practical.",
+			"rationale":"Feedback event 1 provides direct evidence."
+		}],
 		"suggested_rollout_scope":"workspace",
 		"no_auto_apply_confirmed":true
 	}`)}
@@ -99,11 +108,22 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeSelfImprovementFeedback: %v", err)
 	}
-	if rec.Status != store.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
+	if rec.Status != selfimprovement.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
 		t.Fatalf("recommendation = %+v, want machine-owned status with analyzer prompt version", rec)
 	}
-	if got := rec.StructuredOutput["status"]; got != store.RecommendationStatusNeedsUserInput {
+	if got := rec.StructuredOutput["status"]; got != selfimprovement.RecommendationStatusNeedsUserInput {
 		t.Fatalf("structured status = %v, want clamped machine-owned status", got)
+	}
+	if changes, ok := rec.StructuredOutput["changes"].([]any); !ok || len(changes) != 1 {
+		t.Fatalf("structured changes = %#v, want one bundle change preserved", rec.StructuredOutput["changes"])
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(runner.req.Schema), &schema); err != nil {
+		t.Fatalf("assistant schema json: %v", err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok || properties["changes"] == nil {
+		t.Fatalf("assistant schema properties = %#v, want changes property", schema["properties"])
 	}
 	gotFeedback, err := st.GetSelfImprovementFeedback(feedback.ID)
 	if err != nil {
@@ -149,8 +169,8 @@ func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
 		WorkspaceID: "default",
 		RawBody:     "This guidance is too vague /agents improve",
 	}
-	prior := &store.SelfImprovementRecommendation{ID: "rec_17", FeedbackEventID: feedback.ID}
-	clarification := &store.SelfImprovementClarification{
+	prior := &selfimprovement.SelfImprovementRecommendation{ID: "rec_17", FeedbackEventID: feedback.ID}
+	clarification := &selfimprovement.SelfImprovementClarification{
 		RecommendationID: prior.ID,
 		Body:             "Scope it only to refactorer prompts.",
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -38,6 +39,7 @@ import (
 type Handler struct {
 	events    *obstore.Store // events/traces/SSE pub-sub
 	store     *store.Store   // fleet data access (agents for graph nodes)
+	improve   *selfimprovement.Service
 	sched     *scheduler.Scheduler
 	engine    *workflow.Engine
 	channels  *workflow.DataChannels
@@ -50,15 +52,20 @@ type Handler struct {
 func New(
 	events *obstore.Store,
 	st *store.Store,
+	improve *selfimprovement.Service,
 	sched *scheduler.Scheduler,
 	engine *workflow.Engine,
 	channels *workflow.DataChannels,
 	memReader *store.MemoryReader,
 	logger zerolog.Logger,
 ) *Handler {
+	if improve == nil {
+		improve = selfimprovement.New(st)
+	}
 	return &Handler{
 		events:    events,
 		store:     st,
+		improve:   improve,
 		sched:     sched,
 		engine:    engine,
 		channels:  channels,
@@ -91,6 +98,13 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/improvements/recommendations/{id}/clarification", withTimeout(http.HandlerFunc(h.HandleClarifyImprovementRecommendation))).Methods(http.MethodPost, http.MethodPatch)
 	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposal))).Methods(http.MethodPost)
 	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleImprovementProposal))).Methods(http.MethodGet)
+	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposalBundle))).Methods(http.MethodPost)
+	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleImprovementProposalBundle))).Methods(http.MethodGet)
+	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementProposalBundleItem))).Methods(http.MethodPatch)
+	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/reject", withTimeout(http.HandlerFunc(h.HandleRejectImprovementProposalBundleItem))).Methods(http.MethodPost)
+	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/link-existing", withTimeout(http.HandlerFunc(h.HandleLinkImprovementProposalBundleItem))).Methods(http.MethodPost)
+	r.Handle("/improvements/proposal-bundles/{id}/publish", withTimeout(http.HandlerFunc(h.HandlePublishImprovementProposalBundle))).Methods(http.MethodPost)
+	r.Handle("/improvements/proposal-bundles/{id}/discard", withTimeout(http.HandlerFunc(h.HandleDiscardImprovementProposalBundle))).Methods(http.MethodPost)
 	r.Handle("/improvements/feedback/{id:[0-9]+}/analyze", withTimeout(http.HandlerFunc(h.HandleAnalyzeImprovementFeedback))).Methods(http.MethodPost)
 }
 
@@ -178,21 +192,21 @@ func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Reque
 // HandleImprovementRecommendations serves GET /improvements/recommendations,
 // the durable review inbox generated from stored feedback evidence.
 func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListSelfImprovementRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
+	rows, err := h.improve.ListRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement recommendations")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if rows == nil {
-		rows = []store.SelfImprovementRecommendation{}
+		rows = []selfimprovement.SelfImprovementRecommendation{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
 }
 
 func (h *Handler) HandleImprovementRecommendation(w http.ResponseWriter, r *http.Request) {
-	rec, err := h.store.GetSelfImprovementRecommendation(mux.Vars(r)["id"])
+	rec, err := h.improve.GetRecommendation(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -233,7 +247,7 @@ func (h *Handler) HandleUpdateImprovementRecommendationStatus(w http.ResponseWri
 		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 		return
 	}
-	rec, err := h.store.UpdateSelfImprovementRecommendationStatus(mux.Vars(r)["id"], req.Status)
+	rec, err := h.improve.UpdateRecommendationStatus(mux.Vars(r)["id"], req.Status)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -255,7 +269,7 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 	if author == "" {
 		author = "dashboard"
 	}
-	rec, err := h.store.UpsertSelfImprovementClarification(mux.Vars(r)["id"], author, req.Body)
+	rec, err := h.improve.UpsertClarification(mux.Vars(r)["id"], author, req.Body)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -278,7 +292,7 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 }
 
 func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposal, err := h.store.CreateSelfImprovementProposal(mux.Vars(r)["id"])
+	proposal, err := h.improve.CreateProposal(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -288,19 +302,118 @@ func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) HandleImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposals, err := h.store.ListSelfImprovementProposals(mux.Vars(r)["id"])
+	proposals, err := h.improve.ListProposals(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
 	}
 	if proposals == nil {
-		proposals = []store.SelfImprovementProposal{}
+		proposals = []selfimprovement.SelfImprovementProposal{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(proposals)
 }
 
-func clarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {
+func (h *Handler) HandleCreateImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
+	bundle, err := h.improve.CreateProposalBundle(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
+	bundle, err := h.improve.GetProposalBundle(mux.Vars(r)["id"])
+	if err != nil {
+		var notFound *store.ErrNotFound
+		if errors.As(err, &notFound) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {
+	var req selfimprovement.SelfImprovementBundleItemUpdate
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	vars := mux.Vars(r)
+	bundle, err := h.improve.UpdateProposalBundleItem(vars["id"], vars["item_id"], req, "dashboard")
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleRejectImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	vars := mux.Vars(r)
+	bundle, err := h.improve.RejectProposalBundleItem(vars["id"], vars["item_id"], req.Reason, "dashboard")
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleLinkImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AssetID string `json:"asset_id"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	vars := mux.Vars(r)
+	bundle, err := h.improve.LinkProposalBundleItem(vars["id"], vars["item_id"], req.AssetID, req.Reason, "dashboard")
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandlePublishImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
+	bundle, err := h.improve.PublishProposalBundle(mux.Vars(r)["id"], "dashboard")
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleDiscardImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
+	bundle, err := h.improve.DiscardProposalBundle(mux.Vars(r)["id"], "dashboard")
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func clarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
 	feedback := rec.Feedback
 	repo := ""
 	number := 0

@@ -38,6 +38,7 @@ internal/
   runtime/                      # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup
   backends/                     # backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
   service/                      # mutable fleet/config use cases: use-case validation and transaction ownership
+  selfimprovement/              # self-improvement recommendation/proposal use cases and bundle decision policy
   store/                        # SQLite persistence boundary: migrations, config import/load, tx-aware primitives, DB-level safety checks
   workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts

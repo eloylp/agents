@@ -41,6 +41,7 @@ import (
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	daemonrunners "github.com/eloylp/agents/internal/daemon/runners"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -60,7 +61,8 @@ const Version = "0.2.0"
 // can serve the core fleet + trigger surface without wiring
 // observability or CRUD writes.
 type Deps struct {
-	Store        *store.Store           // data-access facade for tools that read fleet entities
+	Store        *store.Store // data-access facade for tools that read fleet entities
+	Improvements *selfimprovement.Service
 	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
 	StatusJSON   func() ([]byte, error) // /status payload, same bytes the REST surface returns
 	Channels     *workflow.DataChannels // PushEvent for trigger_agent

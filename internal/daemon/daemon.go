@@ -50,6 +50,7 @@ import (
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
@@ -132,9 +133,10 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	fleetHandler := daemonfleet.New(st, cfg.Daemon.HTTP.MaxBodyBytes, sched, obs, logger)
 	reposHandler := daemonrepos.New(st, cfg.Daemon.HTTP.MaxBodyBytes, logger)
 	configHandler := daemonconfig.New(st, cfg.Daemon, logger)
+	improvementService := selfimprovement.New(st)
 
 	memReader := st.NewMemoryReader()
-	observeHandler := daemonobserve.New(obs, st, sched, engine, channels, memReader, logger)
+	observeHandler := daemonobserve.New(obs, st, improvementService, sched, engine, channels, memReader, logger)
 	runnersHandler := daemonrunners.New(st, channels, obs, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
@@ -182,6 +184,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	// the handler picks up exactly the wiring the REST surface uses.
 	d.mcp = mcpserver.New(mcpserver.Deps{
 		Store:        st,
+		Improvements: improvementService,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON:   d.StatusJSON,
 		Channels:     channels,
