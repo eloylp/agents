@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ImprovementsPage from './page'
 
@@ -200,11 +200,6 @@ describe('<ImprovementsPage />', () => {
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
     })
     vi.stubGlobal('fetch', fetchMock)
-    vi.spyOn(window, 'prompt')
-      .mockReturnValueOnce('Reject duplicate')
-      .mockReturnValueOnce('existing-skill')
-      .mockReturnValueOnce('Already covered')
-
     render(<ImprovementsPage />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'recommendations' }))
@@ -253,8 +248,22 @@ describe('<ImprovementsPage />', () => {
     fireEvent.change(skill.getByLabelText('Bundle item scope for item-skill'), { target: { value: 'global' } })
     fireEvent.change(skill.getByDisplayValue('skill body'), { target: { value: 'skill edited' } })
     fireEvent.click(skill.getByRole('button', { name: 'Save Item' }))
+
     fireEvent.click(skill.getByRole('button', { name: 'Reject' }))
+    const rejectDialog = screen.getByRole('dialog')
+    fireEvent.change(within(rejectDialog).getByLabelText('Bundle item decision reason'), { target: { value: 'Reject duplicate' } })
+    fireEvent.click(within(rejectDialog).getByRole('button', { name: 'Reject Item' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/improvements/proposal-bundles/bundle-1/items/item-skill/reject',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: 'Reject duplicate' }) }),
+    ))
+
     fireEvent.click(skill.getByRole('button', { name: 'Link Existing' }))
+    const linkDialog = screen.getByRole('dialog')
+    fireEvent.change(within(linkDialog).getByLabelText('Existing asset id/ref'), { target: { value: 'existing-skill' } })
+    fireEvent.change(within(linkDialog).getByLabelText('Bundle item decision reason'), { target: { value: 'Already covered' } })
+    fireEvent.click(within(linkDialog).getByRole('button', { name: 'Link Existing' }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/improvements/proposal-bundles/bundle-1/items/item-skill',
@@ -263,13 +272,9 @@ describe('<ImprovementsPage />', () => {
         body: expect.stringContaining('"proposed_ref":"skill_new_edited"'),
       }),
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/improvements/proposal-bundles/bundle-1/items/item-skill/reject',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: 'Reject duplicate' }) }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/improvements/proposal-bundles/bundle-1/items/item-skill/link-existing',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ asset_id: 'existing-skill', reason: 'Already covered' }) }),
-    )
+    ))
   })
 })

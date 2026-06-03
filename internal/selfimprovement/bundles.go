@@ -176,7 +176,7 @@ func proposalBundleRowFromBundle(bundle SelfImprovementProposalBundle) store.Sel
 	}
 }
 
-func recommendationRowPtr(rec *SelfImprovementRecommendation) *store.SelfImprovementRecommendation {
+func recommendationRowPtr(rec *SelfImprovementRecommendation) *store.SelfImprovementRecommendationRow {
 	if rec == nil {
 		return nil
 	}

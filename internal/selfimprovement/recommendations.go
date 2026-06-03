@@ -212,8 +212,8 @@ func (s *Service) UpsertClarification(recommendationID, author, body string) (Se
 	return s.GetRecommendation(recommendationID)
 }
 
-func recommendationInputRow(in SelfImprovementRecommendationInput) store.SelfImprovementRecommendationInput {
-	return store.SelfImprovementRecommendationInput{
+func recommendationInputRow(in SelfImprovementRecommendationInput) store.SelfImprovementRecommendationInputRow {
+	return store.SelfImprovementRecommendationInputRow{
 		WorkspaceID:             in.WorkspaceID,
 		FeedbackEventID:         in.FeedbackEventID,
 		Type:                    in.Type,
@@ -239,7 +239,7 @@ func recommendationInputRow(in SelfImprovementRecommendationInput) store.SelfImp
 	}
 }
 
-func recommendationFromRow(row store.SelfImprovementRecommendation) SelfImprovementRecommendation {
+func recommendationFromRow(row store.SelfImprovementRecommendationRow) SelfImprovementRecommendation {
 	var clarification *SelfImprovementClarification
 	if row.Clarification != nil {
 		clarification = &SelfImprovementClarification{
@@ -287,10 +287,10 @@ func recommendationFromRow(row store.SelfImprovementRecommendation) SelfImprovem
 	}
 }
 
-func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) store.SelfImprovementRecommendation {
-	var clarification *store.SelfImprovementClarification
+func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) store.SelfImprovementRecommendationRow {
+	var clarification *store.SelfImprovementClarificationRow
 	if rec.Clarification != nil {
-		clarification = &store.SelfImprovementClarification{
+		clarification = &store.SelfImprovementClarificationRow{
 			RecommendationID: rec.Clarification.RecommendationID,
 			Author:           rec.Clarification.Author,
 			Body:             rec.Clarification.Body,
@@ -303,7 +303,7 @@ func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) stor
 		converted := proposalBundleRowFromBundle(*rec.ProposalBundle)
 		bundle = &converted
 	}
-	return store.SelfImprovementRecommendation{
+	return store.SelfImprovementRecommendationRow{
 		ID:                      rec.ID,
 		WorkspaceID:             rec.WorkspaceID,
 		FeedbackEventID:         rec.FeedbackEventID,
@@ -335,7 +335,7 @@ func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) stor
 	}
 }
 
-func proposalFromRow(row store.SelfImprovementProposal) SelfImprovementProposal {
+func proposalFromRow(row store.SelfImprovementProposalRow) SelfImprovementProposal {
 	return SelfImprovementProposal{
 		RecommendationID: row.RecommendationID,
 		TargetAssetType:  row.TargetAssetType,

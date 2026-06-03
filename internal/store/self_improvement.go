@@ -89,7 +89,7 @@ type SelfImprovementFeedbackInput struct {
 	Status                    string
 }
 
-type SelfImprovementRecommendation struct {
+type SelfImprovementRecommendationRow struct {
 	ID                      string                            `json:"id"`
 	WorkspaceID             string                            `json:"workspace"`
 	FeedbackEventID         int64                             `json:"feedback_event_id"`
@@ -116,11 +116,11 @@ type SelfImprovementRecommendation struct {
 	CreatedAt               string                            `json:"created_at"`
 	UpdatedAt               string                            `json:"updated_at"`
 	Feedback                *SelfImprovementFeedback          `json:"feedback,omitempty"`
-	Clarification           *SelfImprovementClarification     `json:"clarification,omitempty"`
+	Clarification           *SelfImprovementClarificationRow  `json:"clarification,omitempty"`
 	ProposalBundle          *SelfImprovementProposalBundleRow `json:"proposal_bundle,omitempty"`
 }
 
-type SelfImprovementClarification struct {
+type SelfImprovementClarificationRow struct {
 	RecommendationID string `json:"recommendation_id"`
 	Author           string `json:"author"`
 	Body             string `json:"body"`
@@ -128,7 +128,7 @@ type SelfImprovementClarification struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
-type SelfImprovementProposal struct {
+type SelfImprovementProposalRow struct {
 	RecommendationID string                `json:"recommendation_id"`
 	TargetAssetType  string                `json:"target_asset_type"`
 	TargetAssetID    string                `json:"target_asset_id"`
@@ -137,7 +137,7 @@ type SelfImprovementProposal struct {
 	Version          fleet.CatalogVersion  `json:"version"`
 }
 
-type SelfImprovementRecommendationInput struct {
+type SelfImprovementRecommendationInputRow struct {
 	WorkspaceID             string
 	FeedbackEventID         int64
 	Type                    string
@@ -178,23 +178,23 @@ func (s *Store) GetSelfImprovementFeedback(id int64) (SelfImprovementFeedback, e
 	return GetSelfImprovementFeedback(s.db, id)
 }
 
-func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {
+func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, feedbackID int64) (SelfImprovementRecommendationRow, error) {
 	return getSelfImprovementRecommendationByFeedback(s.db, fleet.NormalizeWorkspaceID(workspaceID), feedbackID)
 }
 
-func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
+func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendations(s.db, workspace, status, limit)
 }
 
-func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendation, error) {
+func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendationRow, error) {
 	return GetSelfImprovementRecommendation(s.db, id)
 }
 
-func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposal, error) {
+func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposalRow, error) {
 	return ListSelfImprovementProposals(s.db, id)
 }
 
-func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendationsWithProposals(s.db, workspace, limit)
 }
 
@@ -388,7 +388,7 @@ func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, 
 	return ev, err
 }
 
-func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecommendationInput) error {
+func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecommendationInputRow) error {
 	if in.FeedbackEventID <= 0 {
 		return &ErrValidation{Msg: "feedback_event_id is required"}
 	}
@@ -441,7 +441,7 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 	return err
 }
 
-func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
+func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -458,7 +458,7 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SelfImprovementRecommendation
+	var out []SelfImprovementRecommendationRow
 	for rows.Next() {
 		rec, err := scanSelfImprovementRecommendation(rows, false)
 		if err != nil {
@@ -469,15 +469,15 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 	return out, rows.Err()
 }
 
-func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendation, error) {
+func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendationRow, error) {
 	return GetSelfImprovementRecommendationFrom(db, id)
 }
 
-func GetSelfImprovementRecommendationFrom(q querier, id string) (SelfImprovementRecommendation, error) {
+func GetSelfImprovementRecommendationFrom(q querier, id string) (SelfImprovementRecommendationRow, error) {
 	row := q.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
 	rec, err := scanSelfImprovementRecommendation(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+		return SelfImprovementRecommendationRow{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
 	return rec, err
 }
@@ -542,7 +542,7 @@ func UpdateSelfImprovementFeedbackStatusRow(q sqlExec, id int64, status string) 
 	return nil
 }
 
-func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposal, error) {
+func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposalRow, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, &ErrValidation{Msg: "recommendation id is required"}
@@ -573,9 +573,9 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 	if err != nil {
 		return nil, fmt.Errorf("store: list self-improvement proposals: %w", err)
 	}
-	var out []SelfImprovementProposal
+	var out []SelfImprovementProposalRow
 	for rows.Next() {
-		var proposal SelfImprovementProposal
+		var proposal SelfImprovementProposalRow
 		var enabled int
 		proposal.RecommendationID = id
 		if err := rows.Scan(
@@ -658,7 +658,7 @@ func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID str
 	return version, nil
 }
 
-func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -676,7 +676,7 @@ func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace strin
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SelfImprovementRecommendation
+	var out []SelfImprovementRecommendationRow
 	for rows.Next() {
 		rec, err := scanSelfImprovementRecommendation(rows, false)
 		if err != nil {
@@ -711,7 +711,7 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 	return err
 }
 
-func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {
+func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendationRow, error) {
 	row := db.QueryRow(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.feedback_event_id=?`, workspaceID, feedbackID)
 	return scanSelfImprovementRecommendation(row, true)
 }
@@ -759,10 +759,10 @@ func recommendationSelectSQL() string {
 	LEFT JOIN self_improvement_recommendation_clarifications c ON c.recommendation_id = r.id`
 }
 
-func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedback bool) (SelfImprovementRecommendation, error) {
-	var rec SelfImprovementRecommendation
+func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedback bool) (SelfImprovementRecommendationRow, error) {
+	var rec SelfImprovementRecommendationRow
 	var feedback SelfImprovementFeedback
-	var clarification SelfImprovementClarification
+	var clarification SelfImprovementClarificationRow
 	var evidenceIDs, evidenceURLs, structured string
 	var authorized int
 	var skillIDs, guardrailIDs string
@@ -782,7 +782,7 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&feedback.LinkDiagnostics, &feedback.Status, &clarification.RecommendationID, &clarification.Author,
 		&clarification.Body, &clarification.CreatedAt, &clarification.UpdatedAt,
 	); err != nil {
-		return SelfImprovementRecommendation{}, err
+		return SelfImprovementRecommendationRow{}, err
 	}
 	rec.EvidenceFeedbackIDs = splitInt64CSV(evidenceIDs)
 	rec.EvidenceSourceURLs = splitCSV(evidenceURLs)
@@ -854,35 +854,6 @@ func splitInt64CSV(s string) []int64 {
 		}
 	}
 	return out
-}
-
-func recommendationProposalChangelog(rec SelfImprovementRecommendation) string {
-	for _, value := range []string{rec.NormalizedLesson, rec.Rationale, rec.Finding} {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return "Self-improvement recommendation " + rec.ID
-}
-
-func ensureRecommendationBaseVersion(rec SelfImprovementRecommendation, currentVersionID string) error {
-	if rec.TargetBaseVersionID == "" {
-		return &ErrValidation{Msg: "recommendation base version is required; re-analyze feedback before creating a proposal"}
-	}
-	if rec.TargetBaseVersionID != currentVersionID {
-		return &ErrValidation{Msg: "recommendation base version is stale; re-analyze feedback before creating a proposal"}
-	}
-	return nil
-}
-
-func nonConvertibleRecommendationType(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "needs_more_context", "no_action", "split_agent", "change_dispatch_wiring":
-		return true
-	default:
-		return false
-	}
 }
 
 func readSkill(db querier, ref string) (fleet.Skill, error) {

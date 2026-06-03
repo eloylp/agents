@@ -10,17 +10,17 @@ import (
 )
 
 type SelfImprovementProposalBundleRow struct {
-	ID                              string                         `json:"id"`
-	WorkspaceID                     string                         `json:"workspace"`
-	RecommendationID                string                         `json:"recommendation_id"`
-	RecommendationUpdatedAtSnapshot string                         `json:"recommendation_updated_at_snapshot"`
-	RecommendationSnapshotHash      string                         `json:"recommendation_snapshot_hash"`
-	RecommendationChanged           bool                           `json:"recommendation_changed"`
-	Status                          string                         `json:"status"`
-	CreatedAt                       string                         `json:"created_at"`
-	UpdatedAt                       string                         `json:"updated_at"`
-	Recommendation                  *SelfImprovementRecommendation `json:"recommendation,omitempty"`
-	Items                           []SelfImprovementBundleItemRow `json:"items"`
+	ID                              string                            `json:"id"`
+	WorkspaceID                     string                            `json:"workspace"`
+	RecommendationID                string                            `json:"recommendation_id"`
+	RecommendationUpdatedAtSnapshot string                            `json:"recommendation_updated_at_snapshot"`
+	RecommendationSnapshotHash      string                            `json:"recommendation_snapshot_hash"`
+	RecommendationChanged           bool                              `json:"recommendation_changed"`
+	Status                          string                            `json:"status"`
+	CreatedAt                       string                            `json:"created_at"`
+	UpdatedAt                       string                            `json:"updated_at"`
+	Recommendation                  *SelfImprovementRecommendationRow `json:"recommendation,omitempty"`
+	Items                           []SelfImprovementBundleItemRow    `json:"items"`
 }
 
 type SelfImprovementBundleItemRow struct {
@@ -208,7 +208,7 @@ func GetSelfImprovementProposalBundleRowTx(tx *Tx, id string) (SelfImprovementPr
 	return getSelfImprovementProposalBundleRow(tx, id)
 }
 
-func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
 }
 
@@ -278,7 +278,7 @@ func listSelfImprovementProposalBundleRowItems(q querier, bundleID string) ([]Se
 	return out, nil
 }
 
-func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	recs, err := ListSelfImprovementRecommendations(db, workspace, "", limit)
 	if err != nil {
 		return nil, err

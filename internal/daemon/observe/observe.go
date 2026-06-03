@@ -52,16 +52,20 @@ type Handler struct {
 func New(
 	events *obstore.Store,
 	st *store.Store,
+	improve *selfimprovement.Service,
 	sched *scheduler.Scheduler,
 	engine *workflow.Engine,
 	channels *workflow.DataChannels,
 	memReader *store.MemoryReader,
 	logger zerolog.Logger,
 ) *Handler {
+	if improve == nil {
+		improve = selfimprovement.New(st)
+	}
 	return &Handler{
 		events:    events,
 		store:     st,
-		improve:   selfimprovement.New(st),
+		improve:   improve,
 		sched:     sched,
 		engine:    engine,
 		channels:  channels,

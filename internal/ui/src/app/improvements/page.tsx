@@ -129,6 +129,23 @@ interface BundleItemDraft {
   proposed_position: number
 }
 
+type BundleDecisionModal =
+  | {
+      kind: 'reject'
+      bundleID: string
+      itemID: string
+      assetLabel: string
+      reason: string
+    }
+  | {
+      kind: 'link'
+      bundleID: string
+      itemID: string
+      assetLabel: string
+      assetID: string
+      reason: string
+    }
+
 const nonConvertibleTypes = ['needs_more_context', 'no_action', 'split_agent', 'change_dispatch_wiring']
 
 function versionBody(type: string, version?: CatalogVersion) {
@@ -219,6 +236,8 @@ export default function ImprovementsPage() {
   const [clarifying, setClarifying] = useState<Recommendation | null>(null)
   const [clarificationBody, setClarificationBody] = useState('')
   const [clarificationSaving, setClarificationSaving] = useState(false)
+  const [bundleDecision, setBundleDecision] = useState<BundleDecisionModal | null>(null)
+  const [bundleDecisionSaving, setBundleDecisionSaving] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -323,26 +342,58 @@ export default function ImprovementsPage() {
     if (res.ok) load()
   }
 
-  const rejectBundleItem = async (bundleID: string, itemID: string) => {
-    const reason = window.prompt('Reject reason') ?? ''
-    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(itemID)}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
+  const openRejectBundleItem = (bundleID: string, item: ProposalBundleItem) => {
+    setBundleDecision({
+      kind: 'reject',
+      bundleID,
+      itemID: item.id,
+      assetLabel: `${item.asset_type}/${item.asset_id || item.proposed_ref || item.id}`,
+      reason: item.decision_reason || '',
     })
-    if (res.ok) load()
   }
 
-  const linkBundleItem = async (bundleID: string, itemID: string) => {
-    const asset_id = window.prompt('Existing asset id/ref') ?? ''
-    if (!asset_id.trim()) return
-    const reason = window.prompt('Link reason') ?? ''
-    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(itemID)}/link-existing`, {
+  const openLinkBundleItem = (bundleID: string, item: ProposalBundleItem) => {
+    setBundleDecision({
+      kind: 'link',
+      bundleID,
+      itemID: item.id,
+      assetLabel: `${item.asset_type}/${item.proposed_ref || item.asset_id || item.id}`,
+      assetID: item.asset_id || '',
+      reason: item.decision_reason || '',
+    })
+  }
+
+  const submitBundleDecision = async () => {
+    if (!bundleDecision || bundleDecisionSaving) return
+    setBundleDecisionSaving(true)
+    if (bundleDecision.kind === 'reject') {
+      const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleDecision.bundleID)}/items/${encodeURIComponent(bundleDecision.itemID)}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: bundleDecision.reason }),
+      })
+      setBundleDecisionSaving(false)
+      if (res.ok) {
+        setBundleDecision(null)
+        load()
+      }
+      return
+    }
+    const assetID = bundleDecision.assetID.trim()
+    if (!assetID) {
+      setBundleDecisionSaving(false)
+      return
+    }
+    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleDecision.bundleID)}/items/${encodeURIComponent(bundleDecision.itemID)}/link-existing`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asset_id, reason }),
+      body: JSON.stringify({ asset_id: assetID, reason: bundleDecision.reason }),
     })
-    if (res.ok) load()
+    setBundleDecisionSaving(false)
+    if (res.ok) {
+      setBundleDecision(null)
+      load()
+    }
   }
 
   const postBundleAction = async (bundleID: string, action: 'publish' | 'discard') => {
@@ -490,8 +541,8 @@ export default function ImprovementsPage() {
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                               <button onClick={() => editBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Save Item</button>
                               <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), proposed_body: item.analyst_proposed_body } }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
-                              <button onClick={() => rejectBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>
-                              {item.operation === 'create_new' && <button onClick={() => linkBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
+                              <button onClick={() => openRejectBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>
+                              {item.operation === 'create_new' && <button onClick={() => openLinkBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
                             </div>
                           )}
                         </section>
@@ -579,6 +630,55 @@ export default function ImprovementsPage() {
                 <InfoRow label="Base version" value={clarifying.target_base_version_id || 'unresolved'} />
                 {clarifying.clarification && <InfoRow label="Last clarified" value={new Date(clarifying.clarification.updated_at).toLocaleString()} />}
               </aside>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {bundleDecision && (
+        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'grid', placeItems: 'center', zIndex: 50, padding: '1rem' }}>
+          <section style={{ width: 'min(620px, 100%)', maxHeight: 'min(620px, 92vh)', overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'start', padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>{bundleDecision.kind === 'reject' ? 'Reject bundle item' : 'Link existing asset'}</h2>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{bundleDecision.assetLabel}</div>
+              </div>
+              <button onClick={() => setBundleDecision(null)} style={{ border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, padding: '6px 9px' }}>Close</button>
+            </header>
+            <div style={{ display: 'grid', gap: '0.85rem', padding: '1rem' }}>
+              {bundleDecision.kind === 'link' && (
+                <label style={{ display: 'grid', gap: 5, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                  Existing asset id/ref
+                  <input
+                    aria-label="Existing asset id/ref"
+                    value={bundleDecision.assetID}
+                    onChange={e => setBundleDecision(current => current && current.kind === 'link' ? { ...current, assetID: e.target.value } : current)}
+                    style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 8, font: 'inherit', fontSize: '0.85rem' }}
+                    autoFocus
+                  />
+                </label>
+              )}
+              <label style={{ display: 'grid', gap: 5, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                Reason
+                <textarea
+                  aria-label="Bundle item decision reason"
+                  value={bundleDecision.reason}
+                  onChange={e => setBundleDecision(current => current ? { ...current, reason: e.target.value } : current)}
+                  rows={6}
+                  style={{ resize: 'vertical', minHeight: 120, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 8, font: 'inherit', fontSize: '0.85rem', lineHeight: 1.45 }}
+                  autoFocus={bundleDecision.kind === 'reject'}
+                />
+              </label>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button onClick={() => setBundleDecision(null)} style={{ padding: '7px 10px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Cancel</button>
+                <button
+                  disabled={bundleDecisionSaving || (bundleDecision.kind === 'link' && bundleDecision.assetID.trim() === '')}
+                  onClick={submitBundleDecision}
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6, opacity: bundleDecisionSaving || (bundleDecision.kind === 'link' && bundleDecision.assetID.trim() === '') ? 0.6 : 1 }}
+                >
+                  {bundleDecisionSaving ? 'Saving...' : bundleDecision.kind === 'reject' ? 'Reject Item' : 'Link Existing'}
+                </button>
+              </div>
             </div>
           </section>
         </div>

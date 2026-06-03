@@ -204,7 +204,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 func newPlainHandler(t *testing.T) *Handler {
 	t.Helper()
 	fx := newFixture(t, nil)
-	return New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
+	return New(fx.events, fx.store, nil, nil, nil, nil, nil, zerolog.Nop())
 }
 
 // newHandlerOnStore is like newPlainHandler but reuses an existing
@@ -217,7 +217,7 @@ func newHandlerOnStore(t *testing.T, obs *obstore.Store) *Handler {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return New(obs, store.New(db), nil, nil, nil, nil, zerolog.Nop())
+	return New(obs, store.New(db), nil, nil, nil, nil, nil, zerolog.Nop())
 }
 
 // seedMemoryReader writes (agent, repo) → content rows into db so the
@@ -335,7 +335,7 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	fx := newFixture(t, nil)
 	channels := workflow.NewDataChannels(1, fx.store)
 	engine := workflow.NewEngine(fx.store, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
-	h := New(fx.events, fx.store, nil, engine, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, engine, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
@@ -378,7 +378,7 @@ func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
 		t.Fatalf("insert recommendation: %v", err)
 	}
 	channels := workflow.NewDataChannels(1, fx.store)
-	h := New(fx.events, fx.store, nil, nil, channels, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, channels, nil, zerolog.Nop())
 	router := newRouter(h)
 
 	req := httptest.NewRequest(http.MethodPost, "/improvements/recommendations/"+rec.ID+"/clarification", strings.NewReader(`{"body":"Apply this rule only to refactorer prompts."}`))
@@ -673,7 +673,7 @@ func TestHandleTraceNotFound(t *testing.T) {
 func TestHandleGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, nil)
-	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, nil, zerolog.Nop())
 	if _, err := fx.db.Exec(
 		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?), (?,?,?,?,?)`,
 		"coder", "reviewer", "owner/repo", 10, "needs review",
@@ -725,7 +725,7 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", PromptRef: "solo-agent", Description: "solo agent"}}
 	fx := newFixture(t, cfg)
-	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -759,7 +759,7 @@ func TestHandleGraphIsWorkspaceScopedAndIncludesConfiguredDispatchWiring(t *test
 		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", PromptRef: "coder", Description: "other coder"},
 	}
 	fx := newFixture(t, cfg)
-	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, nil, zerolog.Nop())
 	if _, err := fx.db.Exec(
 		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
 		"team-a", "coder", "reviewer", "owner/repo", 10, "needs review",
@@ -822,7 +822,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	sched := newSchedulerWithStatuses(t, []scheduler.AgentStatus{
 		{Name: "idle-err", Repo: "owner/r", LastStatus: "error"},
 	})
-	h := New(fx.events, fx.store, sched, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, sched, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -866,7 +866,7 @@ func TestHandleGraphRunningStatusIsWorkspaceScoped(t *testing.T) {
 		Repo:        "owner/repo",
 		StartedAt:   time.Now(),
 	})
-	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -1074,7 +1074,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			t.Parallel()
 			fx := newFixture(t, nil)
 			memReader := seedMemoryReader(t, fx.db, tc.stored, tc.mtimes)
-			h := New(fx.events, fx.store, nil, nil, nil, memReader, zerolog.Nop())
+			h := New(fx.events, fx.store, nil, nil, nil, nil, memReader, zerolog.Nop())
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)
