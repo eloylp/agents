@@ -229,6 +229,50 @@ func TestSelfImprovementBackendUsesRuntimeAnalystSettings(t *testing.T) {
 	}
 }
 
+func TestSelfImprovementRecommendationSchemaIsStrict(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(selfImprovementRecommendationSchema), &schema); err != nil {
+		t.Fatalf("schema json: %v", err)
+	}
+	assertStrictObjectSchema(t, "root", schema)
+}
+
+func assertStrictObjectSchema(t *testing.T, path string, schema map[string]any) {
+	t.Helper()
+	properties, _ := schema["properties"].(map[string]any)
+	if len(properties) > 0 {
+		requiredItems, ok := schema["required"].([]any)
+		if !ok {
+			t.Fatalf("%s: object with properties must declare required array", path)
+		}
+		required := make(map[string]struct{}, len(requiredItems))
+		for _, item := range requiredItems {
+			name, ok := item.(string)
+			if !ok {
+				t.Fatalf("%s: required item %v is not a string", path, item)
+			}
+			required[name] = struct{}{}
+		}
+		for name := range properties {
+			if _, ok := required[name]; !ok {
+				t.Fatalf("%s: property %q is missing from required", path, name)
+			}
+		}
+	}
+	for name, raw := range properties {
+		child, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		assertStrictObjectSchema(t, path+"."+name, child)
+		if items, ok := child["items"].(map[string]any); ok {
+			assertStrictObjectSchema(t, path+"."+name+"[]", items)
+		}
+	}
+}
+
 func renderedPayloadBlock(t *testing.T, user, key string) string {
 	t.Helper()
 	prefix := key + ":\n"
