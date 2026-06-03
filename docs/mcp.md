@@ -92,11 +92,11 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | Tool | Description |
 |---|---|
 | `list_events` | Recent events with optional `since` filter. |
-| `list_improvement_feedback` | Stored `/agents improve` feedback evidence for a workspace, optionally filtered by status. |
+| `list_improvement_feedback` | Stored `/agents improve` feedback evidence from the global inbox, optionally narrowed by workspace/status. |
 | `list_improvement_recommendations` | Review-only self-improvement recommendations, optionally filtered by status. |
 | `get_improvement_recommendation` | Fetch one recommendation with linked feedback evidence. |
 | `analyze_improvement_feedback` | Manually create or refresh the recommendation for one feedback event. |
-| `update_improvement_recommendation_status` | Accept, reject, defer, mark duplicate, or otherwise update recommendation status without publishing catalog changes. |
+| `update_improvement_recommendation_status` | Accept or reject a recommendation as a terminal decision without publishing catalog changes. |
 | `clarify_improvement_recommendation` | Replace the editable maintainer clarification for a recommendation and enqueue a fresh self-improvement analysis run. |
 | `create_improvement_proposal` | Create an inert catalog proposal version from an accepted recommendation. |
 | `get_improvement_proposal` | Fetch proposal versions linked to one recommendation. |

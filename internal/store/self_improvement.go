@@ -17,6 +17,8 @@ const (
 	FeedbackStatusAnalyzed = "analyzed"
 	FeedbackStatusFailed   = "failed"
 	FeedbackTag            = "/agents improve"
+
+	SelfImprovementAllWorkspaces = "*"
 )
 
 type SelfImprovementFeedback struct {
@@ -321,13 +323,40 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	allWorkspaces := selfImprovementAllWorkspaces(workspace)
 	workspaceID := fleet.NormalizeWorkspaceID(workspace)
 	status = strings.TrimSpace(status)
 	var (
 		rows *sql.Rows
 		err  error
 	)
-	if status == "" {
+	switch {
+	case allWorkspaces && status == "":
+		rows, err = db.Query(
+			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
+				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
+				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
+				linked_agent_name, linked_prompt_version_id, linked_skill_version_ids,
+				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
+			FROM self_improvement_feedback
+			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
+			limit,
+		)
+	case allWorkspaces:
+		rows, err = db.Query(
+			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
+				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
+				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
+				linked_agent_name, linked_prompt_version_id, linked_skill_version_ids,
+				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
+			FROM self_improvement_feedback
+			WHERE status=?
+			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
+			status, limit,
+		)
+	case status == "":
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
@@ -340,7 +369,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
 			workspaceID, limit,
 		)
-	} else {
+	default:
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
@@ -445,13 +474,19 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	allWorkspaces := selfImprovementAllWorkspaces(workspace)
 	workspaceID := fleet.NormalizeWorkspaceID(workspace)
 	status = strings.TrimSpace(status)
 	var rows *sql.Rows
 	var err error
-	if status == "" {
+	switch {
+	case allWorkspaces && status == "":
+		rows, err = db.Query(recommendationSelectSQL()+` ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, limit)
+	case allWorkspaces:
+		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, status, limit)
+	case status == "":
 		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, limit)
-	} else {
+	default:
 		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, status, limit)
 	}
 	if err != nil {
@@ -662,16 +697,29 @@ func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace strin
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	allWorkspaces := selfImprovementAllWorkspaces(workspace)
 	workspaceID := fleet.NormalizeWorkspaceID(workspace)
-	rows, err := db.Query(recommendationSelectSQL()+`
-		WHERE r.workspace_id=? AND EXISTS (
+	where := `WHERE EXISTS (
 			SELECT 1 FROM prompt_versions pv WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=r.id
 			UNION ALL
 			SELECT 1 FROM skill_versions sv WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=r.id
 			UNION ALL
 			SELECT 1 FROM guardrail_versions gv WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=r.id
-		)
-		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, limit)
+		)`
+	args := []any{limit}
+	if !allWorkspaces {
+		where = `WHERE r.workspace_id=? AND EXISTS (
+			SELECT 1 FROM prompt_versions pv WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=r.id
+			UNION ALL
+			SELECT 1 FROM skill_versions sv WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=r.id
+			UNION ALL
+			SELECT 1 FROM guardrail_versions gv WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=r.id
+		)`
+		args = []any{workspaceID, limit}
+	}
+	rows, err := db.Query(recommendationSelectSQL()+`
+		`+where+`
+		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +761,11 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 
 func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendationRow, error) {
 	row := db.QueryRow(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.feedback_event_id=?`, workspaceID, feedbackID)
-	return scanSelfImprovementRecommendation(row, true)
+	rec, err := scanSelfImprovementRecommendation(row, true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SelfImprovementRecommendationRow{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation for feedback %d not found", feedbackID)}
+	}
+	return rec, err
 }
 
 type selfImprovementScanner interface {
@@ -821,6 +873,10 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func selfImprovementAllWorkspaces(workspace string) bool {
+	return strings.TrimSpace(workspace) == SelfImprovementAllWorkspaces
 }
 
 func trimStrings(values []string) []string {

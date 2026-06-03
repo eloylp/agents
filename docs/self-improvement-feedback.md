@@ -3,7 +3,7 @@
 The daemon can capture maintainer review lessons from GitHub comments marked
 with `/agents improve`, turn authorized feedback into a durable recommendation,
 and present that recommendation for human review. The flow stays gated:
-recommendations can be accepted, rejected, deferred, or marked duplicate, but
+recommendations can be accepted or rejected as terminal human decisions, but
 they do not publish catalog changes or mutate runtime behavior.
 
 Supported webhook sources:
@@ -87,6 +87,10 @@ through the MCP `list_improvement_feedback`,
 `discard_improvement_proposal_bundle`,
 `list_improvement_recommendations_with_proposals`, and
 `list_improvement_recommendations_with_bundles` tools.
+
+Improvement listings are global by default. The stored rows still retain
+`workspace_id` as attribution and catalog-scope provenance, and API clients may
+pass `workspace` to narrow diagnostic views.
 
 Single-target proposals are for simple one-asset edits. Reactive multi-asset
 bundles are feedback-driven and keep coordinated changes together. Proactive

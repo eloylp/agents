@@ -199,9 +199,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_improvement_feedback",
-				mcpgo.WithDescription("List stored /agents improve feedback events for one workspace. These are raw evidence records used by self-improvement recommendations."),
+				mcpgo.WithDescription("List stored /agents improve feedback events. These are raw evidence records used by self-improvement recommendations. Omitted workspace lists the global inbox."),
 				mcpgo.WithString("workspace",
-					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+					mcpgo.Description("Optional workspace id or display name to narrow the global inbox."),
 				),
 				mcpgo.WithString("status",
 					mcpgo.Description("Optional status filter such as new or ignored."),
@@ -211,12 +211,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_improvement_recommendations",
-				mcpgo.WithDescription("List durable self-improvement recommendation records for one workspace. Recommendations are review-only and never publish catalog changes."),
+				mcpgo.WithDescription("List durable self-improvement recommendation records. Recommendations are review-only and never publish catalog changes. Omitted workspace lists the global inbox."),
 				mcpgo.WithString("workspace",
-					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+					mcpgo.Description("Optional workspace id or display name to narrow the global inbox."),
 				),
 				mcpgo.WithString("status",
-					mcpgo.Description("Optional status filter such as recommended, needs_user_input, accepted, rejected, deferred, duplicate, or failed."),
+					mcpgo.Description("Optional status filter such as recommended, needs_user_input, accepted, rejected, or failed."),
 				),
 			),
 			toolListImprovementRecommendations(deps),
@@ -243,14 +243,14 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_improvement_recommendation_status",
-				mcpgo.WithDescription("Accept, reject, defer, mark duplicate, or otherwise update one self-improvement recommendation status. This never publishes or applies catalog changes."),
+				mcpgo.WithDescription("Accept or reject one self-improvement recommendation. Accepted and rejected are terminal decisions; this never publishes or applies catalog changes."),
 				mcpgo.WithString("id",
 					mcpgo.Required(),
 					mcpgo.Description("Recommendation id."),
 				),
 				mcpgo.WithString("status",
 					mcpgo.Required(),
-					mcpgo.Description("New status: recommended, needs_user_input, accepted, rejected, deferred, duplicate, or failed."),
+					mcpgo.Description("New terminal decision: accepted or rejected."),
 				),
 			),
 			toolUpdateImprovementRecommendationStatus(deps),
@@ -296,7 +296,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.NewTool("list_improvement_recommendations_with_proposals",
 				mcpgo.WithDescription("List self-improvement recommendations that already have linked catalog proposal versions."),
 				mcpgo.WithString("workspace",
-					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+					mcpgo.Description("Optional workspace id or display name to narrow the global inbox."),
 				),
 			),
 			toolListImprovementRecommendationsWithProposals(deps),
@@ -367,7 +367,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		srv.AddTool(
 			mcpgo.NewTool("list_improvement_recommendations_with_bundles",
 				mcpgo.WithDescription("List self-improvement recommendations that already have linked proposal bundles."),
-				mcpgo.WithString("workspace", mcpgo.Description("Optional workspace id or display name. Defaults to default.")),
+				mcpgo.WithString("workspace", mcpgo.Description("Optional workspace id or display name to narrow the global inbox.")),
 			),
 			toolListImprovementRecommendationsWithBundles(deps),
 		)

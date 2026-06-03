@@ -14,6 +14,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/selfimprovement"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -59,7 +60,10 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 
 func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, _ := trimmedStringOptional(req, "workspace")
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok {
+			workspace = store.SelfImprovementAllWorkspaces
+		}
 		status, _ := trimmedStringOptional(req, "status")
 		rows, err := deps.Store.ListSelfImprovementFeedback(workspace, status, 100)
 		if err != nil {
@@ -71,7 +75,10 @@ func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 
 func toolListImprovementRecommendations(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, _ := trimmedStringOptional(req, "workspace")
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok {
+			workspace = store.SelfImprovementAllWorkspaces
+		}
 		status, _ := trimmedStringOptional(req, "status")
 		rows, err := deps.Improvements.ListRecommendations(workspace, status, 100)
 		if err != nil {
@@ -226,7 +233,10 @@ func toolGetImprovementProposal(deps Deps) server.ToolHandlerFunc {
 
 func toolListImprovementRecommendationsWithProposals(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, _ := trimmedStringOptional(req, "workspace")
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok {
+			workspace = store.SelfImprovementAllWorkspaces
+		}
 		rows, err := deps.Improvements.ListRecommendationsWithProposals(workspace, 100)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with proposals", err), nil
@@ -388,7 +398,10 @@ func toolDiscardImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
 
 func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, _ := trimmedStringOptional(req, "workspace")
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok {
+			workspace = store.SelfImprovementAllWorkspaces
+		}
 		rows, err := deps.Improvements.ListRecommendationsWithBundles(workspace, 100)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with bundles", err), nil
