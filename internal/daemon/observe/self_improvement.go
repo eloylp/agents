@@ -5,7 +5,7 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-func buildRecommendation(feedback store.SelfImprovementFeedback, st *store.Store) store.SelfImprovementRecommendationInput {
+func buildRecommendation(feedback store.SelfImprovementFeedback, st *store.Store) selfimprovement.SelfImprovementRecommendationInput {
 	in := selfimprovement.RecommendationFromFeedback(feedback)
 	promptVersionID := ""
 	if prompt, err := st.ReadPrompt("prompt_self-improvement-analyst"); err == nil {

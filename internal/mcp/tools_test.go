@@ -254,7 +254,7 @@ func TestToolImprovementProposalLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Improvements.RecordRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "prompt_guidance",
@@ -360,7 +360,7 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Improvements.RecordRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",

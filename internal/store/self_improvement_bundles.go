@@ -9,22 +9,6 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-const (
-	ProposalBundleRowStatusPending   = "pending"
-	ProposalBundleRowStatusPublished = "published"
-	ProposalBundleRowStatusDiscarded = "discarded"
-
-	ProposalBundleRowOperationUpdateExisting = "update_existing"
-	ProposalBundleRowOperationCreateNew      = "create_new"
-
-	ProposalBundleRowDecisionPending        = "pending"
-	ProposalBundleRowDecisionAccepted       = "accepted"
-	ProposalBundleRowDecisionRejected       = "rejected"
-	ProposalBundleRowDecisionLinkedExisting = "linked_existing"
-	ProposalBundleRowDecisionPublished      = "published"
-	ProposalBundleRowDecisionDiscarded      = "discarded"
-)
-
 type SelfImprovementProposalBundleRow struct {
 	ID                              string                         `json:"id"`
 	WorkspaceID                     string                         `json:"workspace"`

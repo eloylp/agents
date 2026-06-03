@@ -389,7 +389,7 @@ func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s, want 200", w.Code, w.Body.String())
 	}
-	var got store.SelfImprovementRecommendation
+	var got selfimprovement.SelfImprovementRecommendation
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

@@ -36,17 +36,17 @@ const (
 )
 
 type SelfImprovementProposalBundle struct {
-	ID                              string                               `json:"id"`
-	WorkspaceID                     string                               `json:"workspace"`
-	RecommendationID                string                               `json:"recommendation_id"`
-	RecommendationUpdatedAtSnapshot string                               `json:"recommendation_updated_at_snapshot"`
-	RecommendationSnapshotHash      string                               `json:"recommendation_snapshot_hash"`
-	RecommendationChanged           bool                                 `json:"recommendation_changed"`
-	Status                          string                               `json:"status"`
-	CreatedAt                       string                               `json:"created_at"`
-	UpdatedAt                       string                               `json:"updated_at"`
-	Recommendation                  *store.SelfImprovementRecommendation `json:"recommendation,omitempty"`
-	Items                           []SelfImprovementBundleItem          `json:"items"`
+	ID                              string                         `json:"id"`
+	WorkspaceID                     string                         `json:"workspace"`
+	RecommendationID                string                         `json:"recommendation_id"`
+	RecommendationUpdatedAtSnapshot string                         `json:"recommendation_updated_at_snapshot"`
+	RecommendationSnapshotHash      string                         `json:"recommendation_snapshot_hash"`
+	RecommendationChanged           bool                           `json:"recommendation_changed"`
+	Status                          string                         `json:"status"`
+	CreatedAt                       string                         `json:"created_at"`
+	UpdatedAt                       string                         `json:"updated_at"`
+	Recommendation                  *SelfImprovementRecommendation `json:"recommendation,omitempty"`
+	Items                           []SelfImprovementBundleItem    `json:"items"`
 }
 
 type SelfImprovementBundleItem struct {
@@ -102,12 +102,15 @@ type SelfImprovementBundleItemUpdate struct {
 	ProposedPosition    *int    `json:"proposed_position"`
 }
 
-type SelfImprovementRecommendation = store.SelfImprovementRecommendation
-
 func proposalBundleFromRow(row store.SelfImprovementProposalBundleRow) SelfImprovementProposalBundle {
 	items := make([]SelfImprovementBundleItem, 0, len(row.Items))
 	for _, item := range row.Items {
 		items = append(items, proposalBundleItemFromRow(item))
+	}
+	var recommendation *SelfImprovementRecommendation
+	if row.Recommendation != nil {
+		converted := recommendationFromRow(*row.Recommendation)
+		recommendation = &converted
 	}
 	return SelfImprovementProposalBundle{
 		ID:                              row.ID,
@@ -119,7 +122,7 @@ func proposalBundleFromRow(row store.SelfImprovementProposalBundleRow) SelfImpro
 		Status:                          row.Status,
 		CreatedAt:                       row.CreatedAt,
 		UpdatedAt:                       row.UpdatedAt,
-		Recommendation:                  row.Recommendation,
+		Recommendation:                  recommendation,
 		Items:                           items,
 	}
 }
@@ -168,9 +171,17 @@ func proposalBundleRowFromBundle(bundle SelfImprovementProposalBundle) store.Sel
 		Status:                          bundle.Status,
 		CreatedAt:                       bundle.CreatedAt,
 		UpdatedAt:                       bundle.UpdatedAt,
-		Recommendation:                  bundle.Recommendation,
+		Recommendation:                  recommendationRowPtr(bundle.Recommendation),
 		Items:                           items,
 	}
+}
+
+func recommendationRowPtr(rec *SelfImprovementRecommendation) *store.SelfImprovementRecommendation {
+	if rec == nil {
+		return nil
+	}
+	converted := recommendationRowFromRecommendation(*rec)
+	return &converted
 }
 
 func proposalBundleItemRowFromItem(item SelfImprovementBundleItem) store.SelfImprovementBundleItemRow {
@@ -202,10 +213,11 @@ func proposalBundleItemRowFromItem(item SelfImprovementBundleItem) store.SelfImp
 	}
 }
 func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprovementProposalBundle, error) {
-	rec, err := st.GetSelfImprovementRecommendation(id)
+	recRow, err := st.GetSelfImprovementRecommendation(id)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
+	rec := recommendationFromRow(recRow)
 	if rec.Status != RecommendationStatusAccepted {
 		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
 	}
@@ -284,10 +296,11 @@ func getSelfImprovementProposalBundleFromStore(st *store.Store, id string) (Self
 		return SelfImprovementProposalBundle{}, err
 	}
 	bundle := proposalBundleFromRow(row)
-	rec, err := st.GetSelfImprovementRecommendation(bundle.RecommendationID)
+	recRow, err := st.GetSelfImprovementRecommendation(bundle.RecommendationID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
+	rec := recommendationFromRow(recRow)
 	hash, err := recommendationSnapshotHash(rec)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
@@ -308,8 +321,9 @@ func getSelfImprovementProposalBundle(tx *store.Tx, id string) (SelfImprovementP
 		return SelfImprovementProposalBundle{}, err
 	}
 	bundle := proposalBundleFromRow(row)
-	rec, err := store.GetSelfImprovementRecommendationFrom(tx, bundle.RecommendationID)
+	recRow, err := store.GetSelfImprovementRecommendationFrom(tx, bundle.RecommendationID)
 	if err == nil {
+		rec := recommendationFromRow(recRow)
 		hash, hashErr := recommendationSnapshotHash(rec)
 		if hashErr == nil {
 			bundle.RecommendationChanged = rec.UpdatedAt != bundle.RecommendationUpdatedAtSnapshot || hash != bundle.RecommendationSnapshotHash

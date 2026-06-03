@@ -188,21 +188,21 @@ func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Reque
 // HandleImprovementRecommendations serves GET /improvements/recommendations,
 // the durable review inbox generated from stored feedback evidence.
 func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListSelfImprovementRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
+	rows, err := h.improve.ListRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement recommendations")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if rows == nil {
-		rows = []store.SelfImprovementRecommendation{}
+		rows = []selfimprovement.SelfImprovementRecommendation{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
 }
 
 func (h *Handler) HandleImprovementRecommendation(w http.ResponseWriter, r *http.Request) {
-	rec, err := h.store.GetSelfImprovementRecommendation(mux.Vars(r)["id"])
+	rec, err := h.improve.GetRecommendation(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -298,13 +298,13 @@ func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) HandleImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposals, err := h.store.ListSelfImprovementProposals(mux.Vars(r)["id"])
+	proposals, err := h.improve.ListProposals(mux.Vars(r)["id"])
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
 	}
 	if proposals == nil {
-		proposals = []store.SelfImprovementProposal{}
+		proposals = []selfimprovement.SelfImprovementProposal{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(proposals)
@@ -409,7 +409,7 @@ func (h *Handler) HandleDiscardImprovementProposalBundle(w http.ResponseWriter, 
 	_ = json.NewEncoder(w).Encode(bundle)
 }
 
-func clarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {
+func clarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
 	feedback := rec.Feedback
 	repo := ""
 	number := 0

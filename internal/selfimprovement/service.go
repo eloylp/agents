@@ -18,8 +18,40 @@ func New(st *store.Store) *Service {
 	return &Service{store: st}
 }
 
-func (s *Service) CreateProposal(id string) (store.SelfImprovementProposal, error) {
+func (s *Service) CreateProposal(id string) (SelfImprovementProposal, error) {
 	return createSelfImprovementProposal(s.store, id)
+}
+
+func (s *Service) ListRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
+	rows, err := s.store.ListSelfImprovementRecommendations(workspace, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SelfImprovementRecommendation, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, recommendationFromRow(row))
+	}
+	return out, nil
+}
+
+func (s *Service) GetRecommendation(id string) (SelfImprovementRecommendation, error) {
+	row, err := s.store.GetSelfImprovementRecommendation(id)
+	if err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return recommendationFromRow(row), nil
+}
+
+func (s *Service) ListProposals(recommendationID string) ([]SelfImprovementProposal, error) {
+	rows, err := s.store.ListSelfImprovementProposals(recommendationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SelfImprovementProposal, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, proposalFromRow(row))
+	}
+	return out, nil
 }
 
 func (s *Service) CreateProposalBundle(id string) (SelfImprovementProposalBundle, error) {
@@ -30,16 +62,15 @@ func (s *Service) GetProposalBundle(id string) (SelfImprovementProposalBundle, e
 	return getSelfImprovementProposalBundleFromStore(s.store, id)
 }
 
-func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([]store.SelfImprovementRecommendation, error) {
-	recs, err := s.store.ListSelfImprovementRecommendations(workspace, "", limit)
+func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+	recs, err := s.ListRecommendations(workspace, "", limit)
 	if err != nil {
 		return nil, err
 	}
 	for i := range recs {
 		bundle, err := s.GetProposalBundle(recs[i].ID)
 		if err == nil {
-			row := proposalBundleRowFromBundle(bundle)
-			recs[i].ProposalBundle = &row
+			recs[i].ProposalBundle = &bundle
 			continue
 		}
 		var nf *store.ErrNotFound
@@ -49,6 +80,18 @@ func (s *Service) ListRecommendationsWithBundles(workspace string, limit int) ([
 		return nil, err
 	}
 	return recs, nil
+}
+
+func (s *Service) ListRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+	rows, err := s.store.ListSelfImprovementRecommendationsWithProposals(workspace, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SelfImprovementRecommendation, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, recommendationFromRow(row))
+	}
+	return out, nil
 }
 
 func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {

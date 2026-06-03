@@ -14,7 +14,6 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/selfimprovement"
-	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -74,7 +73,7 @@ func toolListImprovementRecommendations(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace, _ := trimmedStringOptional(req, "workspace")
 		status, _ := trimmedStringOptional(req, "status")
-		rows, err := deps.Store.ListSelfImprovementRecommendations(workspace, status, 100)
+		rows, err := deps.Improvements.ListRecommendations(workspace, status, 100)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations", err), nil
 		}
@@ -88,7 +87,7 @@ func toolGetImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("id is required"), nil
 		}
-		rec, err := deps.Store.GetSelfImprovementRecommendation(id)
+		rec, err := deps.Improvements.GetRecommendation(id)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get improvement recommendation", err), nil
 		}
@@ -163,7 +162,7 @@ func toolClarifyImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func mcpClarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {
+func mcpClarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
 	feedback := rec.Feedback
 	repo := ""
 	number := 0
@@ -217,7 +216,7 @@ func toolGetImprovementProposal(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("recommendation_id is required"), nil
 		}
-		proposals, err := deps.Store.ListSelfImprovementProposals(id)
+		proposals, err := deps.Improvements.ListProposals(id)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get improvement proposal", err), nil
 		}
@@ -228,7 +227,7 @@ func toolGetImprovementProposal(deps Deps) server.ToolHandlerFunc {
 func toolListImprovementRecommendationsWithProposals(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace, _ := trimmedStringOptional(req, "workspace")
-		rows, err := deps.Store.ListSelfImprovementRecommendationsWithProposals(workspace, 100)
+		rows, err := deps.Improvements.ListRecommendationsWithProposals(workspace, 100)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with proposals", err), nil
 		}

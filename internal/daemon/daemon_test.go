@@ -276,7 +276,7 @@ func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix s
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := selfimprovement.New(st).RecordRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := selfimprovement.New(st).RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",

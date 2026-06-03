@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -17,7 +18,78 @@ const (
 	RecommendationStatusFailed         = "failed"
 )
 
-type SelfImprovementRecommendationInput = store.SelfImprovementRecommendationInput
+type SelfImprovementRecommendation struct {
+	ID                      string                         `json:"id"`
+	WorkspaceID             string                         `json:"workspace"`
+	FeedbackEventID         int64                          `json:"feedback_event_id"`
+	Type                    string                         `json:"type"`
+	Status                  string                         `json:"status"`
+	Confidence              string                         `json:"confidence"`
+	Risk                    string                         `json:"risk"`
+	Finding                 string                         `json:"finding"`
+	NormalizedLesson        string                         `json:"normalized_lesson"`
+	Rationale               string                         `json:"rationale"`
+	EvidenceFeedbackIDs     []int64                        `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs      []string                       `json:"evidence_source_urls"`
+	AttributionConfidence   string                         `json:"attribution_confidence"`
+	TargetAssetType         string                         `json:"target_asset_type,omitempty"`
+	TargetAssetID           string                         `json:"target_asset_id,omitempty"`
+	TargetBaseVersionID     string                         `json:"target_base_version_id,omitempty"`
+	ProposedPatch           string                         `json:"proposed_patch,omitempty"`
+	ProposedNewBody         string                         `json:"proposed_new_body,omitempty"`
+	SuggestedRolloutScope   string                         `json:"suggested_rollout_scope,omitempty"`
+	AnalyzerPromptRef       string                         `json:"analyzer_prompt_ref"`
+	AnalyzerPromptVersionID string                         `json:"analyzer_prompt_version_id,omitempty"`
+	StructuredOutput        map[string]any                 `json:"structured_output,omitempty"`
+	Error                   string                         `json:"error,omitempty"`
+	CreatedAt               string                         `json:"created_at"`
+	UpdatedAt               string                         `json:"updated_at"`
+	Feedback                *store.SelfImprovementFeedback `json:"feedback,omitempty"`
+	Clarification           *SelfImprovementClarification  `json:"clarification,omitempty"`
+	ProposalBundle          *SelfImprovementProposalBundle `json:"proposal_bundle,omitempty"`
+}
+
+type SelfImprovementClarification struct {
+	RecommendationID string `json:"recommendation_id"`
+	Author           string `json:"author"`
+	Body             string `json:"body"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+type SelfImprovementRecommendationInput struct {
+	WorkspaceID             string
+	FeedbackEventID         int64
+	Type                    string
+	Status                  string
+	Confidence              string
+	Risk                    string
+	Finding                 string
+	NormalizedLesson        string
+	Rationale               string
+	EvidenceFeedbackIDs     []int64
+	EvidenceSourceURLs      []string
+	AttributionConfidence   string
+	TargetAssetType         string
+	TargetAssetID           string
+	TargetBaseVersionID     string
+	ProposedPatch           string
+	ProposedNewBody         string
+	SuggestedRolloutScope   string
+	AnalyzerPromptRef       string
+	AnalyzerPromptVersionID string
+	StructuredOutput        map[string]any
+	Error                   string
+}
+
+type SelfImprovementProposal struct {
+	RecommendationID string                `json:"recommendation_id"`
+	TargetAssetType  string                `json:"target_asset_type"`
+	TargetAssetID    string                `json:"target_asset_id"`
+	BaseVersionID    string                `json:"base_version_id,omitempty"`
+	BaseVersion      *fleet.CatalogVersion `json:"base_version,omitempty"`
+	Version          fleet.CatalogVersion  `json:"version"`
+}
 
 func RecommendationFromFeedback(feedback store.SelfImprovementFeedback) SelfImprovementRecommendationInput {
 	finding := firstFeedbackLine(feedback.RawBody)
@@ -93,14 +165,15 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	in.AttributionConfidence = defaultString(in.AttributionConfidence, "unresolved")
 	in.AnalyzerPromptRef = defaultString(in.AnalyzerPromptRef, "prompt_self-improvement-analyst")
 	if err := s.store.Transact(func(tx *store.Tx) error {
-		if err := store.UpsertSelfImprovementRecommendationRow(tx, in); err != nil {
+		if err := store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in)); err != nil {
 			return err
 		}
 		return store.UpdateSelfImprovementFeedbackStatusRow(tx, in.FeedbackEventID, store.FeedbackStatusAnalyzed)
 	}); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	return s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID)
+	row, err := s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID)
+	return recommendationFromRow(row), err
 }
 
 func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
@@ -113,7 +186,7 @@ func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovement
 	}); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	return s.store.GetSelfImprovementRecommendation(id)
+	return s.GetRecommendation(id)
 }
 
 func (s *Service) UpsertClarification(recommendationID, author, body string) (SelfImprovementRecommendation, error) {
@@ -136,7 +209,141 @@ func (s *Service) UpsertClarification(recommendationID, author, body string) (Se
 	}); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	return s.store.GetSelfImprovementRecommendation(recommendationID)
+	return s.GetRecommendation(recommendationID)
+}
+
+func recommendationInputRow(in SelfImprovementRecommendationInput) store.SelfImprovementRecommendationInput {
+	return store.SelfImprovementRecommendationInput{
+		WorkspaceID:             in.WorkspaceID,
+		FeedbackEventID:         in.FeedbackEventID,
+		Type:                    in.Type,
+		Status:                  in.Status,
+		Confidence:              in.Confidence,
+		Risk:                    in.Risk,
+		Finding:                 in.Finding,
+		NormalizedLesson:        in.NormalizedLesson,
+		Rationale:               in.Rationale,
+		EvidenceFeedbackIDs:     in.EvidenceFeedbackIDs,
+		EvidenceSourceURLs:      in.EvidenceSourceURLs,
+		AttributionConfidence:   in.AttributionConfidence,
+		TargetAssetType:         in.TargetAssetType,
+		TargetAssetID:           in.TargetAssetID,
+		TargetBaseVersionID:     in.TargetBaseVersionID,
+		ProposedPatch:           in.ProposedPatch,
+		ProposedNewBody:         in.ProposedNewBody,
+		SuggestedRolloutScope:   in.SuggestedRolloutScope,
+		AnalyzerPromptRef:       in.AnalyzerPromptRef,
+		AnalyzerPromptVersionID: in.AnalyzerPromptVersionID,
+		StructuredOutput:        in.StructuredOutput,
+		Error:                   in.Error,
+	}
+}
+
+func recommendationFromRow(row store.SelfImprovementRecommendation) SelfImprovementRecommendation {
+	var clarification *SelfImprovementClarification
+	if row.Clarification != nil {
+		clarification = &SelfImprovementClarification{
+			RecommendationID: row.Clarification.RecommendationID,
+			Author:           row.Clarification.Author,
+			Body:             row.Clarification.Body,
+			CreatedAt:        row.Clarification.CreatedAt,
+			UpdatedAt:        row.Clarification.UpdatedAt,
+		}
+	}
+	var bundle *SelfImprovementProposalBundle
+	if row.ProposalBundle != nil {
+		converted := proposalBundleFromRow(*row.ProposalBundle)
+		bundle = &converted
+	}
+	return SelfImprovementRecommendation{
+		ID:                      row.ID,
+		WorkspaceID:             row.WorkspaceID,
+		FeedbackEventID:         row.FeedbackEventID,
+		Type:                    row.Type,
+		Status:                  row.Status,
+		Confidence:              row.Confidence,
+		Risk:                    row.Risk,
+		Finding:                 row.Finding,
+		NormalizedLesson:        row.NormalizedLesson,
+		Rationale:               row.Rationale,
+		EvidenceFeedbackIDs:     row.EvidenceFeedbackIDs,
+		EvidenceSourceURLs:      row.EvidenceSourceURLs,
+		AttributionConfidence:   row.AttributionConfidence,
+		TargetAssetType:         row.TargetAssetType,
+		TargetAssetID:           row.TargetAssetID,
+		TargetBaseVersionID:     row.TargetBaseVersionID,
+		ProposedPatch:           row.ProposedPatch,
+		ProposedNewBody:         row.ProposedNewBody,
+		SuggestedRolloutScope:   row.SuggestedRolloutScope,
+		AnalyzerPromptRef:       row.AnalyzerPromptRef,
+		AnalyzerPromptVersionID: row.AnalyzerPromptVersionID,
+		StructuredOutput:        row.StructuredOutput,
+		Error:                   row.Error,
+		CreatedAt:               row.CreatedAt,
+		UpdatedAt:               row.UpdatedAt,
+		Feedback:                row.Feedback,
+		Clarification:           clarification,
+		ProposalBundle:          bundle,
+	}
+}
+
+func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) store.SelfImprovementRecommendation {
+	var clarification *store.SelfImprovementClarification
+	if rec.Clarification != nil {
+		clarification = &store.SelfImprovementClarification{
+			RecommendationID: rec.Clarification.RecommendationID,
+			Author:           rec.Clarification.Author,
+			Body:             rec.Clarification.Body,
+			CreatedAt:        rec.Clarification.CreatedAt,
+			UpdatedAt:        rec.Clarification.UpdatedAt,
+		}
+	}
+	var bundle *store.SelfImprovementProposalBundleRow
+	if rec.ProposalBundle != nil {
+		converted := proposalBundleRowFromBundle(*rec.ProposalBundle)
+		bundle = &converted
+	}
+	return store.SelfImprovementRecommendation{
+		ID:                      rec.ID,
+		WorkspaceID:             rec.WorkspaceID,
+		FeedbackEventID:         rec.FeedbackEventID,
+		Type:                    rec.Type,
+		Status:                  rec.Status,
+		Confidence:              rec.Confidence,
+		Risk:                    rec.Risk,
+		Finding:                 rec.Finding,
+		NormalizedLesson:        rec.NormalizedLesson,
+		Rationale:               rec.Rationale,
+		EvidenceFeedbackIDs:     rec.EvidenceFeedbackIDs,
+		EvidenceSourceURLs:      rec.EvidenceSourceURLs,
+		AttributionConfidence:   rec.AttributionConfidence,
+		TargetAssetType:         rec.TargetAssetType,
+		TargetAssetID:           rec.TargetAssetID,
+		TargetBaseVersionID:     rec.TargetBaseVersionID,
+		ProposedPatch:           rec.ProposedPatch,
+		ProposedNewBody:         rec.ProposedNewBody,
+		SuggestedRolloutScope:   rec.SuggestedRolloutScope,
+		AnalyzerPromptRef:       rec.AnalyzerPromptRef,
+		AnalyzerPromptVersionID: rec.AnalyzerPromptVersionID,
+		StructuredOutput:        rec.StructuredOutput,
+		Error:                   rec.Error,
+		CreatedAt:               rec.CreatedAt,
+		UpdatedAt:               rec.UpdatedAt,
+		Feedback:                rec.Feedback,
+		Clarification:           clarification,
+		ProposalBundle:          bundle,
+	}
+}
+
+func proposalFromRow(row store.SelfImprovementProposal) SelfImprovementProposal {
+	return SelfImprovementProposal{
+		RecommendationID: row.RecommendationID,
+		TargetAssetType:  row.TargetAssetType,
+		TargetAssetID:    row.TargetAssetID,
+		BaseVersionID:    row.BaseVersionID,
+		BaseVersion:      row.BaseVersion,
+		Version:          row.Version,
+	}
 }
 
 func defaultString(value, fallback string) string {

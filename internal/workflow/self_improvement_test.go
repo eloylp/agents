@@ -169,8 +169,8 @@ func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
 		WorkspaceID: "default",
 		RawBody:     "This guidance is too vague /agents improve",
 	}
-	prior := &store.SelfImprovementRecommendation{ID: "rec_17", FeedbackEventID: feedback.ID}
-	clarification := &store.SelfImprovementClarification{
+	prior := &selfimprovement.SelfImprovementRecommendation{ID: "rec_17", FeedbackEventID: feedback.ID}
+	clarification := &selfimprovement.SelfImprovementClarification{
 		RecommendationID: prior.ID,
 		Body:             "Scope it only to refactorer prompts.",
 	}

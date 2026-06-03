@@ -8,13 +8,12 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-type SelfImprovementProposal = store.SelfImprovementProposal
-
 func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementProposal, error) {
-	rec, err := st.GetSelfImprovementRecommendation(id)
+	recRow, err := st.GetSelfImprovementRecommendation(id)
 	if err != nil {
 		return SelfImprovementProposal{}, err
 	}
+	rec := recommendationFromRow(recRow)
 	if rec.Status != RecommendationStatusAccepted {
 		return SelfImprovementProposal{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal"}
 	}
@@ -24,7 +23,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 	if existing, err := st.ListSelfImprovementProposals(rec.ID); err != nil {
 		return SelfImprovementProposal{}, err
 	} else if len(existing) > 0 {
-		return existing[0], nil
+		return proposalFromRow(existing[0]), nil
 	}
 	targetType := strings.TrimSpace(rec.TargetAssetType)
 	targetID := strings.TrimSpace(rec.TargetAssetID)
@@ -98,7 +97,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 	}, nil
 }
 
-func ensureRecommendationBaseVersion(rec store.SelfImprovementRecommendation, currentVersionID string) error {
+func ensureRecommendationBaseVersion(rec SelfImprovementRecommendation, currentVersionID string) error {
 	if rec.TargetBaseVersionID == "" {
 		return &store.ErrValidation{Msg: "recommendation base version is required; re-analyze feedback before creating a proposal"}
 	}
