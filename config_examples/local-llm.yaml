@@ -36,6 +36,11 @@ skills:
   testing:
     prompt: |
       Focus on behavioral regressions, missing tests, and weak assertions.
+  go-api:
+    prompt: |
+      For Go HTTP APIs, route each HTTP method to a distinct handler function.
+      Keep handlers thin: decode and validate input, call the service layer, and encode the response.
+      Avoid combined method-switch handlers; method policy should stay explicit and testable at the route boundary.
 
 prompts:
   - name: refactorer
@@ -50,7 +55,7 @@ workspaces:
       - name: refactorer
         backend: claude_local
         description: "Cleans up code style and small refactors using the local model"
-        skills: [architect, testing]
+        skills: [architect, testing, go-api]
         prompt_ref: refactorer
         scope_type: workspace
         allow_prs: true

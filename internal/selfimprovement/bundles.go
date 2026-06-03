@@ -336,17 +336,17 @@ func getSelfImprovementProposalBundle(tx *store.Tx, id string) (SelfImprovementP
 	return bundle, nil
 }
 
-func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
+func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, bool, error) {
 	bundle, item, err := getBundleAndItem(st, bundleID, itemID)
 	if err != nil {
-		return SelfImprovementProposalBundle{}, err
+		return SelfImprovementProposalBundle{}, false, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundle items can be edited"}
+		return SelfImprovementProposalBundle{}, false, &store.ErrValidation{Msg: "only pending proposal bundle items can be edited"}
 	}
 	body := strings.TrimSpace(in.ProposedBody)
 	if body == "" {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "proposal bundle item body is required"}
+		return SelfImprovementProposalBundle{}, false, &store.ErrValidation{Msg: "proposal bundle item body is required"}
 	}
 	ref, name, scope := item.ProposedRef, item.ProposedName, item.ProposedScope
 	description, enabled, position := item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition
@@ -375,6 +375,10 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 	after := item
 	after.ProposedRef, after.ProposedName, after.ProposedScope = ref, name, scope
 	after.ProposedBody, after.ProposedDescription, after.ProposedEnabled, after.ProposedPosition = body, description, enabled, position
+	if proposalBundleItemDraftEqual(item, after) {
+		bundle, err = getSelfImprovementProposalBundleFromStore(st, bundle.ID)
+		return bundle, false, err
+	}
 	if err := st.Transact(func(tx *store.Tx) error {
 		if item.Operation == ProposalBundleOperationCreateNew {
 			if err := validateBundleCreateNew(tx, bundle.WorkspaceID, SelfImprovementBundleItemInput{
@@ -395,9 +399,20 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 		}
 		return insertBundleItemEvent(tx, bundle.ID, item.ID, "edited", actor, "", bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after))
 	}); err != nil {
-		return SelfImprovementProposalBundle{}, err
+		return SelfImprovementProposalBundle{}, false, err
 	}
-	return getSelfImprovementProposalBundleFromStore(st, bundle.ID)
+	bundle, err = getSelfImprovementProposalBundleFromStore(st, bundle.ID)
+	return bundle, true, err
+}
+
+func proposalBundleItemDraftEqual(a, b SelfImprovementBundleItem) bool {
+	return a.ProposedRef == b.ProposedRef &&
+		a.ProposedName == b.ProposedName &&
+		a.ProposedScope == b.ProposedScope &&
+		a.ProposedBody == b.ProposedBody &&
+		a.ProposedDescription == b.ProposedDescription &&
+		a.ProposedEnabled == b.ProposedEnabled &&
+		a.ProposedPosition == b.ProposedPosition
 }
 
 func rejectSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {

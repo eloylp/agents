@@ -54,6 +54,7 @@ interface Recommendation {
   updated_at: string
   feedback?: FeedbackEvent
   clarification?: Clarification
+  memory_influences?: AssistantMemory[]
 }
 
 interface CatalogVersion {
@@ -117,7 +118,22 @@ interface ProposalBundle {
   items?: ProposalBundleItem[]
 }
 
-type Tab = 'inbox' | 'recommendations' | 'history'
+interface AssistantMemory {
+  id: string
+  workspace: string
+  key: string
+  value: string
+  status: string
+  evidence_type: string
+  evidence_id?: string
+  evidence_url?: string
+  confidence: string
+  proposed_by?: string
+  rejected_reason?: string
+  updated_at: string
+}
+
+type Tab = 'inbox' | 'recommendations' | 'memory' | 'history'
 
 interface BundleItemDraft {
   proposed_ref: string
@@ -213,6 +229,20 @@ function bundleItemDraft(item: ProposalBundleItem, drafts: Record<string, Bundle
   }
 }
 
+function normalizedDraftText(value?: string) {
+  return (value ?? '').trim()
+}
+
+function bundleItemDraftChanged(item: ProposalBundleItem, draft: BundleItemDraft) {
+  return normalizedDraftText(draft.proposed_ref) !== normalizedDraftText(item.proposed_ref) ||
+    normalizedDraftText(draft.proposed_name) !== normalizedDraftText(item.proposed_name) ||
+    normalizedDraftText(draft.proposed_scope) !== normalizedDraftText(item.proposed_scope) ||
+    normalizedDraftText(draft.proposed_body) !== normalizedDraftText(item.proposed_body) ||
+    normalizedDraftText(draft.proposed_description) !== normalizedDraftText(item.proposed_description) ||
+    draft.proposed_enabled !== (item.proposed_enabled ?? true) ||
+    draft.proposed_position !== (item.proposed_position ?? 100)
+}
+
 function bundleItemDraftBody(item: ProposalBundleItem, draft: BundleItemDraft) {
   if (item.asset_type !== 'guardrail') return draft.proposed_body
   return [
@@ -226,6 +256,7 @@ function bundleItemDraftBody(item: ProposalBundleItem, draft: BundleItemDraft) {
 export default function ImprovementsPage() {
   const [feedback, setFeedback] = useState<FeedbackEvent[]>([])
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
+  const [memory, setMemory] = useState<AssistantMemory[]>([])
   const [proposals, setProposals] = useState<Record<string, ImprovementProposal[]>>({})
   const [bundles, setBundles] = useState<Record<string, ProposalBundle>>({})
   const [itemDrafts, setItemDrafts] = useState<Record<string, BundleItemDraft>>({})
@@ -240,6 +271,7 @@ export default function ImprovementsPage() {
   const [clarificationSaving, setClarificationSaving] = useState(false)
   const [bundleDecision, setBundleDecision] = useState<BundleDecisionModal | null>(null)
   const [bundleDecisionSaving, setBundleDecisionSaving] = useState(false)
+  const [memoryDraft, setMemoryDraft] = useState({ key: '', value: '', confidence: 'medium' })
 
   const load = () => {
     setLoading(true)
@@ -247,9 +279,11 @@ export default function ImprovementsPage() {
     Promise.all([
       fetch(`/improvements/feedback${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
       fetch(`/improvements/recommendations${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch('/improvements/memory', { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
     ])
-      .then(([feedbackRows, recommendationRows]) => {
+      .then(([feedbackRows, recommendationRows, memoryRows]) => {
         setFeedback(feedbackRows ?? [])
+        setMemory(memoryRows ?? [])
         const recs = recommendationRows ?? []
         setRecommendations(recs)
         return Promise.all(recs.map((row: Recommendation) => Promise.all([
@@ -265,6 +299,7 @@ export default function ImprovementsPage() {
       .catch(() => {
         setFeedback([])
         setRecommendations([])
+        setMemory([])
         setProposals({})
         setBundles({})
       })
@@ -415,7 +450,7 @@ export default function ImprovementsPage() {
   const linkPublishedSkillToAgent = async (row: Recommendation, item: ProposalBundleItem) => {
     const agentName = (row.feedback?.linked_agent_name || '').trim()
     const skillRef = skillRefForItem(item)
-    const targetWorkspace = row.feedback?.workspace || row.workspace || 'default'
+    const targetWorkspace = row.feedback?.workspace || 'default'
     if (!agentName || !skillRef || linkingSkillItem) return
     setLinkingSkillItem(item.id)
     setActionMessage(null)
@@ -441,6 +476,37 @@ export default function ImprovementsPage() {
     } finally {
       setLinkingSkillItem(null)
     }
+  }
+
+  const createMemory = async () => {
+    if (!memoryDraft.key.trim() || !memoryDraft.value.trim()) return
+    const res = await fetch('/improvements/memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...memoryDraft, status: 'active', evidence_type: 'manual_user_entry' }),
+    })
+    if (res.ok) {
+      setMemoryDraft({ key: '', value: '', confidence: 'medium' })
+      load()
+    }
+  }
+
+  const updateMemory = async (row: AssistantMemory, patch: Partial<AssistantMemory>) => {
+    const res = await fetch(`/improvements/memory/${encodeURIComponent(row.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (res.ok) load()
+  }
+
+  const postMemoryAction = async (id: string, action: 'approve' | 'reject' | 'archive') => {
+    const res = await fetch(`/improvements/memory/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: action === 'reject' ? JSON.stringify({ reason: 'Rejected in dashboard' }) : undefined,
+    })
+    if (res.ok) load()
   }
 
   const canCreateProposal = (row: Recommendation) =>
@@ -472,7 +538,7 @@ export default function ImprovementsPage() {
         <div>
           <h1 style={{ fontSize: '1.45rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Improvements</h1>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            {loading ? 'Loading' : `${shownRecommendations.length} recommendations · ${feedback.length} feedback events`}
+            {loading ? 'Loading' : `${shownRecommendations.length} recommendations · ${feedback.length} feedback events · ${memory.length} memory entries`}
             {Object.keys(counts).length > 0 ? ` · ${Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(' · ')}` : ''}
           </div>
         </div>
@@ -501,12 +567,12 @@ export default function ImprovementsPage() {
       )}
 
       <nav style={{ display: 'flex', gap: 8 }}>
-        {(['inbox', 'recommendations', 'history'] as Tab[]).map(next => (
+        {(['inbox', 'recommendations', 'memory', 'history'] as Tab[]).map(next => (
           <button key={next} onClick={() => setTab(next)} style={{ padding: '7px 10px', border: '1px solid var(--border)', background: tab === next ? 'var(--bg-active)' : 'var(--bg-card)', color: 'var(--text)', borderRadius: 6, textTransform: 'capitalize' }}>{next}</button>
         ))}
       </nav>
 
-      {tab !== 'history' && (
+      {(tab === 'inbox' || tab === 'recommendations') && (
         <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '130px 92px 1fr 150px 190px', gap: '0.75rem', padding: '0.65rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>
             <span>Updated</span>
@@ -529,6 +595,13 @@ export default function ImprovementsPage() {
                 <strong style={{ color: 'var(--text-heading)' }}>{row.finding}</strong>
                 {!isCollapsed && <span style={{ color: 'var(--text)' }}>{row.rationale}</span>}
                 {!isCollapsed && row.feedback?.source_url && <a href={row.feedback.source_url} target="_blank" rel="noreferrer">{row.feedback.repo_owner}/{row.feedback.repo_name} feedback #{row.feedback_event_id}</a>}
+                {!isCollapsed && (row.memory_influences ?? []).length > 0 && (
+                  <div style={{ display: 'grid', gap: 4, color: 'var(--text-muted)' }}>
+                    {(row.memory_influences ?? []).map(memoryRow => (
+                      <span key={memoryRow.id || memoryRow.key}>Memory {memoryRow.key}: {memoryRow.value}</span>
+                    ))}
+                  </div>
+                )}
                 {!isCollapsed && (row.proposed_patch || row.proposed_new_body) && <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'var(--text)', fontSize: '0.76rem' }}>{row.proposed_patch || row.proposed_new_body}</pre>}
                 {!isCollapsed && proposal && (
                   <div style={{ display: 'grid', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
@@ -606,7 +679,13 @@ export default function ImprovementsPage() {
                           {item.decision_reason && <div style={{ color: 'var(--text-muted)' }}>{item.decision_reason}</div>}
                           {bundles[row.id].status === 'pending' && (
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              <button onClick={() => editBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Save Item</button>
+                              <button
+                                disabled={!bundleItemDraftChanged(item, draft)}
+                                onClick={() => editBundleItem(bundles[row.id].id!, item)}
+                                style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, opacity: bundleItemDraftChanged(item, draft) ? 1 : 0.55 }}
+                              >
+                                Save Item
+                              </button>
                               <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), proposed_body: item.analyst_proposed_body } }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
                               <button onClick={() => openRejectBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>
                               {item.operation === 'create_new' && <button onClick={() => openLinkBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
@@ -713,6 +792,57 @@ export default function ImprovementsPage() {
             </div>
           </section>
         </div>
+      )}
+
+      {tab === 'memory' && (
+        <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 120px 170px', gap: '0.75rem', padding: '0.65rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>
+            <span>Key</span>
+            <span>Value</span>
+            <span>Status</span>
+            <span>Actions</span>
+          </div>
+          <article style={{ display: 'grid', gridTemplateColumns: '180px 1fr 120px 170px', gap: '0.75rem', padding: '0.75rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.8rem', alignItems: 'start' }}>
+            <input aria-label="Memory key" value={memoryDraft.key} onChange={e => setMemoryDraft(current => ({ ...current, key: e.target.value }))} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit' }} />
+            <textarea aria-label="Memory value" value={memoryDraft.value} onChange={e => setMemoryDraft(current => ({ ...current, value: e.target.value }))} rows={3} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', resize: 'vertical' }} />
+            <select aria-label="Memory confidence" value={memoryDraft.confidence} onChange={e => setMemoryDraft(current => ({ ...current, confidence: e.target.value }))} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 9px' }}>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+            <button onClick={createMemory} disabled={!memoryDraft.key.trim() || !memoryDraft.value.trim()} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6, opacity: !memoryDraft.key.trim() || !memoryDraft.value.trim() ? 0.6 : 1 }}>Add Memory</button>
+          </article>
+          {memory.map(row => (
+            <article key={row.id} style={{ display: 'grid', gridTemplateColumns: '180px 1fr 120px 170px', gap: '0.75rem', padding: '0.75rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.8rem', alignItems: 'start' }}>
+              <input aria-label={`Memory key for ${row.id}`} defaultValue={row.key} onBlur={e => e.target.value !== row.key && updateMemory(row, { key: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit' }} />
+              <div style={{ display: 'grid', gap: 6 }}>
+                <textarea aria-label={`Memory value for ${row.id}`} defaultValue={row.value} onBlur={e => e.target.value !== row.value && updateMemory(row, { value: e.target.value })} rows={3} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', resize: 'vertical' }} />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', color: 'var(--text-muted)' }}>
+                  <span>{row.evidence_type}{row.evidence_id ? ` ${row.evidence_id}` : ''}</span>
+                  {row.evidence_url && <a href={row.evidence_url} target="_blank" rel="noreferrer">evidence</a>}
+                  <span>{new Date(row.updated_at).toLocaleString()}</span>
+                  {row.rejected_reason && <span>{row.rejected_reason}</span>}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                <strong style={{ color: row.status === 'active' ? 'var(--success)' : 'var(--text-muted)' }}>{row.status}</strong>
+                <select aria-label={`Memory confidence for ${row.id}`} value={row.confidence} onChange={e => updateMemory(row, { confidence: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 8px' }}>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {row.status === 'proposed' && <button onClick={() => postMemoryAction(row.id, 'approve')} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Approve</button>}
+                {row.status === 'proposed' && <button onClick={() => postMemoryAction(row.id, 'reject')} style={{ padding: '6px 8px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>}
+                {row.status !== 'archived' && <button onClick={() => postMemoryAction(row.id, 'archive')} style={{ padding: '6px 8px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Archive</button>}
+              </div>
+            </article>
+          ))}
+          {!loading && memory.length === 0 && (
+            <div style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No memory entries.</div>
+          )}
+        </section>
       )}
 
       {bundleDecision && (

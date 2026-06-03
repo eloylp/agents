@@ -95,21 +95,59 @@ func (s *Service) ListRecommendationsWithProposals(workspace string, limit int) 
 }
 
 func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
-	return updateSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, in, actor)
+	bundle, changed, err := updateSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, in, actor)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if changed {
+		err = s.proposeMemoryFromProposalBundleDecision(bundle, itemID, "edited_proposal_bundle_item")
+	}
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	return bundle, nil
 }
 
 func (s *Service) RejectProposalBundleItem(bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
-	return rejectSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, reason, actor)
+	bundle, err := rejectSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, reason, actor)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := s.proposeMemoryFromProposalBundleDecision(bundle, itemID, "rejected_proposal_bundle_item"); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	return bundle, nil
 }
 
 func (s *Service) LinkProposalBundleItem(bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
-	return linkSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, assetID, reason, actor)
+	bundle, err := linkSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, assetID, reason, actor)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := s.proposeMemoryFromProposalBundleDecision(bundle, itemID, "linked_existing_proposal_bundle_item"); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	return bundle, nil
 }
 
 func (s *Service) PublishProposalBundle(bundleID, actor string) (SelfImprovementProposalBundle, error) {
-	return publishSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
+	bundle, err := publishSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := s.proposeMemoryFromProposalBundleDecision(bundle, "", "published_proposal_bundle"); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	return bundle, nil
 }
 
 func (s *Service) DiscardProposalBundle(bundleID, actor string) (SelfImprovementProposalBundle, error) {
-	return discardSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
+	bundle, err := discardSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
+	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := s.proposeMemoryFromProposalBundleDecision(bundle, "", "discarded_proposal_bundle"); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	return bundle, nil
 }

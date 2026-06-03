@@ -140,6 +140,12 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodPost, "/improvements/recommendations/rec_1/clarification"},
 		{http.MethodPost, "/improvements/recommendations/rec_1/proposal-bundle"},
 		{http.MethodGet, "/improvements/recommendations/rec_1/proposal-bundle"},
+		{http.MethodGet, "/improvements/memory"},
+		{http.MethodPost, "/improvements/memory"},
+		{http.MethodPatch, "/improvements/memory/mem_1"},
+		{http.MethodPost, "/improvements/memory/mem_1/approve"},
+		{http.MethodPost, "/improvements/memory/mem_1/reject"},
+		{http.MethodPost, "/improvements/memory/mem_1/archive"},
 		{http.MethodPatch, "/improvements/proposal-bundles/bundle_1/items/item_1"},
 		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/reject"},
 		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/link-existing"},
@@ -159,6 +165,16 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 				t.Fatalf("route not registered")
 			}
 		})
+	}
+}
+
+func TestBuildRouterDoesNotRegisterDeleteImprovementMemoryArchive(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	req := httptest.NewRequest(http.MethodDelete, "/improvements/memory/mem_1/archive", nil)
+	if srv.Router().Match(req, &mux.RouteMatch{}) {
+		t.Fatal("DELETE /improvements/memory/{id}/archive is registered, want POST-only archive route")
 	}
 }
 

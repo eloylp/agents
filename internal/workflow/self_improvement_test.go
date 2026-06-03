@@ -225,13 +225,23 @@ func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
 		Body:             "Scope it only to refactorer prompts.",
 	}
 
-	input := selfImprovementAnalysisInput(feedback, prior, clarification, nil)
+	memory := []selfimprovement.AssistantMemory{{
+		ID:          "mem-1",
+		WorkspaceID: "default",
+		Key:         "prefer_skills",
+		Value:       "Prefer reusable skills.",
+		Status:      selfimprovement.MemoryStatusActive,
+	}}
+	input := selfImprovementAnalysisInput(feedback, prior, clarification, nil, memory)
 
 	if input.AnalysisMode != selfImprovementAnalysisModeClarification || !input.ClarificationPresent {
 		t.Fatalf("assistant input mode = %q clarification_present=%v, want clarification", input.AnalysisMode, input.ClarificationPresent)
 	}
 	if input.PriorRecommendation != prior || input.Clarification != clarification {
 		t.Fatalf("assistant input prior=%+v clarification=%+v, want provided objects", input.PriorRecommendation, input.Clarification)
+	}
+	if len(input.AssistantPreferenceMemory) != 1 || input.CurrentInstructionOverride == "" {
+		t.Fatalf("assistant memory input = %+v override=%q, want memory plus override", input.AssistantPreferenceMemory, input.CurrentInstructionOverride)
 	}
 }
 

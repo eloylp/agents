@@ -410,6 +410,120 @@ func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandler
 	}
 }
 
+func toolListImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		status, _ := trimmedStringOptional(req, "status")
+		rows, err := deps.Improvements.ListMemory("", status, 200)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list improvement memory", err), nil
+		}
+		return jsonResult(nilSafe(rows))
+	}
+}
+
+func toolCreateImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		key, ok := trimmedString(req, "key")
+		if !ok {
+			return mcpgo.NewToolResultError("key is required"), nil
+		}
+		value, ok := trimmedString(req, "value")
+		if !ok {
+			return mcpgo.NewToolResultError("value is required"), nil
+		}
+		status, _ := trimmedStringOptional(req, "status")
+		evidenceType, _ := trimmedStringOptional(req, "evidence_type")
+		evidenceID, _ := trimmedStringOptional(req, "evidence_id")
+		evidenceURL, _ := trimmedStringOptional(req, "evidence_url")
+		confidence, _ := trimmedStringOptional(req, "confidence")
+		row, err := deps.Improvements.CreateMemory(selfimprovement.AssistantMemoryInput{
+			Key:          key,
+			Value:        value,
+			Status:       status,
+			EvidenceType: evidenceType,
+			EvidenceID:   evidenceID,
+			EvidenceURL:  evidenceURL,
+			Confidence:   confidence,
+			ProposedBy:   "mcp",
+		})
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create improvement memory", err), nil
+		}
+		return jsonResult(row)
+	}
+}
+
+func toolUpdateImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		args := req.GetArguments()
+		update := selfimprovement.AssistantMemoryUpdate{}
+		if v, ok := stringPtrArg(args, "key"); ok {
+			next := strings.TrimSpace(*v)
+			update.Key = &next
+		}
+		if v, ok := stringPtrArg(args, "value"); ok {
+			next := strings.TrimSpace(*v)
+			update.Value = &next
+		}
+		if v, ok := stringPtrArg(args, "confidence"); ok {
+			next := strings.TrimSpace(*v)
+			update.Confidence = &next
+		}
+		row, err := deps.Improvements.UpdateMemory(id, update)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update improvement memory", err), nil
+		}
+		return jsonResult(row)
+	}
+}
+
+func toolApproveImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		row, err := deps.Improvements.ApproveMemory(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("approve improvement memory", err), nil
+		}
+		return jsonResult(row)
+	}
+}
+
+func toolRejectImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		reason, _ := trimmedStringOptional(req, "reason")
+		row, err := deps.Improvements.RejectMemory(id, reason)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("reject improvement memory", err), nil
+		}
+		return jsonResult(row)
+	}
+}
+
+func toolArchiveImprovementMemory(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		row, err := deps.Improvements.ArchiveMemory(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("archive improvement memory", err), nil
+		}
+		return jsonResult(row)
+	}
+}
+
 // toolListTraces returns the 200 most recent spans verbatim. The Span JSON
 // shape already matches GET /traces so clients can parse both surfaces with
 // the same decoder.

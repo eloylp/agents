@@ -372,6 +372,58 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolListImprovementRecommendationsWithBundles(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("list_improvement_memory",
+				mcpgo.WithDescription("List global assistant preference memory entries used to rank and frame future self-improvement recommendations."),
+				mcpgo.WithString("status", mcpgo.Description("Optional status filter: active, proposed, archived, or rejected.")),
+			),
+			toolListImprovementMemory(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("create_improvement_memory",
+				mcpgo.WithDescription("Create a manual assistant preference memory entry. Active entries influence future recommendation framing; proposed entries require approval."),
+				mcpgo.WithString("key", mcpgo.Required(), mcpgo.Description("Short stable preference key.")),
+				mcpgo.WithString("value", mcpgo.Required(), mcpgo.Description("Inspectable preference text.")),
+				mcpgo.WithString("status", mcpgo.Description("active or proposed. Defaults to active for manual entries.")),
+				mcpgo.WithString("evidence_type", mcpgo.Description("Evidence type, such as manual_user_entry or accepted_recommendation.")),
+				mcpgo.WithString("evidence_id", mcpgo.Description("Optional linked evidence id.")),
+				mcpgo.WithString("evidence_url", mcpgo.Description("Optional evidence URL.")),
+				mcpgo.WithString("confidence", mcpgo.Description("Optional confidence label. Defaults to medium.")),
+			),
+			toolCreateImprovementMemory(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_improvement_memory",
+				mcpgo.WithDescription("Edit an assistant preference memory entry's key, value, or confidence."),
+				mcpgo.WithString("id", mcpgo.Required(), mcpgo.Description("Memory entry id.")),
+				mcpgo.WithString("key", mcpgo.Description("Optional replacement key.")),
+				mcpgo.WithString("value", mcpgo.Description("Optional replacement value.")),
+				mcpgo.WithString("confidence", mcpgo.Description("Optional replacement confidence.")),
+			),
+			toolUpdateImprovementMemory(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("approve_improvement_memory",
+				mcpgo.WithDescription("Approve a proposed assistant preference memory entry so it influences future recommendations."),
+				mcpgo.WithString("id", mcpgo.Required(), mcpgo.Description("Memory entry id.")),
+			),
+			toolApproveImprovementMemory(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("reject_improvement_memory",
+				mcpgo.WithDescription("Reject a proposed assistant preference memory entry without deleting its evidence trail."),
+				mcpgo.WithString("id", mcpgo.Required(), mcpgo.Description("Memory entry id.")),
+				mcpgo.WithString("reason", mcpgo.Description("Optional rejection reason.")),
+			),
+			toolRejectImprovementMemory(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("archive_improvement_memory",
+				mcpgo.WithDescription("Archive/delete an assistant preference memory entry so it no longer influences recommendations."),
+				mcpgo.WithString("id", mcpgo.Required(), mcpgo.Description("Memory entry id.")),
+			),
+			toolArchiveImprovementMemory(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("list_traces",
 				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",

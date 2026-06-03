@@ -100,6 +100,12 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleImprovementProposal))).Methods(http.MethodGet)
 	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposalBundle))).Methods(http.MethodPost)
 	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleImprovementProposalBundle))).Methods(http.MethodGet)
+	r.Handle("/improvements/memory", withTimeout(http.HandlerFunc(h.HandleImprovementMemory))).Methods(http.MethodGet)
+	r.Handle("/improvements/memory", withTimeout(http.HandlerFunc(h.HandleCreateImprovementMemory))).Methods(http.MethodPost)
+	r.Handle("/improvements/memory/{id}", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementMemory))).Methods(http.MethodPatch)
+	r.Handle("/improvements/memory/{id}/approve", withTimeout(http.HandlerFunc(h.HandleApproveImprovementMemory))).Methods(http.MethodPost)
+	r.Handle("/improvements/memory/{id}/reject", withTimeout(http.HandlerFunc(h.HandleRejectImprovementMemory))).Methods(http.MethodPost)
+	r.Handle("/improvements/memory/{id}/archive", withTimeout(http.HandlerFunc(h.HandleArchiveImprovementMemory))).Methods(http.MethodPost)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementProposalBundleItem))).Methods(http.MethodPatch)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/reject", withTimeout(http.HandlerFunc(h.HandleRejectImprovementProposalBundleItem))).Methods(http.MethodPost)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/link-existing", withTimeout(http.HandlerFunc(h.HandleLinkImprovementProposalBundleItem))).Methods(http.MethodPost)
@@ -344,6 +350,99 @@ func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+func (h *Handler) HandleImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.improve.ListMemory("", r.URL.Query().Get("status"), 200)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
+}
+
+func (h *Handler) HandleCreateImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Key          string `json:"key"`
+		Value        string `json:"value"`
+		Status       string `json:"status"`
+		EvidenceType string `json:"evidence_type"`
+		EvidenceID   string `json:"evidence_id"`
+		EvidenceURL  string `json:"evidence_url"`
+		Confidence   string `json:"confidence"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	row, err := h.improve.CreateMemory(selfimprovement.AssistantMemoryInput{
+		Key:          req.Key,
+		Value:        req.Value,
+		Status:       req.Status,
+		EvidenceType: req.EvidenceType,
+		EvidenceID:   req.EvidenceID,
+		EvidenceURL:  req.EvidenceURL,
+		Confidence:   req.Confidence,
+		ProposedBy:   "dashboard",
+	})
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
+}
+
+func (h *Handler) HandleUpdateImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	var req selfimprovement.AssistantMemoryUpdate
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	row, err := h.improve.UpdateMemory(mux.Vars(r)["id"], req)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
+}
+
+func (h *Handler) HandleApproveImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	row, err := h.improve.ApproveMemory(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
+}
+
+func (h *Handler) HandleRejectImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
+	}
+	row, err := h.improve.RejectMemory(mux.Vars(r)["id"], req.Reason)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
+}
+
+func (h *Handler) HandleArchiveImprovementMemory(w http.ResponseWriter, r *http.Request) {
+	row, err := h.improve.ArchiveMemory(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
 }
 
 func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {

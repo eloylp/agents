@@ -30,6 +30,11 @@ skills:
   testing:
     prompt: |
       Focus on behavioral regressions, missing tests, and weak assertions.
+  go-api:
+    prompt: |
+      For Go HTTP APIs, route each HTTP method to a distinct handler function.
+      Keep handlers thin: decode and validate input, call the service layer, and encode the response.
+      Avoid combined method-switch handlers; method policy should stay explicit and testable at the route boundary.
   dx:
     prompt: |
       Focus on onboarding friction, naming, docs drift, and actionable errors.
@@ -55,7 +60,7 @@ workspaces:
       - name: coder
         backend: claude
         description: "Implements fixes and features; opens pull requests"
-        skills: [architect, testing]
+        skills: [architect, testing, go-api]
         prompt_ref: coder
         scope_type: workspace
         allow_prs: true
@@ -63,7 +68,7 @@ workspaces:
       - name: refactorer
         backend: claude
         description: "Refactors existing code for readability and maintainability"
-        skills: [architect, testing, dx]
+        skills: [architect, testing, go-api, dx]
         prompt_ref: refactorer
         scope_type: workspace
         allow_prs: true
@@ -71,7 +76,7 @@ workspaces:
       - name: pr-reviewer
         backend: codex
         description: "Reviews pull requests for correctness, regressions, and missing tests"
-        skills: [architect, testing]
+        skills: [architect, testing, go-api]
         prompt_ref: pr-reviewer
         scope_type: workspace
     repos:

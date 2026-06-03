@@ -95,10 +95,35 @@ pass `workspace` to narrow diagnostic views.
 Single-target proposals are for simple one-asset edits. Reactive multi-asset
 bundles are feedback-driven and keep coordinated changes together. Proactive
 catalog audits are a separate workflow that reviews the catalog without a
-specific feedback event. Assistant preference memory is also separate: it
-should learn from accepted, rejected, edited, linked-existing, discarded, and
-published decisions after these review surfaces exist, but it must not bypass
-the recommendation, bundle, or publish gates.
+specific feedback event.
+
+Assistant preference memory is global product memory for the self-improvement
+assistant. Feedback and recommendations stay workspace-scoped as evidence
+records, but approved preference memory is shared across future analyses so the
+same maintainer preference does not need to be relearned per workspace. It is
+not agent runtime memory: it is inspectable preference guidance about how the
+maintainer wants recommendations ranked and framed, not private run state loaded
+into coder/reviewer agents.
+
+Preference memory entries are managed in **Improvements → Memory**, through
+`GET|POST /improvements/memory`,
+`PATCH /improvements/memory/{id}`,
+`POST /improvements/memory/{id}/approve`,
+`POST /improvements/memory/{id}/reject`, and
+`POST /improvements/memory/{id}/archive`, or through the MCP
+`list_improvement_memory`, `create_improvement_memory`,
+`update_improvement_memory`, `approve_improvement_memory`,
+`reject_improvement_memory`, and `archive_improvement_memory` tools. Active
+entries are included in future analyst inputs and may be listed on resulting
+recommendations as `memory_influences`; proposed entries are visible but do
+not influence analysis until approved.
+
+The assistant may propose memory from accepted or rejected recommendations, and
+proposal-bundle decisions remain available as evidence for
+future memory proposals. User approval is required before inferred preference
+memory becomes active. Current feedback and maintainer clarification in the
+active analysis override stored memory, and memory never bypasses the
+recommendation, bundle, or publish gates.
 
 When a recommendation needs more input, the dashboard's **Clarify** action lets
 an operator edit one clarification field while seeing the original feedback,
