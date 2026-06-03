@@ -45,26 +45,26 @@ const selfImprovementRecommendationSchema = `{
         "properties": {
           "operation": {"type": "string"},
           "asset_type": {"type": "string"},
-          "asset_id": {"type": "string"},
-          "base_version_id": {"type": "string"},
-          "proposed_ref": {"type": "string"},
-          "proposed_name": {"type": "string"},
-          "proposed_scope": {"type": "string"},
+          "asset_id": {"type": ["string", "null"]},
+          "base_version_id": {"type": ["string", "null"]},
+          "proposed_ref": {"type": ["string", "null"]},
+          "proposed_name": {"type": ["string", "null"]},
+          "proposed_scope": {"type": ["string", "null"]},
           "proposed_body": {"type": "string"},
-          "proposed_description": {"type": "string"},
-          "proposed_enabled": {"type": "boolean"},
-          "proposed_position": {"type": "integer"},
-          "duplicate_risk": {"type": "string"},
-          "rationale": {"type": "string"}
+          "proposed_description": {"type": ["string", "null"]},
+          "proposed_enabled": {"type": ["boolean", "null"]},
+          "proposed_position": {"type": ["integer", "null"]},
+          "duplicate_risk": {"type": ["string", "null"]},
+          "rationale": {"type": ["string", "null"]}
         },
-        "required": ["operation", "asset_type", "proposed_body"],
+        "required": ["operation", "asset_type", "asset_id", "base_version_id", "proposed_ref", "proposed_name", "proposed_scope", "proposed_body", "proposed_description", "proposed_enabled", "proposed_position", "duplicate_risk", "rationale"],
         "additionalProperties": false
       }
     },
     "suggested_rollout_scope": {"type": "string"},
     "no_auto_apply_confirmed": {"type": "boolean"}
   },
-  "required": ["type", "status", "confidence", "risk", "finding", "normalized_lesson", "rationale", "evidence_feedback_ids", "evidence_source_urls", "attribution_confidence", "target_asset_type", "target_asset_id", "target_base_version_id", "proposed_patch", "proposed_new_body", "suggested_rollout_scope", "no_auto_apply_confirmed"],
+  "required": ["type", "status", "confidence", "risk", "finding", "normalized_lesson", "rationale", "evidence_feedback_ids", "evidence_source_urls", "attribution_confidence", "target_asset_type", "target_asset_id", "target_base_version_id", "proposed_patch", "proposed_new_body", "changes", "suggested_rollout_scope", "no_auto_apply_confirmed"],
   "additionalProperties": false
 }`
 
