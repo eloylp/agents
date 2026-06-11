@@ -250,7 +250,26 @@ func TestToolAnalyzeImprovementFeedbackQueuesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
+		WorkspaceID:           feedback.WorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "needs_more_context",
+		Status:                selfimprovement.RecommendationStatusNeedsUserInput,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               "Retry this proposal /agents improve",
+		NormalizedLesson:      "retry this proposal /agents improve",
+		Rationale:             "Seed recommendation for MCP analyze retry test.",
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: feedback.LinkConfidence,
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                    "needs_more_context",
+			"status":                  selfimprovement.RecommendationStatusNeedsUserInput,
+			"no_auto_apply_confirmed": true,
+		},
+	})
 	if err != nil {
 		t.Fatalf("seed recommendation: %v", err)
 	}

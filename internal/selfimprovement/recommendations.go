@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -36,7 +37,6 @@ type SelfImprovementRecommendation struct {
 	TargetBaseVersionID     string                         `json:"target_base_version_id,omitempty"`
 	ProposedPatch           string                         `json:"proposed_patch,omitempty"`
 	ProposedNewBody         string                         `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                         `json:"suggested_rollout_scope,omitempty"`
 	AnalyzerPromptRef       string                         `json:"analyzer_prompt_ref"`
 	AnalyzerPromptVersionID string                         `json:"analyzer_prompt_version_id,omitempty"`
 	StructuredOutput        map[string]any                 `json:"structured_output,omitempty"`
@@ -75,69 +75,10 @@ type SelfImprovementRecommendationInput struct {
 	TargetBaseVersionID     string
 	ProposedPatch           string
 	ProposedNewBody         string
-	SuggestedRolloutScope   string
 	AnalyzerPromptRef       string
 	AnalyzerPromptVersionID string
 	StructuredOutput        map[string]any
 	Error                   string
-}
-
-func RecommendationFromFeedback(feedback store.SelfImprovementFeedback) SelfImprovementRecommendationInput {
-	finding := firstFeedbackLine(feedback.RawBody)
-	if finding == "" {
-		finding = "Review the stored feedback evidence and decide whether a catalog change is warranted."
-	}
-	recType := "needs_more_context"
-	status := RecommendationStatusNeedsUserInput
-	confidence := "low"
-	if feedback.LinkedPromptVersionID != "" || len(feedback.LinkedSkillVersionIDs) > 0 || len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		recType = "deduplicate_guidance"
-		status = RecommendationStatusRecommended
-		confidence = "medium"
-	}
-	targetType, targetID, targetVersion := recommendationTarget(feedback)
-	rationale := fmt.Sprintf("Feedback event %d was captured from %s with %s attribution. The recommendation is review-only and does not publish or mutate catalog assets.", feedback.ID, feedback.SourceURL, feedback.LinkConfidence)
-	lesson := normalizeLesson(finding)
-	structured := map[string]any{
-		"type":                    recType,
-		"status":                  status,
-		"confidence":              confidence,
-		"risk":                    "low",
-		"finding":                 finding,
-		"normalized_lesson":       lesson,
-		"rationale":               rationale,
-		"evidence_feedback_ids":   []int64{feedback.ID},
-		"evidence_source_urls":    []string{feedback.SourceURL},
-		"attribution_confidence":  feedback.LinkConfidence,
-		"target_asset_type":       targetType,
-		"target_asset_id":         targetID,
-		"target_base_version_id":  targetVersion,
-		"proposed_patch":          "",
-		"proposed_new_body":       "",
-		"suggested_rollout_scope": "workspace",
-		"analyzer_prompt_ref":     "prompt_self-improvement-analyst",
-		"no_auto_apply_confirmed": true,
-	}
-	return SelfImprovementRecommendationInput{
-		WorkspaceID:           feedback.WorkspaceID,
-		FeedbackEventID:       feedback.ID,
-		Type:                  recType,
-		Status:                status,
-		Confidence:            confidence,
-		Risk:                  "low",
-		Finding:               finding,
-		NormalizedLesson:      lesson,
-		Rationale:             rationale,
-		EvidenceFeedbackIDs:   []int64{feedback.ID},
-		EvidenceSourceURLs:    []string{feedback.SourceURL},
-		AttributionConfidence: feedback.LinkConfidence,
-		TargetAssetType:       targetType,
-		TargetAssetID:         targetID,
-		TargetBaseVersionID:   targetVersion,
-		SuggestedRolloutScope: "workspace",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		StructuredOutput:      structured,
-	}
 }
 
 func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
@@ -156,13 +97,17 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	in.AttributionConfidence = defaultString(in.AttributionConfidence, "unresolved")
 	in.AnalyzerPromptRef = defaultString(in.AnalyzerPromptRef, "prompt_self-improvement-analyst")
 	if existing, err := s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID); err == nil {
-		if terminalRecommendationStatus(existing.Status) {
+		rec, recErr := s.GetRecommendation(existing.ID)
+		if recErr != nil {
+			return SelfImprovementRecommendation{}, recErr
+		}
+		if terminalRecommendation(rec) {
 			if err := s.store.Transact(func(tx *store.Tx) error {
 				return store.UpdateSelfImprovementFeedbackStatusRow(tx, in.FeedbackEventID, store.FeedbackStatusAnalyzed)
 			}); err != nil {
 				return SelfImprovementRecommendation{}, err
 			}
-			return recommendationFromRow(existing), nil
+			return rec, nil
 		}
 	} else {
 		var nf *store.ErrNotFound
@@ -206,6 +151,74 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	return rec, nil
 }
 
+func (s *Service) BeginAnalysis(feedback store.SelfImprovementFeedback) (SelfImprovementRecommendation, string, error) {
+	workspaceID := fleet.NormalizeWorkspaceID(feedback.WorkspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	if existing, err := s.store.GetSelfImprovementRecommendationByFeedback(workspaceID, feedback.ID); err == nil {
+		rec, err := s.GetRecommendation(existing.ID)
+		if err != nil {
+			return SelfImprovementRecommendation{}, "", err
+		}
+		if terminalRecommendation(rec) {
+			return SelfImprovementRecommendation{}, "", &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already final and cannot be re-analyzed", rec.ID)}
+		}
+		if rec.Status == RecommendationStatusAnalyzing || rec.Status == RecommendationStatusClarifying {
+			return SelfImprovementRecommendation{}, "", &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s", rec.ID, rec.Status)}
+		}
+		previousStatus := rec.Status
+		if err := s.store.Transact(func(tx *store.Tx) error {
+			return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, RecommendationStatusAnalyzing)
+		}); err != nil {
+			return SelfImprovementRecommendation{}, "", err
+		}
+		rec, err = s.GetRecommendation(rec.ID)
+		return rec, previousStatus, err
+	} else {
+		var nf *store.ErrNotFound
+		if !errors.As(err, &nf) {
+			return SelfImprovementRecommendation{}, "", err
+		}
+	}
+	finding := firstFeedbackLine(feedback.RawBody)
+	if finding == "" {
+		finding = "Analyze stored self-improvement feedback."
+	}
+	in := SelfImprovementRecommendationInput{
+		WorkspaceID:           workspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "analysis_pending",
+		Status:                RecommendationStatusAnalyzing,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               finding,
+		NormalizedLesson:      normalizeLesson(finding),
+		Rationale:             fmt.Sprintf("Feedback event %d is queued for self-improvement analysis.", feedback.ID),
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: defaultString(feedback.LinkConfidence, "unresolved"),
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                   "analysis_pending",
+			"status":                 RecommendationStatusAnalyzing,
+			"feedback_event_id":      feedback.ID,
+			"attribution_confidence": defaultString(feedback.LinkConfidence, "unresolved"),
+		},
+	}
+	if err := s.store.Transact(func(tx *store.Tx) error {
+		return store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in))
+	}); err != nil {
+		return SelfImprovementRecommendation{}, "", err
+	}
+	rec, err := s.store.GetSelfImprovementRecommendationByFeedback(workspaceID, feedback.ID)
+	if err != nil {
+		return SelfImprovementRecommendation{}, "", err
+	}
+	out, err := s.GetRecommendation(rec.ID)
+	return out, "", err
+}
+
 func (s *Service) UpdateRecommendationStatus(id, status, reason string) (SelfImprovementRecommendation, error) {
 	status = strings.TrimSpace(status)
 	reason = strings.TrimSpace(reason)
@@ -216,11 +229,11 @@ func (s *Service) UpdateRecommendationStatus(id, status, reason string) (SelfImp
 	if err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	if terminalRecommendationStatus(current.Status) {
+	if terminalRecommendation(current) {
 		if current.Status == status {
 			return current, nil
 		}
-		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be changed", id, current.Status)}
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already final and cannot be changed", id)}
 	}
 	if current.Status == RecommendationStatusAnalyzing || current.Status == RecommendationStatusClarifying {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is currently %s and cannot be changed", id, current.Status)}
@@ -252,7 +265,7 @@ func (s *Service) UpdateRecommendationStatus(id, status, reason string) (SelfImp
 		for _, item := range bundle.Items {
 			before := bundleItemAuditSnapshot(item)
 			after := item
-			if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
+			if item.Decision == ProposalBundleDecisionAccepted {
 				after.Decision = ProposalBundleDecisionDiscarded
 			}
 			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", "dashboard", reason, before, bundleItemAuditSnapshot(after)); err != nil {
@@ -279,8 +292,8 @@ func (s *Service) UpsertClarification(recommendationID, author, body string) (Se
 	if err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	if terminalRecommendationStatus(rec.Status) {
-		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be clarified", recommendationID, rec.Status)}
+	if terminalRecommendation(rec) {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already final and cannot be clarified", recommendationID)}
 	}
 	if rec.Status != RecommendationStatusNeedsUserInput && rec.Status != RecommendationStatusFailed {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is %s and cannot be clarified", recommendationID, rec.Status)}
@@ -315,7 +328,6 @@ func recommendationInputRow(in SelfImprovementRecommendationInput) store.SelfImp
 		TargetBaseVersionID:     in.TargetBaseVersionID,
 		ProposedPatch:           in.ProposedPatch,
 		ProposedNewBody:         in.ProposedNewBody,
-		SuggestedRolloutScope:   in.SuggestedRolloutScope,
 		AnalyzerPromptRef:       in.AnalyzerPromptRef,
 		AnalyzerPromptVersionID: in.AnalyzerPromptVersionID,
 		StructuredOutput:        in.StructuredOutput,
@@ -358,7 +370,6 @@ func recommendationFromRow(row store.SelfImprovementRecommendationRow) SelfImpro
 		TargetBaseVersionID:     row.TargetBaseVersionID,
 		ProposedPatch:           row.ProposedPatch,
 		ProposedNewBody:         row.ProposedNewBody,
-		SuggestedRolloutScope:   row.SuggestedRolloutScope,
 		AnalyzerPromptRef:       row.AnalyzerPromptRef,
 		AnalyzerPromptVersionID: row.AnalyzerPromptVersionID,
 		StructuredOutput:        row.StructuredOutput,
@@ -408,7 +419,6 @@ func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) stor
 		TargetBaseVersionID:     rec.TargetBaseVersionID,
 		ProposedPatch:           rec.ProposedPatch,
 		ProposedNewBody:         rec.ProposedNewBody,
-		SuggestedRolloutScope:   rec.SuggestedRolloutScope,
 		AnalyzerPromptRef:       rec.AnalyzerPromptRef,
 		AnalyzerPromptVersionID: rec.AnalyzerPromptVersionID,
 		StructuredOutput:        rec.StructuredOutput,
@@ -427,19 +437,6 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func recommendationTarget(feedback store.SelfImprovementFeedback) (assetType, assetID, versionID string) {
-	if feedback.LinkedPromptVersionID != "" {
-		return "prompt", "", feedback.LinkedPromptVersionID
-	}
-	if len(feedback.LinkedSkillVersionIDs) > 0 {
-		return "skill", "", feedback.LinkedSkillVersionIDs[0]
-	}
-	if len(feedback.LinkedGuardrailVersionIDs) > 0 {
-		return "guardrail", "", feedback.LinkedGuardrailVersionIDs[0]
-	}
-	return "", "", ""
 }
 
 func validRecommendationStatus(status string) bool {
@@ -467,6 +464,26 @@ func terminalRecommendationStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func terminalProposalBundleStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case ProposalBundleStatusPublished, ProposalBundleStatusResolved, ProposalBundleStatusDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalRecommendation(rec SelfImprovementRecommendation) bool {
+	if terminalRecommendationStatus(rec.Status) {
+		return true
+	}
+	return rec.ProposalBundle != nil && terminalProposalBundleStatus(rec.ProposalBundle.Status)
+}
+
+func IsFinalRecommendation(rec SelfImprovementRecommendation) bool {
+	return terminalRecommendation(rec)
 }
 
 func firstFeedbackLine(body string) string {

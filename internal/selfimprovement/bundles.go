@@ -28,7 +28,6 @@ const (
 	ProposalBundleOperationUpdateExisting = "update_existing"
 	ProposalBundleOperationCreateNew      = "create_new"
 
-	ProposalBundleDecisionPending        = "pending"
 	ProposalBundleDecisionAccepted       = "accepted"
 	ProposalBundleDecisionRejected       = "rejected"
 	ProposalBundleDecisionLinkedExisting = "linked_existing"
@@ -452,6 +451,9 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 		if bundle.Status != ProposalBundleStatusPending {
 			return &store.ErrValidation{Msg: "only pending proposal bundles can be published"}
 		}
+		if bundle.RecommendationChanged {
+			return &store.ErrValidation{Msg: "proposal bundle source analysis changed; re-analyze feedback before publishing"}
+		}
 		publishedVersions := 0
 		for _, item := range bundle.Items {
 			before := bundleItemAuditSnapshot(item)
@@ -466,7 +468,7 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 					return err
 				}
 				continue
-			case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
+			case ProposalBundleDecisionAccepted:
 			default:
 				return &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
 			}
@@ -528,7 +530,7 @@ func discardSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 		for _, item := range bundle.Items {
 			before := bundleItemAuditSnapshot(item)
 			after := item
-			if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
+			if item.Decision == ProposalBundleDecisionAccepted {
 				after.Decision = ProposalBundleDecisionDiscarded
 			}
 			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", actor, "bundle discarded", before, bundleItemAuditSnapshot(after)); err != nil {
@@ -741,6 +743,9 @@ func decideSelfImprovementProposalBundleItem(st *store.Store, bundleID, itemID, 
 			if item.Operation != ProposalBundleOperationCreateNew {
 				return &store.ErrValidation{Msg: "only create-new proposal bundle items can link existing assets"}
 			}
+			if item.AssetType == "guardrail" {
+				return &store.ErrValidation{Msg: "guardrail proposal bundle items cannot link existing assets"}
+			}
 			if _, err := store.CurrentSelfImprovementCatalogVersionID(tx, item.AssetType, linkedAssetID); err != nil {
 				return err
 			}
@@ -944,7 +949,6 @@ type recommendationSnapshot struct {
 	TargetBaseVersionID     string         `json:"target_base_version_id"`
 	ProposedPatch           string         `json:"proposed_patch"`
 	ProposedNewBody         string         `json:"proposed_new_body"`
-	SuggestedRolloutScope   string         `json:"suggested_rollout_scope"`
 	AnalyzerPromptRef       string         `json:"analyzer_prompt_ref"`
 	AnalyzerPromptVersionID string         `json:"analyzer_prompt_version_id"`
 	StructuredOutput        map[string]any `json:"structured_output"`
@@ -968,7 +972,6 @@ func recommendationSnapshotHash(rec SelfImprovementRecommendation) (string, erro
 		TargetBaseVersionID:     rec.TargetBaseVersionID,
 		ProposedPatch:           rec.ProposedPatch,
 		ProposedNewBody:         rec.ProposedNewBody,
-		SuggestedRolloutScope:   rec.SuggestedRolloutScope,
 		AnalyzerPromptRef:       rec.AnalyzerPromptRef,
 		AnalyzerPromptVersionID: rec.AnalyzerPromptVersionID,
 		StructuredOutput:        rec.StructuredOutput,

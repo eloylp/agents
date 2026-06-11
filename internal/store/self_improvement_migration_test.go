@@ -10,7 +10,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestSelfImprovementAnalystPromptV6BecomesCurrentOnFreshStore(t *testing.T) {
+func TestSelfImprovementAnalystPromptV7BecomesCurrentOnFreshStore(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -24,8 +24,8 @@ func TestSelfImprovementAnalystPromptV6BecomesCurrentOnFreshStore(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read seeded prompt: %v", err)
 	}
-	if prompt.VersionID != "promptver_self_improvement_analyst_v6" {
-		t.Fatalf("version_id = %q, want v6", prompt.VersionID)
+	if prompt.VersionID != "promptver_self_improvement_analyst_v7" {
+		t.Fatalf("version_id = %q, want v7", prompt.VersionID)
 	}
 	for _, want := range []string{
 		"Supplied context:",
@@ -40,6 +40,8 @@ func TestSelfImprovementAnalystPromptV6BecomesCurrentOnFreshStore(t *testing.T) 
 		"Editable proposal contract:",
 		"Every status=recommended catalog-changing result must be directly reviewable",
 		"proposed_body must be the full replacement body",
+		"Catalog context is attribution-only.",
+		"return status=needs_user_input instead of scanning or guessing from the wider catalog",
 	} {
 		if !strings.Contains(prompt.Content, want) {
 			t.Fatalf("prompt content missing %q", want)
@@ -47,6 +49,81 @@ func TestSelfImprovementAnalystPromptV6BecomesCurrentOnFreshStore(t *testing.T) 
 	}
 	if strings.Contains(prompt.Content, "knowledge cluster") {
 		t.Fatal("prompt content still contains knowledge cluster")
+	}
+}
+
+func TestSelfImprovementLegacyFieldsRemovedOnFreshStore(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := New(db)
+	t.Cleanup(func() { st.Close() })
+
+	rows, err := db.Query(`PRAGMA table_info(self_improvement_recommendations)`)
+	if err != nil {
+		t.Fatalf("table info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table info: %v", err)
+		}
+		if name == "suggested_rollout_scope" {
+			t.Fatal("self_improvement_recommendations still has suggested_rollout_scope")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table info: %v", err)
+	}
+
+	feedback, err := st.UpsertSelfImprovementFeedback(SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  53,
+		SourceURL:        "https://github.com/owner/repo/issues/1#issuecomment-53",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      1,
+		RawBody:          "cleanup schema /agents improve",
+		Tag:              FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_recommendations (
+			id, workspace_id, feedback_event_id, type, status, confidence, risk,
+			finding, normalized_lesson, rationale, evidence_feedback_ids,
+			evidence_source_urls, attribution_confidence, structured_output
+		) VALUES (?, ?, ?, 'catalog_patch_bundle', 'recommended', 'medium', 'low',
+			'finding', 'lesson', 'rationale', ?, 'https://github.com/owner/repo/issues/1#issuecomment-53',
+			'exact', '{}'
+		)
+	`, "rec_no_pending_decision", fleet.DefaultWorkspaceID, feedback.ID, feedback.ID); err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_proposal_bundles (id, workspace_id, recommendation_id)
+		VALUES ('bundle_no_pending_decision', ?, 'rec_no_pending_decision')
+	`, fleet.DefaultWorkspaceID); err != nil {
+		t.Fatalf("seed bundle: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_proposal_bundle_items (id, bundle_id, operation, asset_type, decision, proposed_body)
+		VALUES ('item_no_pending_decision', 'bundle_no_pending_decision', 'update_existing', 'skill', 'pending', 'body')
+	`); err == nil {
+		t.Fatal("insert pending proposal bundle item decision succeeded, want CHECK failure")
 	}
 }
 

@@ -118,6 +118,9 @@ func (s *Store) ReadWorkspaceGuardrails(workspace string) ([]fleet.WorkspaceGuar
 func (s *Store) ReplaceWorkspaceGuardrails(workspace string, refs []fleet.WorkspaceGuardrailRef) ([]fleet.WorkspaceGuardrailRef, error) {
 	return ReplaceWorkspaceGuardrails(s.db, workspace, refs)
 }
+func (s *Store) ReadGuardrailVersion(versionID string) (fleet.Guardrail, error) {
+	return ReadGuardrailVersion(s.db, versionID)
+}
 func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }

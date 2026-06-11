@@ -85,6 +85,33 @@ func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	return g, nil
 }
 
+func ReadGuardrailVersion(db *sql.DB, versionID string) (fleet.Guardrail, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return fleet.Guardrail{}, &ErrValidation{Msg: "guardrail version id is required"}
+	}
+	var g fleet.Guardrail
+	var builtin, enabled int
+	row := db.QueryRow(`
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, gv.description, gv.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, gv.enabled, gv.position,
+		       gv.id, gv.version_number
+		FROM guardrail_versions gv
+		JOIN guardrails g ON g.id = gv.guardrail_id
+		WHERE gv.id = ? AND gv.state = 'published'`, versionID)
+	err := row.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &g.DefaultContent,
+		&builtin, &enabled, &g.Position, &g.VersionID, &g.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Guardrail{}, &ErrNotFound{Msg: fmt.Sprintf("guardrail version %q not found", versionID)}
+	}
+	if err != nil {
+		return fleet.Guardrail{}, fmt.Errorf("store: read guardrail version %s: %w", versionID, err)
+	}
+	g.IsBuiltin = builtin != 0
+	g.Enabled = enabled != 0
+	return g, nil
+}
+
 // UpsertGuardrail inserts or updates a guardrail. The Name field is
 // normalised before persistence. DefaultContent and IsBuiltin are
 // preserved across updates: built-in rows keep their canonical default

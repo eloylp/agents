@@ -53,7 +53,6 @@ interface Recommendation {
   target_base_version_id?: string
   proposed_patch?: string
   proposed_new_body?: string
-  suggested_rollout_scope?: string
   error?: string
   structured_output?: {
     changes?: RecommendationChange[]
@@ -395,7 +394,7 @@ function bundleItemDraftConflictKey(item: ProposalBundleItem, draft?: BundleItem
 }
 
 function isOpenDraftItem(item: ProposalBundleItem) {
-  return item.decision === 'accepted' || item.decision === 'pending'
+  return item.decision === 'accepted'
 }
 
 function openDraftConflict(item: ProposalBundleItem, bundleID: string, bundles: Record<string, ProposalBundle>, draft?: BundleItemDraft) {
@@ -1061,7 +1060,7 @@ export default function ImprovementsPage() {
                 const bundleItems = bundle.items ?? []
                 const bundleBlocked = bundlePending && (
                   Boolean(bundle.recommendation_changed) ||
-                  bundleItems.some(item => item.stale && (item.decision === 'accepted' || item.decision === 'pending')) ||
+                  bundleItems.some(item => item.stale && item.decision === 'accepted') ||
                   bundleItems.some(item => isOpenDraftItem(item) && Boolean(openDraftConflict(item, bundle.id!, bundles)))
                 )
                 return (

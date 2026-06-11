@@ -116,48 +116,27 @@ func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 		if deps.Channels == nil {
 			return mcpgo.NewToolResultError("self-improvement queue is not configured"), nil
 		}
-		var rec selfimprovement.SelfImprovementRecommendation
-		previousStatus := ""
 		row, err := deps.Store.GetSelfImprovementRecommendationByFeedback(feedback.WorkspaceID, feedback.ID)
 		if err != nil {
 			var notFound *store.ErrNotFound
 			if !errors.As(err, &notFound) {
 				return mcpgo.NewToolResultErrorFromErr("get existing improvement recommendation", err), nil
 			}
-			rec = selfimprovement.SelfImprovementRecommendation{
-				WorkspaceID:     feedback.WorkspaceID,
-				FeedbackEventID: feedback.ID,
-				Feedback:        &feedback,
-			}
-		} else {
-			rec, err = deps.Improvements.GetRecommendation(row.ID)
-			if err != nil {
-				return mcpgo.NewToolResultErrorFromErr("get improvement recommendation", err), nil
-			}
+		}
+		rec, previousStatus, err := deps.Improvements.BeginAnalysis(feedback)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("begin improvement analysis", err), nil
+		}
+		if row.ID != "" {
 			rec.Feedback = &feedback
-			if rec.Status == selfimprovement.RecommendationStatusRejected {
-				return mcpgo.NewToolResultErrorf("recommendation %q is already rejected and cannot be re-analyzed", rec.ID), nil
-			}
-			if rec.Status == selfimprovement.RecommendationStatusAnalyzing || rec.Status == selfimprovement.RecommendationStatusClarifying {
-				return mcpgo.NewToolResultErrorf("recommendation %q is already %s", rec.ID, rec.Status), nil
-			}
-			previousStatus = rec.Status
-			if err := deps.Store.Transact(func(tx *store.Tx) error {
-				return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, selfimprovement.RecommendationStatusAnalyzing)
-			}); err != nil {
-				return mcpgo.NewToolResultErrorFromErr("mark improvement recommendation analyzing", err), nil
-			}
-			rec.Status = selfimprovement.RecommendationStatusAnalyzing
 		}
 		if _, err := deps.Channels.PushEvent(ctx, mcpImprovementAnalysisEvent(rec, false)); err != nil {
-			if rec.ID != "" {
-				status := previousStatus
-				if status == "" {
-					status = selfimprovement.RecommendationStatusRecommended
-				}
+			if previousStatus != "" {
 				_ = deps.Store.Transact(func(tx *store.Tx) error {
-					return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, status)
+					return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, previousStatus)
 				})
+			} else {
+				_ = deps.Store.MarkSelfImprovementFeedbackFailed(feedback.ID, "enqueue analysis failed")
 			}
 			return mcpgo.NewToolResultErrorFromErr("enqueue improvement analysis", err), nil
 		}

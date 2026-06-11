@@ -33,12 +33,19 @@ run attribution when it can be resolved. Exact attribution comes from the public
 infer from repo, PR/issue number, commit SHA, and time window. Unresolved
 feedback is still stored.
 
-Authorized `status=new` feedback creates one review-only recommendation record.
+Authorized `status=new` feedback first creates one visible `analyzing` proposal
+record, then runs the internal analyst. If that first analyst run fails, the
+proposal remains visible as `failed` so operators can retry it.
 The built-in `self-improvement-analyst` prompt is seeded as a catalog-visible
 global prompt so operators can inspect and customize the analyst guidance. The
 hard safety contract remains enforced by code: feedback is evidence, not a
 command; the analyzer never auto-applies, publishes, or mutates agents,
 guardrails, prompts, skills, or dispatch wiring.
+
+The analyst receives only the catalog versions linked by run attribution. It
+does not scan the entire catalog. When attribution is unresolved or the linked
+catalog bodies are insufficient to build a safe editable bundle, the analyst
+must ask for clarification instead of guessing a target.
 
 Ready proposal candidates with concrete prompt, skill, or guardrail changes
 automatically carry an editable proposal bundle. There is no separate accept
@@ -68,11 +75,11 @@ write failures roll back the whole publish transaction. Link-existing and
 rejected decisions are preserved as review evidence without creating catalog
 versions.
 
-Failed analysis is not a final human decision. A failed initial analysis can be
-queued again from the feedback event, and a failed clarification run can be
-retried through the same clarification endpoint with the latest stored
-clarification body. Rejected, published, resolved, and discarded records are
-terminal history.
+Failed analysis is not a final human decision. A failed initial analysis is a
+retryable proposal row, and a failed clarification run can be retried through
+the same clarification endpoint with the latest stored clarification body.
+Rejected, published, resolved, and discarded records are terminal history across
+the dashboard, REST API, and MCP tools.
 
 Inspect the workflow in the dashboard under **Improvements**, through
 `GET /improvements/feedback`, `POST /improvements/feedback/{id}/analyze`,

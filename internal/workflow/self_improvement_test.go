@@ -75,7 +75,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		IssueNumber:           7,
 		RawBody:               "Keep files under 800 lines /agents improve",
 		Tag:                   store.FeedbackTag,
-		LinkedPromptVersionID: "promptver_self_improvement_analyst_v6",
+		LinkedPromptVersionID: "promptver_self_improvement_analyst_v7",
 		LinkConfidence:        "exact",
 		LinkDiagnostics:       "matched run attribution metadata",
 		Status:                store.FeedbackStatusNew,
@@ -96,18 +96,17 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		"attribution_confidence":"exact",
 			"target_asset_type":"prompt",
 			"target_asset_id":"prompt_self-improvement-analyst",
-			"target_base_version_id":"promptver_self_improvement_analyst_v6",
+				"target_base_version_id":"promptver_self_improvement_analyst_v7",
 		"proposed_patch":"",
 		"proposed_new_body":"",
 		"changes":[{
 				"operation":"update_existing",
 				"asset_type":"prompt",
 				"asset_id":"prompt_self-improvement-analyst",
-				"base_version_id":"promptver_self_improvement_analyst_v6",
+					"base_version_id":"promptver_self_improvement_analyst_v7",
 			"proposed_body":"Prefer files under 800 lines when practical.",
 			"rationale":"Feedback event 1 provides direct evidence."
 		}],
-		"suggested_rollout_scope":"workspace",
 		"no_auto_apply_confirmed":true
 	}`)}
 	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
@@ -177,6 +176,29 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 }
 
+func TestCurrentCatalogVersionsRequiresAttribution(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "global-coder", Content: "Do coding work."}); err != nil {
+		t.Fatalf("upsert prompt: %v", err)
+	}
+	if err := st.UpsertSkill("go-api", fleet.Skill{Name: "go-api", Prompt: "Handle Go APIs."}); err != nil {
+		t.Fatalf("upsert skill: %v", err)
+	}
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+
+	versions := e.currentCatalogVersions(store.SelfImprovementFeedback{
+		WorkspaceID:    fleet.DefaultWorkspaceID,
+		RepoOwner:      "owner",
+		RepoName:       "repo",
+		LinkConfidence: "unresolved",
+	})
+	if len(versions) != 0 {
+		t.Fatalf("catalog versions = %+v, want none without attribution", versions)
+	}
+}
+
 func TestRecommendationInputFromAssistantNormalizesSinglePatchToBundle(t *testing.T) {
 	t.Parallel()
 
@@ -202,7 +224,6 @@ func TestRecommendationInputFromAssistantNormalizesSinglePatchToBundle(t *testin
 			"proposed_patch":"",
 			"proposed_new_body":"Full edited skill body.",
 			"changes":[],
-			"suggested_rollout_scope":"workspace",
 			"no_auto_apply_confirmed":true
 		}`))
 	if err != nil {

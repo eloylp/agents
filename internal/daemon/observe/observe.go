@@ -233,8 +233,6 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 		http.Error(w, "self-improvement queue is not configured", http.StatusServiceUnavailable)
 		return
 	}
-	var rec selfimprovement.SelfImprovementRecommendation
-	previousStatus := ""
 	row, err := h.store.GetSelfImprovementRecommendationByFeedback(feedback.WorkspaceID, feedback.ID)
 	if err != nil {
 		var notFound *store.ErrNotFound
@@ -242,44 +240,22 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 			h.writeStoreError(w, err)
 			return
 		}
-		rec = selfimprovement.SelfImprovementRecommendation{
-			WorkspaceID:     feedback.WorkspaceID,
-			FeedbackEventID: feedback.ID,
-			Feedback:        &feedback,
-		}
-	} else {
-		rec, err = h.improve.GetRecommendation(row.ID)
-		if err != nil {
-			h.writeStoreError(w, err)
-			return
-		}
+	}
+	rec, previousStatus, err := h.improve.BeginAnalysis(feedback)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	if row.ID != "" {
 		rec.Feedback = &feedback
-		if rec.Status == selfimprovement.RecommendationStatusRejected {
-			http.Error(w, fmt.Sprintf("recommendation %q is already rejected and cannot be re-analyzed", rec.ID), http.StatusBadRequest)
-			return
-		}
-		if rec.Status == selfimprovement.RecommendationStatusAnalyzing || rec.Status == selfimprovement.RecommendationStatusClarifying {
-			http.Error(w, fmt.Sprintf("recommendation %q is already %s", rec.ID, rec.Status), http.StatusBadRequest)
-			return
-		}
-		previousStatus = rec.Status
-		if err := h.store.Transact(func(tx *store.Tx) error {
-			return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, selfimprovement.RecommendationStatusAnalyzing)
-		}); err != nil {
-			h.writeStoreError(w, err)
-			return
-		}
-		rec.Status = selfimprovement.RecommendationStatusAnalyzing
 	}
 	if _, err := h.channels.PushEvent(r.Context(), analysisImprovementEvent(rec)); err != nil {
-		if rec.ID != "" {
-			status := previousStatus
-			if status == "" {
-				status = selfimprovement.RecommendationStatusRecommended
-			}
+		if previousStatus != "" {
 			_ = h.store.Transact(func(tx *store.Tx) error {
-				return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, status)
+				return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, previousStatus)
 			})
+		} else {
+			_ = h.store.MarkSelfImprovementFeedbackFailed(feedback.ID, "enqueue analysis failed")
 		}
 		h.logger.Error().Err(err).Int64("feedback_event_id", feedback.ID).Str("recommendation_id", rec.ID).Msg("enqueue self-improvement analysis")
 		http.Error(w, "enqueue analysis failed", http.StatusServiceUnavailable)

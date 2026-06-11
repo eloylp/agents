@@ -56,12 +56,72 @@ func seedFeedback(t *testing.T, st *store.Store, workspace string, id int64) sto
 	return feedback
 }
 
+func recommendationInputForFeedback(feedback store.SelfImprovementFeedback) SelfImprovementRecommendationInput {
+	finding := firstFeedbackLine(feedback.RawBody)
+	if finding == "" {
+		finding = "Review the stored feedback evidence and decide whether a catalog change is warranted."
+	}
+	return SelfImprovementRecommendationInput{
+		WorkspaceID:           feedback.WorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "needs_more_context",
+		Status:                RecommendationStatusNeedsUserInput,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               finding,
+		NormalizedLesson:      normalizeLesson(finding),
+		Rationale:             "The recommendation is review-only and does not publish or mutate catalog assets.",
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: feedback.LinkConfidence,
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                    "needs_more_context",
+			"status":                  RecommendationStatusNeedsUserInput,
+			"confidence":              "low",
+			"risk":                    "low",
+			"finding":                 finding,
+			"normalized_lesson":       normalizeLesson(finding),
+			"rationale":               "The recommendation is review-only and does not publish or mutate catalog assets.",
+			"evidence_feedback_ids":   []int64{feedback.ID},
+			"evidence_source_urls":    []string{feedback.SourceURL},
+			"attribution_confidence":  feedback.LinkConfidence,
+			"target_asset_type":       "",
+			"target_asset_id":         "",
+			"target_base_version_id":  "",
+			"proposed_patch":          "",
+			"proposed_new_body":       "",
+			"changes":                 []map[string]any{},
+			"no_auto_apply_confirmed": true,
+		},
+	}
+}
+
 func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 	t.Parallel()
 	svc, st, _ := newServiceTest(t)
 	feedback := seedFeedback(t, st, "team-a", 683001)
 
-	rec, err := svc.RecordRecommendation(RecommendationFromFeedback(feedback))
+	queuedFeedback := seedFeedback(t, st, "team-a", 683000)
+	queued, previousStatus, err := svc.BeginAnalysis(queuedFeedback)
+	if err != nil {
+		t.Fatalf("BeginAnalysis: %v", err)
+	}
+	if previousStatus != "" || queued.Status != RecommendationStatusAnalyzing || queued.ID == "" {
+		t.Fatalf("queued recommendation = %+v previous=%q, want new analyzing row", queued, previousStatus)
+	}
+	if queued.Feedback == nil || queued.Feedback.ID != queuedFeedback.ID {
+		t.Fatalf("queued feedback = %+v, want feedback %d", queued.Feedback, queuedFeedback.ID)
+	}
+	storedQueued, err := st.GetSelfImprovementRecommendation(queued.ID)
+	if err != nil {
+		t.Fatalf("get queued recommendation: %v", err)
+	}
+	if storedQueued.Status != RecommendationStatusAnalyzing {
+		t.Fatalf("stored queued status = %q, want analyzing", storedQueued.Status)
+	}
+
+	rec, err := svc.RecordRecommendation(recommendationInputForFeedback(feedback))
 	if err != nil {
 		t.Fatalf("RecordRecommendation: %v", err)
 	}
@@ -98,7 +158,7 @@ func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 	}
 
 	rejectFeedback := seedFeedback(t, st, "team-a", 683101)
-	rejectRec, err := svc.RecordRecommendation(RecommendationFromFeedback(rejectFeedback))
+	rejectRec, err := svc.RecordRecommendation(recommendationInputForFeedback(rejectFeedback))
 	if err != nil {
 		t.Fatalf("RecordRecommendation reject target: %v", err)
 	}
@@ -229,6 +289,12 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	if published.Status != ProposalBundleStatusPublished {
 		t.Fatalf("published status = %q, want published", published.Status)
 	}
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected, "too late"); err == nil {
+		t.Fatal("UpdateRecommendationStatus after publish succeeded, want validation error")
+	}
+	if _, err := svc.UpsertClarification(rec.ID, "dashboard", "Re-open published bundle."); err == nil {
+		t.Fatal("UpsertClarification after publish succeeded, want validation error")
+	}
 	for _, item := range published.Items {
 		if item.AssetType == "skill" && item.Decision != ProposalBundleDecisionLinkedExisting {
 			t.Fatalf("linked skill decision = %q, want linked_existing", item.Decision)
@@ -305,6 +371,9 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	if _, err := svc.DiscardProposalBundle(discardBundle.ID, "system"); err != nil {
 		t.Fatalf("DiscardProposalBundle: %v", err)
 	}
+	if _, err := svc.UpdateRecommendationStatus(discardRec.ID, RecommendationStatusRejected, "too late"); err == nil {
+		t.Fatal("UpdateRecommendationStatus after discard succeeded, want validation error")
+	}
 
 	rejectPrompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "reject-single-item-prompt", Description: "desc", Content: "reject v1"})
 	if err != nil {
@@ -344,6 +413,70 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	}
 	if rejectedRec.Status != RecommendationStatusRejected || rejectedRec.DecisionReason != "wrong target" {
 		t.Fatalf("rejected recommendation = %+v, want rejected with reason", rejectedRec)
+	}
+}
+
+func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "changed-source-prompt", Description: "desc", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683502)
+	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "catalog update",
+		Rationale:             "prompt update should be proposed",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation: %v", err)
+	}
+	if rec.ProposalBundle == nil {
+		t.Fatal("RecordRecommendation did not attach proposal bundle")
+	}
+	if _, err := db.Exec(`UPDATE self_improvement_recommendations SET finding='changed after bundle creation', updated_at=datetime('now', '+1 second') WHERE id=?`, rec.ID); err != nil {
+		t.Fatalf("mutate recommendation: %v", err)
+	}
+	if _, err := svc.PublishProposalBundle(rec.ProposalBundle.ID, "system"); err == nil {
+		t.Fatal("PublishProposalBundle after source recommendation changed succeeded, want validation error")
+	}
+
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "existing-guardrail", Description: "desc", Content: "body", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("seed guardrail: %v", err)
+	}
+	guardFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683503)
+	guardRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       guardFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "new guardrail",
+		Rationale:             "guardrail should be created",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationCreateNew, "asset_type": "guardrail", "proposed_ref": "new-guardrail", "proposed_name": "new guardrail", "proposed_scope": "global", "proposed_body": "guardrail body"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation guardrail: %v", err)
+	}
+	if guardRec.ProposalBundle == nil || len(guardRec.ProposalBundle.Items) != 1 {
+		t.Fatalf("guardrail bundle = %+v, want one item", guardRec.ProposalBundle)
+	}
+	if _, err := svc.LinkProposalBundleItem(guardRec.ProposalBundle.ID, guardRec.ProposalBundle.Items[0].ID, "existing-guardrail", "already exists", "system"); err == nil {
+		t.Fatal("LinkProposalBundleItem guardrail succeeded, want validation error")
 	}
 }
 

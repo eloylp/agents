@@ -118,7 +118,7 @@ func FindOpenSelfImprovementBundleItemDraft(q querier, excludeBundleID string, i
 		FROM self_improvement_proposal_bundle_items i
 		JOIN self_improvement_proposal_bundles b ON b.id = i.bundle_id
 		WHERE b.status = 'pending'
-		  AND i.decision IN ('pending', 'accepted')
+		  AND i.decision = 'accepted'
 		  AND i.asset_type = ?
 		  AND b.id <> ?`
 	args := []any{strings.TrimSpace(item.AssetType), strings.TrimSpace(excludeBundleID)}
@@ -198,7 +198,7 @@ func UpdateSelfImprovementProposalBundleStatusRow(tx *Tx, bundleID, status strin
 }
 
 func DiscardPendingSelfImprovementProposalBundleItemRows(tx *Tx, bundleID, decision string) error {
-	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, decision, bundleID); err != nil {
+	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision='accepted'`, decision, bundleID); err != nil {
 		return fmt.Errorf("store: discard proposal bundle items: %w", err)
 	}
 	return nil
@@ -251,10 +251,6 @@ func (s *Store) GetSelfImprovementProposalBundleRow(id string) (SelfImprovementP
 
 func GetSelfImprovementProposalBundleRowTx(tx *Tx, id string) (SelfImprovementProposalBundleRow, error) {
 	return getSelfImprovementProposalBundleRow(tx, id)
-}
-
-func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
 }
 
 func GetSelfImprovementProposalBundleRow(db *sql.DB, id string) (SelfImprovementProposalBundleRow, error) {
@@ -321,23 +317,4 @@ func listSelfImprovementProposalBundleRowItems(q querier, bundleID string) ([]Se
 		return nil, err
 	}
 	return out, nil
-}
-
-func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	recs, err := ListSelfImprovementRecommendations(db, workspace, "", limit)
-	if err != nil {
-		return nil, err
-	}
-	for i := range recs {
-		bundle, err := GetSelfImprovementProposalBundleRow(db, recs[i].ID)
-		if err == nil {
-			recs[i].ProposalBundle = &bundle
-			continue
-		}
-		var nf *ErrNotFound
-		if !errors.As(err, &nf) {
-			return nil, err
-		}
-	}
-	return recs, nil
 }

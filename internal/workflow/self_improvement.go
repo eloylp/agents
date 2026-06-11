@@ -19,8 +19,6 @@ const selfImprovementEventKind = "agents.improvement"
 const selfImprovementInternalAgentName = "internal-catalog-analyst"
 const selfImprovementAnalysisModeInitial = "initial"
 const selfImprovementAnalysisModeClarification = "clarification"
-const selfImprovementCatalogBodyBudget = 60000
-const selfImprovementCatalogBodyMax = 12000
 
 const selfImprovementRecommendationSchema = `{
   "type": "object",
@@ -63,10 +61,9 @@ const selfImprovementRecommendationSchema = `{
         "additionalProperties": false
       }
     },
-    "suggested_rollout_scope": {"type": "string"},
     "no_auto_apply_confirmed": {"type": "boolean"}
   },
-  "required": ["type", "status", "confidence", "risk", "finding", "normalized_lesson", "rationale", "evidence_feedback_ids", "evidence_source_urls", "attribution_confidence", "target_asset_type", "target_asset_id", "target_base_version_id", "proposed_patch", "proposed_new_body", "changes", "suggested_rollout_scope", "no_auto_apply_confirmed"],
+  "required": ["type", "status", "confidence", "risk", "finding", "normalized_lesson", "rationale", "evidence_feedback_ids", "evidence_source_urls", "attribution_confidence", "target_asset_type", "target_asset_id", "target_base_version_id", "proposed_patch", "proposed_new_body", "changes", "no_auto_apply_confirmed"],
   "additionalProperties": false
 }`
 
@@ -87,7 +84,6 @@ type selfImprovementOutput struct {
 	ProposedPatch         string                        `json:"proposed_patch"`
 	ProposedNewBody       string                        `json:"proposed_new_body"`
 	Changes               []selfImprovementOutputChange `json:"changes,omitempty"`
-	SuggestedRolloutScope string                        `json:"suggested_rollout_scope"`
 	NoAutoApplyConfirmed  bool                          `json:"no_auto_apply_confirmed"`
 }
 
@@ -278,6 +274,9 @@ func (e *Engine) handleSelfImprovementEvent(ctx context.Context, ev Event) error
 		if err != nil {
 			return err
 		}
+		if selfimprovement.IsFinalRecommendation(rec) {
+			return nil
+		}
 		rec.Feedback = nil
 		prior = &rec
 		clarification = rec.Clarification
@@ -404,31 +403,11 @@ func (e *Engine) currentCatalogVersions(feedback store.SelfImprovementFeedback) 
 	linkedSkillIDs := stringSet(feedback.LinkedSkillVersionIDs...)
 	linkedGuardrailIDs := stringSet(feedback.LinkedGuardrailVersionIDs...)
 	hasLinkedTarget := len(linkedPromptIDs)+len(linkedSkillIDs)+len(linkedGuardrailIDs) > 0
-	seenVersionIDs := map[string]struct{}{}
-	bodyBudget := selfImprovementCatalogBodyBudget
-
-	if prompts, err := e.store.ReadPrompts(); err == nil {
-		for _, prompt := range prompts {
-			version := catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version)
-			version.Description = prompt.Description
-			if hasLinkedTarget {
-				if _, ok := linkedPromptIDs[prompt.VersionID]; !ok {
-					continue
-				}
-				version.Content = prompt.Content
-			} else if includeSelfImprovementCatalogBody(&bodyBudget, prompt.Content) {
-				version.Content = prompt.Content
-			} else {
-				version.IndexOnly = true
-			}
-			out = append(out, version)
-			seenVersionIDs[version.VersionID] = struct{}{}
-		}
+	if !hasLinkedTarget {
+		return nil
 	}
-	for versionID := range linkedPromptIDs {
-		if _, ok := seenVersionIDs[versionID]; ok {
-			continue
-		}
+
+	for _, versionID := range sortedSetValues(linkedPromptIDs) {
 		prompt, err := e.store.ReadPromptVersion(versionID)
 		if err != nil {
 			continue
@@ -437,29 +416,8 @@ func (e *Engine) currentCatalogVersions(feedback store.SelfImprovementFeedback) 
 		version.Description = prompt.Description
 		version.Content = prompt.Content
 		out = append(out, version)
-		seenVersionIDs[version.VersionID] = struct{}{}
 	}
-	if skills, err := e.store.ReadSkills(); err == nil {
-		for _, skill := range skills {
-			version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
-			if hasLinkedTarget {
-				if _, ok := linkedSkillIDs[skill.VersionID]; !ok {
-					continue
-				}
-				version.Prompt = skill.Prompt
-			} else if includeSelfImprovementCatalogBody(&bodyBudget, skill.Prompt) {
-				version.Prompt = skill.Prompt
-			} else {
-				version.IndexOnly = true
-			}
-			out = append(out, version)
-			seenVersionIDs[version.VersionID] = struct{}{}
-		}
-	}
-	for versionID := range linkedSkillIDs {
-		if _, ok := seenVersionIDs[versionID]; ok {
-			continue
-		}
+	for _, versionID := range sortedSetValues(linkedSkillIDs) {
 		skill, err := e.store.ReadSkillVersion(versionID)
 		if err != nil {
 			continue
@@ -467,36 +425,18 @@ func (e *Engine) currentCatalogVersions(feedback store.SelfImprovementFeedback) 
 		version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
 		version.Prompt = skill.Prompt
 		out = append(out, version)
-		seenVersionIDs[version.VersionID] = struct{}{}
 	}
-	if guardrails, err := e.store.ReadAllGuardrails(); err == nil {
-		for _, guardrail := range guardrails {
-			version := catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version)
-			version.Description = guardrail.Description
-			if hasLinkedTarget {
-				if _, ok := linkedGuardrailIDs[guardrail.VersionID]; !ok {
-					continue
-				}
-				version.Content = guardrail.Content
-			} else if includeSelfImprovementCatalogBody(&bodyBudget, guardrail.Content) {
-				version.Content = guardrail.Content
-			} else {
-				version.IndexOnly = true
-			}
-			out = append(out, version)
-			seenVersionIDs[version.VersionID] = struct{}{}
+	for _, versionID := range sortedSetValues(linkedGuardrailIDs) {
+		guardrail, err := e.store.ReadGuardrailVersion(versionID)
+		if err != nil {
+			continue
 		}
+		version := catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version)
+		version.Description = guardrail.Description
+		version.Content = guardrail.Content
+		out = append(out, version)
 	}
 	return out
-}
-
-func includeSelfImprovementCatalogBody(remaining *int, body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" || len(body) > selfImprovementCatalogBodyMax || len(body) > *remaining {
-		return false
-	}
-	*remaining -= len(body)
-	return true
 }
 
 func catalogVersion(assetType, id, workspace, repo, versionID string, version int) selfImprovementCatalogVersion {
@@ -550,7 +490,6 @@ func recommendationInputFromAssistant(feedback store.SelfImprovementFeedback, pr
 		TargetBaseVersionID:     out.TargetBaseVersionID,
 		ProposedPatch:           out.ProposedPatch,
 		ProposedNewBody:         out.ProposedNewBody,
-		SuggestedRolloutScope:   out.SuggestedRolloutScope,
 		AnalyzerPromptRef:       selfImprovementPromptRef,
 		AnalyzerPromptVersionID: promptVersionID,
 		StructuredOutput:        structured,
@@ -595,6 +534,15 @@ func stringSet(values ...string) map[string]struct{} {
 			out[value] = struct{}{}
 		}
 	}
+	return out
+}
+
+func sortedSetValues(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
 	return out
 }
 

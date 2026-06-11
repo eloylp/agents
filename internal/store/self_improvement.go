@@ -110,7 +110,6 @@ type SelfImprovementRecommendationRow struct {
 	TargetBaseVersionID     string                            `json:"target_base_version_id,omitempty"`
 	ProposedPatch           string                            `json:"proposed_patch,omitempty"`
 	ProposedNewBody         string                            `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                            `json:"suggested_rollout_scope,omitempty"`
 	AnalyzerPromptRef       string                            `json:"analyzer_prompt_ref"`
 	AnalyzerPromptVersionID string                            `json:"analyzer_prompt_version_id,omitempty"`
 	StructuredOutput        map[string]any                    `json:"structured_output,omitempty"`
@@ -149,7 +148,6 @@ type SelfImprovementRecommendationInputRow struct {
 	TargetBaseVersionID     string
 	ProposedPatch           string
 	ProposedNewBody         string
-	SuggestedRolloutScope   string
 	AnalyzerPromptRef       string
 	AnalyzerPromptVersionID string
 	StructuredOutput        map[string]any
@@ -418,9 +416,9 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 			id, workspace_id, feedback_event_id, type, status, confidence, risk, finding,
 			normalized_lesson, rationale, evidence_feedback_ids, evidence_source_urls,
 			attribution_confidence, target_asset_type, target_asset_id, target_base_version_id,
-			proposed_patch, proposed_new_body, suggested_rollout_scope, analyzer_prompt_ref,
+			proposed_patch, proposed_new_body, analyzer_prompt_ref,
 			analyzer_prompt_version_id, structured_output, error
-		) VALUES ('rec_' || lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES ('rec_' || lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(workspace_id, feedback_event_id) DO UPDATE SET
 			type=excluded.type,
 			status=excluded.status,
@@ -437,7 +435,6 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 			target_base_version_id=excluded.target_base_version_id,
 			proposed_patch=excluded.proposed_patch,
 			proposed_new_body=excluded.proposed_new_body,
-			suggested_rollout_scope=excluded.suggested_rollout_scope,
 			analyzer_prompt_ref=excluded.analyzer_prompt_ref,
 			analyzer_prompt_version_id=excluded.analyzer_prompt_version_id,
 			structured_output=excluded.structured_output,
@@ -448,7 +445,7 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 		strings.TrimSpace(in.NormalizedLesson), strings.TrimSpace(in.Rationale), joinInt64s(in.EvidenceFeedbackIDs),
 		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), strings.TrimSpace(in.AttributionConfidence), strings.TrimSpace(in.TargetAssetType),
 		strings.TrimSpace(in.TargetAssetID), strings.TrimSpace(in.TargetBaseVersionID), strings.TrimSpace(in.ProposedPatch),
-		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), strings.TrimSpace(in.AnalyzerPromptRef),
+		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.AnalyzerPromptRef),
 		strings.TrimSpace(in.AnalyzerPromptVersionID), string(structured), strings.TrimSpace(in.Error),
 	)
 	return err
@@ -644,8 +641,15 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 	}
 	_, err = db.Exec(
 		`UPDATE self_improvement_recommendations
-		SET status=?, error=?, updated_at=datetime('now')
-		WHERE feedback_event_id=?`,
+			SET status=?, error=?, updated_at=datetime('now')
+			WHERE feedback_event_id=?
+			  AND status <> 'rejected'
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM self_improvement_proposal_bundles b
+			      WHERE b.recommendation_id = self_improvement_recommendations.id
+			        AND b.status IN ('published', 'resolved', 'discarded')
+			  )`,
 		"failed", strings.TrimSpace(cause), id,
 	)
 	return err
@@ -688,7 +692,7 @@ func recommendationSelectSQL() string {
 	return `SELECT r.id, r.workspace_id, r.feedback_event_id, r.type, r.status, r.confidence, r.risk,
 		r.finding, r.normalized_lesson, r.rationale, r.evidence_feedback_ids, r.evidence_source_urls,
 		r.attribution_confidence, r.target_asset_type, r.target_asset_id, r.target_base_version_id,
-		r.proposed_patch, r.proposed_new_body, r.suggested_rollout_scope, r.analyzer_prompt_ref,
+		r.proposed_patch, r.proposed_new_body, r.analyzer_prompt_ref,
 		r.analyzer_prompt_version_id, r.structured_output, r.error, r.decision_reason, r.created_at, r.updated_at,
 		f.id, f.workspace_id, f.repo_owner, f.repo_name, f.source_type, f.github_comment_id, f.github_review_id,
 		f.github_delivery_id, f.source_url, f.author_login, f.author_authorized, f.issue_number, f.pr_number,
@@ -714,7 +718,7 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&rec.ID, &rec.WorkspaceID, &rec.FeedbackEventID, &rec.Type, &rec.Status, &rec.Confidence, &rec.Risk,
 		&rec.Finding, &rec.NormalizedLesson, &rec.Rationale, &evidenceIDs, &evidenceURLs,
 		&rec.AttributionConfidence, &rec.TargetAssetType, &rec.TargetAssetID, &rec.TargetBaseVersionID,
-		&rec.ProposedPatch, &rec.ProposedNewBody, &rec.SuggestedRolloutScope, &rec.AnalyzerPromptRef,
+		&rec.ProposedPatch, &rec.ProposedNewBody, &rec.AnalyzerPromptRef,
 		&rec.AnalyzerPromptVersionID, &structured, &rec.Error, &rec.DecisionReason, &rec.CreatedAt, &rec.UpdatedAt,
 		&feedback.ID, &feedback.WorkspaceID, &feedback.RepoOwner, &feedback.RepoName, &feedback.SourceType,
 		&feedback.GitHubCommentID, &feedback.GitHubReviewID, &feedback.GitHubDeliveryID, &feedback.SourceURL,
