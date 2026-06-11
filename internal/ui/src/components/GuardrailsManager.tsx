@@ -26,7 +26,6 @@ interface Guardrail {
 interface WorkspaceGuardrailRef {
   workspace_id?: string
   guardrail_name: string
-  guardrail_version_id?: string
   position: number
   enabled: boolean
 }
@@ -64,11 +63,13 @@ function GuardrailForm({
 }) {
   const [form, setForm] = useState<Guardrail>(initial)
   const [publish, setPublish] = useState(true)
+  const [hasOpenDraft, setHasOpenDraft] = useState(false)
   const set = <K extends keyof Guardrail>(k: K, v: Guardrail[K]) => setForm(f => ({ ...f, [k]: v }))
 
   useEffect(() => {
     setForm(initial)
     setPublish(true)
+    setHasOpenDraft(false)
   }, [initial])
 
   const showReset = !isNew && form.is_builtin && !!onReset
@@ -131,6 +132,7 @@ function GuardrailForm({
           assetID={form.id || form.name}
           currentVersionID={form.version_id}
           onChanged={onVersionsChanged}
+          onOpenDraftChange={setHasOpenDraft}
           onRestoreVersion={version => {
             setForm(f => ({
               ...f,
@@ -148,13 +150,22 @@ function GuardrailForm({
           <input
             type="checkbox"
             checked={publish}
-            onChange={e => setPublish(e.target.checked)}
+            disabled={hasOpenDraft && publish}
+            onChange={e => {
+              if (!e.target.checked && hasOpenDraft) return
+              setPublish(e.target.checked)
+            }}
             style={{ marginTop: 2 }}
           />
           <span>
             <strong>Publish</strong>
             <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
               Workspaces tracking this guardrail will use the new published version on their next run. If unchecked, the edit is saved as a draft.
+              {hasOpenDraft && (
+                <span style={{ display: 'block', color: 'var(--text-danger)', marginTop: 2 }}>
+                  An open draft already exists, so saving another draft is disabled.
+                </span>
+              )}
             </span>
           </span>
         </label>
@@ -189,7 +200,7 @@ function GuardrailForm({
           </button>
           <button
             onClick={() => onSave({ ...form, publish })}
-            disabled={saving || !form.name.trim() || !form.content.trim()}
+            disabled={saving || (!publish && hasOpenDraft) || !form.name.trim() || !form.content.trim()}
             style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             {saving ? 'Saving…' : 'Save'}
@@ -275,7 +286,6 @@ export default function GuardrailsManager() {
     try {
       const body = nextRefs.map((ref, index) => ({
         guardrail_name: ref.guardrail_name,
-        guardrail_version_id: ref.guardrail_version_id || '',
         position: index,
         enabled: ref.enabled,
       }))

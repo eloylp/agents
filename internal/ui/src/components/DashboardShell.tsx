@@ -13,11 +13,11 @@ const links = [
   { href: '/events/', label: 'Events', group: 'Runtime' },
   { href: '/runners/', label: 'Runners', group: 'Runtime' },
   { href: '/traces/', label: 'Traces', group: 'Runtime' },
-  { href: '/prompts/', label: 'Prompts', group: 'Knowledge' },
-  { href: '/skills/', label: 'Skills', group: 'Knowledge' },
-  { href: '/guardrails/', label: 'Guardrails', group: 'Knowledge' },
-  { href: '/memory/', label: 'Memory', group: 'Knowledge' },
-  { href: '/improvements/', label: 'Improvements', group: 'Knowledge' },
+  { href: '/prompts/', label: 'Prompts', group: 'Intelligence' },
+  { href: '/skills/', label: 'Skills', group: 'Intelligence' },
+  { href: '/guardrails/', label: 'Guardrails', group: 'Intelligence' },
+  { href: '/memory/', label: 'Memory', group: 'Intelligence' },
+  { href: '/improvements/', label: 'Improvements', group: 'Intelligence' },
   { href: '/workspaces/', label: 'Workspaces', group: 'Config' },
   { href: '/repos/', label: 'Repos', group: 'Config' },
   { href: '/config/', label: 'Config', group: 'Config' },
@@ -170,22 +170,9 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         .dashboard-shell.nav-collapsed .shell-brand-text,
         .dashboard-shell.nav-collapsed .shell-nav,
         .dashboard-shell.nav-collapsed .shell-sidebar-footer { display: none; }
-        .shell-topbar {
-          min-height: 50px;
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 0 1rem;
-          border-bottom: 1px solid var(--border-subtle);
-          background: color-mix(in srgb, var(--bg-card) 88%, transparent);
-          backdrop-filter: blur(10px);
-          position: sticky;
-          top: 0;
-          z-index: 500;
-        }
+        .shell-mobilebar { display: none; }
         .shell-content { padding: 1.25rem; max-width: 1480px; margin: 0 auto; }
         .shell-menu-button { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; min-height: 30px; }
-        .shell-topbar .shell-menu-button { display: none; }
         .shell-sidebar-header {
           padding: 1.2rem 1rem 0.9rem;
           border-bottom: 1px solid var(--border-subtle);
@@ -212,7 +199,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         .shell-overlay { display: none; }
         .shell-nav-link:hover { text-decoration: none; background: var(--accent-bg); color: var(--accent); }
         @media (max-width: 860px) {
-          /* Mobile uses the topbar menu button; desktop keeps the control in the sidebar rail. */
+          /* Mobile keeps a compact hamburger strip; desktop has no shell title bar. */
           .shell-sidebar { width: var(--sidebar-width); transform: translateX(-102%); transition: transform 160ms ease; }
           .shell-sidebar.open { transform: translateX(0); }
           .dashboard-shell.nav-collapsed .shell-sidebar { width: var(--sidebar-width); visibility: visible; }
@@ -221,7 +208,20 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           .dashboard-shell.nav-collapsed .shell-nav { display: block; }
           .dashboard-shell.nav-collapsed .shell-sidebar-footer { display: grid; }
           .shell-sidebar .shell-menu-button { display: none; }
-          .shell-topbar .shell-menu-button { display: inline-flex; }
+          .shell-mobilebar {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+            background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 500;
+          }
+          .shell-mobilebar .shell-menu-button { display: inline-flex; }
           .shell-main { margin-left: 0; }
           .shell-overlay.open {
             display: block;
@@ -285,12 +285,11 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         </div>
       </aside>
       <div className="shell-main">
-        <header className="shell-topbar">
-          {mobileViewport && renderMenuButton()}
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
-            {links.find(link => activePath(pathname, link.href))?.label ?? 'Agents'}
-          </div>
-        </header>
+        {mobileViewport && (
+          <header className="shell-mobilebar">
+            {renderMenuButton()}
+          </header>
+        )}
         {orphanCount > 0 && (
           <Link href="/config/?tab=backends&focus=orphans" style={{ display: 'block', background: 'var(--bg-danger)', borderBottom: '1px solid var(--border-danger)', color: 'var(--text-danger)', padding: '0.5rem 1rem', fontSize: '0.82rem', fontWeight: 600, textDecoration: 'none' }}>
             {orphanCount} orphaned agent{orphanCount === 1 ? '' : 's'} detected. Click to review and fix in Backends and tools.

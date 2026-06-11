@@ -7,6 +7,7 @@ import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
+import { formatDateTime } from '@/lib/datetime'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
@@ -149,7 +150,7 @@ function TokenUsagePanel({ span }: { span: Span }) {
 }
 
 function fmt(iso: string) {
-  return new Date(iso).toLocaleString()
+  return formatDateTime(iso)
 }
 
 function GanttRow({ span, minMs, totalMs }: { span: Span; minMs: number; totalMs: number }) {

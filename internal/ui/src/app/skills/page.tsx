@@ -7,6 +7,7 @@ import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 
 interface Skill {
   id?: string
+  ref?: string
   workspace_id?: string
   repo?: string
   name: string
@@ -39,6 +40,17 @@ const inputStyle: React.CSSProperties = {
 }
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
+function stableSkillID(skill: Skill) {
+  return (skill.ref || skill.id || skill.name || '').trim()
+}
+
+function skillDisplayLabel(skill: Skill) {
+  const id = stableSkillID(skill)
+  const name = (skill.name || '').trim()
+  if (!id || id === name) return name || id
+  return `${id} · ${name}`
+}
+
 function SkillForm({
   initial, isNew, workspaces, onSave, onCancel, onVersionsChanged, saving, error,
 }: {
@@ -55,11 +67,13 @@ function SkillForm({
   const [selectedScope, setSelectedScope] = useState<'global' | 'workspace' | 'repo'>(scopeType(initial))
   const [repoOptions, setRepoOptions] = useState<Repo[]>([])
   const [publish, setPublish] = useState(true)
+  const [hasOpenDraft, setHasOpenDraft] = useState(false)
 
   useEffect(() => {
     setForm(initial)
     setSelectedScope(scopeType(initial))
     setPublish(true)
+    setHasOpenDraft(false)
   }, [initial])
 
   useEffect(() => {
@@ -75,6 +89,14 @@ function SkillForm({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+      {!isNew && stableSkillID(form) && (
+        <div style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg)', borderRadius: 6, padding: '0.55rem 0.65rem' }}>
+          <div style={{ color: 'var(--text-faint)', fontSize: '0.72rem', textTransform: 'uppercase', fontWeight: 700, marginBottom: 3 }}>Stable id</div>
+          <div style={{ color: 'var(--text-heading)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '0.84rem', overflowWrap: 'anywhere' }}>
+            {stableSkillID(form)}
+          </div>
+        </div>
+      )}
       <div>
         <label style={labelStyle}>Name *</label>
         <input
@@ -144,9 +166,10 @@ function SkillForm({
       {!isNew && (
         <CatalogVersionsPanel
           type="skill"
-          assetID={form.id || form.name}
+          assetID={stableSkillID(form)}
           currentVersionID={form.version_id}
           onChanged={onVersionsChanged}
+          onOpenDraftChange={setHasOpenDraft}
           onRestoreVersion={version => {
             setForm(f => ({ ...f, prompt: version.prompt ?? '' }))
             setPublish(true)
@@ -158,13 +181,22 @@ function SkillForm({
           <input
             type="checkbox"
             checked={publish}
-            onChange={e => setPublish(e.target.checked)}
+            disabled={hasOpenDraft && publish}
+            onChange={e => {
+              if (!e.target.checked && hasOpenDraft) return
+              setPublish(e.target.checked)
+            }}
             style={{ marginTop: 2 }}
           />
           <span>
             <strong>Publish</strong>
             <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
               Agents using this skill through current tracking will use the new published version on their next run. If unchecked, the edit is saved as a draft.
+              {hasOpenDraft && (
+                <span style={{ display: 'block', color: 'var(--text-danger)', marginTop: 2 }}>
+                  An open draft already exists, so saving another draft is disabled.
+                </span>
+              )}
             </span>
           </span>
         </label>
@@ -176,7 +208,7 @@ function SkillForm({
         </button>
         <button
           onClick={() => onSave({ ...form, publish })}
-          disabled={saving || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
+          disabled={saving || (!publish && hasOpenDraft) || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
@@ -207,7 +239,7 @@ export default function SkillsPage() {
     fetch('/skills')
       .then(r => r.json())
       .then((data: Skill[]) => {
-        setSkills((data ?? []).map(s => ({ ...s, id: s.id || s.name })))
+        setSkills((data ?? []).map(s => ({ ...s, id: stableSkillID(s) || s.name })))
         setLoading(false)
       })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -249,7 +281,7 @@ export default function SkillsPage() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const res = await fetch(isNew ? '/skills' : `/skills/${encodeURIComponent(form.id || form.name)}`, {
+      const res = await fetch(isNew ? '/skills' : `/skills/${encodeURIComponent(stableSkillID(form))}`, {
         method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isNew ? {
@@ -282,7 +314,7 @@ export default function SkillsPage() {
     if (!deleteTarget) return
     setSaving(true)
     try {
-      const res = await fetch(`/skills/${encodeURIComponent(deleteTarget.id || deleteTarget.name)}`, { method: 'DELETE' })
+      const res = await fetch(`/skills/${encodeURIComponent(stableSkillID(deleteTarget))}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
@@ -379,10 +411,10 @@ export default function SkillsPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {visibleSkills.map(sk => (
-          <Card key={sk.id || sk.name}>
+          <Card key={stableSkillID(sk) || sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem' }}>{sk.name}</div>
+                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}>{skillDisplayLabel(sk)}</div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>
                   {scopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
                 </div>
@@ -405,7 +437,7 @@ export default function SkillsPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
+        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${skillDisplayLabel(selected)}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
           <SkillForm
             initial={selected}
             isNew={modal === 'create'}
@@ -422,7 +454,7 @@ export default function SkillsPage() {
       {modal === 'delete' && (
         <Modal title="Delete skill" onClose={() => setModal(null)}>
           <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
-            Delete skill <strong>{deleteTarget?.name}</strong>? This cannot be undone.
+            Delete skill <strong>{deleteTarget ? skillDisplayLabel(deleteTarget) : ''}</strong>? This cannot be undone.
           </p>
           {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>

@@ -7,6 +7,7 @@ import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { formatDateTime, formatTime } from '@/lib/datetime'
 import { fmtDuration } from '@/lib/format'
 import { newRunnerTimeoutTracker, observeRunnerTimeouts } from '@/lib/runner-timeouts'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
@@ -75,7 +76,7 @@ function isRunnerExecution(row: RunnerRow) {
 
 function fmtTime(s?: string) {
   if (!s) return '-'
-  return new Date(s).toLocaleTimeString()
+  return formatTime(s)
 }
 
 function runnerCause(row: RunnerRow) {
@@ -460,10 +461,10 @@ function RunnersInner() {
                       <span style={{ color: 'var(--text-faint)' }}>Actor</span>
                       <span style={{ color: 'var(--text)' }}>{r.actor || '-'}</span>
                       <span style={{ color: 'var(--text-faint)' }}>Enqueued</span>
-                      <span style={{ color: 'var(--text-faint)' }}>{new Date(r.enqueued_at).toLocaleString()}</span>
+                      <span style={{ color: 'var(--text-faint)' }}>{formatDateTime(r.enqueued_at)}</span>
                       {r.completed_at && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Completed</span>
-                        <span style={{ color: 'var(--text-faint)' }}>{new Date(r.completed_at).toLocaleString()}</span>
+                        <span style={{ color: 'var(--text-faint)' }}>{formatDateTime(r.completed_at)}</span>
                       </>)}
                       {r.summary && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Summary</span>
