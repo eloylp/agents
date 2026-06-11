@@ -10,7 +10,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestSelfImprovementAnalystPromptV7BecomesCurrentOnFreshStore(t *testing.T) {
+func TestSelfImprovementAnalystPromptV8BecomesCurrentOnFreshStore(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -24,8 +24,8 @@ func TestSelfImprovementAnalystPromptV7BecomesCurrentOnFreshStore(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read seeded prompt: %v", err)
 	}
-	if prompt.VersionID != "promptver_self_improvement_analyst_v7" {
-		t.Fatalf("version_id = %q, want v7", prompt.VersionID)
+	if prompt.VersionID != "promptver_self_improvement_analyst_v8" {
+		t.Fatalf("version_id = %q, want v8", prompt.VersionID)
 	}
 	for _, want := range []string{
 		"Supplied context:",
@@ -42,6 +42,7 @@ func TestSelfImprovementAnalystPromptV7BecomesCurrentOnFreshStore(t *testing.T) 
 		"proposed_body must be the full replacement body",
 		"Catalog context is attribution-only.",
 		"return status=needs_user_input instead of scanning or guessing from the wider catalog",
+		"changes, and no_auto_apply_confirmed",
 	} {
 		if !strings.Contains(prompt.Content, want) {
 			t.Fatalf("prompt content missing %q", want)
@@ -49,6 +50,9 @@ func TestSelfImprovementAnalystPromptV7BecomesCurrentOnFreshStore(t *testing.T) 
 	}
 	if strings.Contains(prompt.Content, "knowledge cluster") {
 		t.Fatal("prompt content still contains knowledge cluster")
+	}
+	if strings.Contains(prompt.Content, "suggested_rollout_scope") {
+		t.Fatal("prompt content still contains suggested_rollout_scope")
 	}
 }
 

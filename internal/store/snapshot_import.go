@@ -366,6 +366,7 @@ func reseedSelfImprovementAnalystPromptTx(tx *sql.Tx) error {
 		"045_self_improvement_analyst_prompt_v5_intelligence_language.sql",
 		"048_self_improvement_analyst_prompt_v6_bundle_contract.sql",
 		"052_self_improvement_analyst_prompt_v7_attribution_only.sql",
+		"054_self_improvement_analyst_prompt_v8_schema_alignment.sql",
 	} {
 		data, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
