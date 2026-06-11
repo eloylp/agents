@@ -404,10 +404,10 @@ function RunnersInner() {
                   <span style={{ color: 'var(--text-faint)' }} title={startedAt}>{fmtTime(startedAt)}</span>
                   <span style={{ color: 'var(--text-faint)' }}>{fmtDuration(r.run_duration_ms)}</span>
                   <span style={{ display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
-                    {r.status === 'running' && r.span_id && (
+                    {r.span_id && (
                       <button
                         onClick={() => setStreamSpan({ id: r.span_id!, agent: r.agent || '', repo: r.repo, kind: r.kind, rootEventId: r.event_id })}
-                        title="Watch the agent's live thinking process"
+                        title={r.status === 'running' ? "Watch the agent's live thinking process" : 'Open the persisted run transcript'}
                         style={{
                           background: 'var(--bg-card)',
                           border: '1px solid var(--accent)',
@@ -417,7 +417,7 @@ function RunnersInner() {
                           cursor: 'pointer',
                           fontSize: '0.72rem',
                         }}
-                      >▶ Live</button>
+                      >{r.status === 'running' ? '▶ Live' : 'Transcript'}</button>
                     )}
                     <button
                       disabled={busy || r.status === 'running' || r.status === 'enqueued'}
