@@ -33,19 +33,6 @@ func registerPromptCatalogVersionTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Prompt version id.")),
 		}, promptSelector...)...,
 	), toolListPromptVersionReferences(deps))
-	srv.AddTool(mcpgo.NewTool("publish_prompt_version",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Publish a draft or proposal prompt version after verifying it belongs to the selected prompt."),
-			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Draft or proposal prompt version id.")),
-		}, promptSelector...)...,
-	), toolPublishPromptVersion(deps))
-	srv.AddTool(mcpgo.NewTool("rollout_prompt_version_refs",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Move exact prompt pins from one version to another published version. Tracking refs are unchanged."),
-			mcpgo.WithString("from_version_id", mcpgo.Required(), mcpgo.Description("Existing prompt version id referenced by exact pins.")),
-			mcpgo.WithString("to_version_id", mcpgo.Required(), mcpgo.Description("Published prompt version id to pin those refs to.")),
-		}, promptSelector...)...,
-	), toolRolloutPromptVersionRefs(deps))
 }
 
 func registerSkillCatalogVersionTools(srv *server.MCPServer, deps Deps) {
@@ -62,19 +49,6 @@ func registerSkillCatalogVersionTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Skill version id.")),
 		}, skillSelector...)...,
 	), toolListSkillVersionReferences(deps))
-	srv.AddTool(mcpgo.NewTool("publish_skill_version",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Publish a draft or proposal skill version after verifying it belongs to the selected skill."),
-			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Draft or proposal skill version id.")),
-		}, skillSelector...)...,
-	), toolPublishSkillVersion(deps))
-	srv.AddTool(mcpgo.NewTool("rollout_skill_version_refs",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Move exact skill pins from one version to another published version. Tracking refs are unchanged."),
-			mcpgo.WithString("from_version_id", mcpgo.Required(), mcpgo.Description("Existing skill version id referenced by exact pins.")),
-			mcpgo.WithString("to_version_id", mcpgo.Required(), mcpgo.Description("Published skill version id to pin those refs to.")),
-		}, skillSelector...)...,
-	), toolRolloutSkillVersionRefs(deps))
 }
 
 func registerGuardrailCatalogVersionTools(srv *server.MCPServer, deps Deps) {
@@ -91,19 +65,6 @@ func registerGuardrailCatalogVersionTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Guardrail version id.")),
 		}, guardrailSelector...)...,
 	), toolListGuardrailVersionReferences(deps))
-	srv.AddTool(mcpgo.NewTool("publish_guardrail_version",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Publish a draft or proposal guardrail version after verifying it belongs to the selected guardrail."),
-			mcpgo.WithString("version_id", mcpgo.Required(), mcpgo.Description("Draft or proposal guardrail version id.")),
-		}, guardrailSelector...)...,
-	), toolPublishGuardrailVersion(deps))
-	srv.AddTool(mcpgo.NewTool("rollout_guardrail_version_refs",
-		append([]mcpgo.ToolOption{
-			mcpgo.WithDescription("Move exact workspace guardrail pins from one version to another published version. Tracking refs are unchanged."),
-			mcpgo.WithString("from_version_id", mcpgo.Required(), mcpgo.Description("Existing guardrail version id referenced by exact pins.")),
-			mcpgo.WithString("to_version_id", mcpgo.Required(), mcpgo.Description("Published guardrail version id to pin those refs to.")),
-		}, guardrailSelector...)...,
-	), toolRolloutGuardrailVersionRefs(deps))
 }
 
 func toolListPromptVersions(deps Deps) server.ToolHandlerFunc {
@@ -135,49 +96,6 @@ func toolListPromptVersionReferences(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("list prompt version references", err), nil
 		}
 		return jsonResult(refs)
-	}
-}
-
-func toolPublishPromptVersion(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, err := resolvePromptRef(deps, req)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
-		}
-		versionID, err := req.RequireString("version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if err := ensureCatalogVersion(deps.Store.ListPromptVersions, ref, versionID); err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish prompt version", err), nil
-		}
-		prompt, err := deps.Fleet.PublishPromptVersion(versionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish prompt version", err), nil
-		}
-		return jsonResult(promptJSON(prompt))
-	}
-}
-
-func toolRolloutPromptVersionRefs(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, err := resolvePromptRef(deps, req)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
-		}
-		fromVersionID, err := req.RequireString("from_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		toVersionID, err := req.RequireString("to_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		result, err := deps.Store.UpgradePromptVersionReferences(ref, fromVersionID, toVersionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("rollout prompt version refs", err), nil
-		}
-		return jsonResult(result)
 	}
 }
 
@@ -213,50 +131,6 @@ func toolListSkillVersionReferences(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func toolPublishSkillVersion(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := skillRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
-		}
-		versionID, err := req.RequireString("version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		canonical := fleet.NormalizeSkillName(ref)
-		if err := ensureCatalogVersion(deps.Store.ListSkillVersions, canonical, versionID); err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish skill version", err), nil
-		}
-		name, skill, err := deps.Fleet.PublishSkillVersion(versionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish skill version", err), nil
-		}
-		return jsonResult(skillJSON(name, skill))
-	}
-}
-
-func toolRolloutSkillVersionRefs(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := skillRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
-		}
-		fromVersionID, err := req.RequireString("from_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		toVersionID, err := req.RequireString("to_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		result, err := deps.Store.UpgradeSkillVersionReferences(fleet.NormalizeSkillName(ref), fromVersionID, toVersionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("rollout skill version refs", err), nil
-		}
-		return jsonResult(result)
-	}
-}
-
 func toolListGuardrailVersions(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ref, ok := guardrailRefArg(req)
@@ -286,50 +160,6 @@ func toolListGuardrailVersionReferences(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("list guardrail version references", err), nil
 		}
 		return jsonResult(refs)
-	}
-}
-
-func toolPublishGuardrailVersion(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := guardrailRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
-		}
-		versionID, err := req.RequireString("version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		canonical := fleet.NormalizeGuardrailName(ref)
-		if err := ensureCatalogVersion(deps.Store.ListGuardrailVersions, canonical, versionID); err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish guardrail version", err), nil
-		}
-		guardrail, err := deps.Fleet.PublishGuardrailVersion(versionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("publish guardrail version", err), nil
-		}
-		return jsonResult(guardrailJSON(guardrail))
-	}
-}
-
-func toolRolloutGuardrailVersionRefs(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := guardrailRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
-		}
-		fromVersionID, err := req.RequireString("from_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		toVersionID, err := req.RequireString("to_version_id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		result, err := deps.Store.UpgradeGuardrailVersionReferences(fleet.NormalizeGuardrailName(ref), fromVersionID, toVersionID)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("rollout guardrail version refs", err), nil
-		}
-		return jsonResult(result)
 	}
 }
 

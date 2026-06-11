@@ -14,11 +14,13 @@
 //   - trigger_agent, on-demand run
 //   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt, agent activity
 //   - get_graph, get_dispatches, get_memory, dispatch + memory
+//   - list_improvement_*, analyze_improvement_feedback, clarify_improvement_recommendation,
+//     improvement proposal bundle edit/reject/link/publish/discard tools
 //   - get_config, export_config, import_config, config snapshots / write
 //   - create_agent, update_agent, delete_agent, agent CRUD writes
 //   - create_skill, update_skill, delete_skill, skill CRUD writes
 //   - create_prompt, update_prompt, delete_prompt, prompt catalog CRUD writes
-//   - list_*_versions, list_*_version_references, publish_*_version, rollout_*_version_refs, catalog version operations
+//   - list_*_versions and list_*_version_references catalog version operations
 //   - create_workspace, update_workspace, delete_workspace, update_workspace_guardrails, workspace writes
 //   - create_backend, update_backend, delete_backend, backend CRUD writes
 //   - create_repo, update_repo, delete_repo, repo CRUD writes

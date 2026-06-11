@@ -75,7 +75,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		IssueNumber:           7,
 		RawBody:               "Keep files under 800 lines /agents improve",
 		Tag:                   store.FeedbackTag,
-		LinkedPromptVersionID: "promptver_self_improvement_analyst_v1",
+		LinkedPromptVersionID: "promptver_self_improvement_analyst_v8",
 		LinkConfidence:        "exact",
 		LinkDiagnostics:       "matched run attribution metadata",
 		Status:                store.FeedbackStatusNew,
@@ -85,7 +85,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	runner := &selfImprovementJSONRunner{raw: json.RawMessage(`{
 		"type":"patch_prompt",
-		"status":"accepted",
+		"status":"recommended",
 		"confidence":"medium",
 		"risk":"low",
 		"finding":"The feedback asks for a file-size guidance improvement.",
@@ -94,20 +94,19 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		"evidence_feedback_ids":[1],
 		"evidence_source_urls":["https://github.com/owner/repo/issues/7#issuecomment-123"],
 		"attribution_confidence":"exact",
-		"target_asset_type":"prompt",
-		"target_asset_id":"prompt_self-improvement-analyst",
-		"target_base_version_id":"promptver_self_improvement_analyst_v1",
+			"target_asset_type":"prompt",
+			"target_asset_id":"prompt_self-improvement-analyst",
+				"target_base_version_id":"promptver_self_improvement_analyst_v8",
 		"proposed_patch":"",
 		"proposed_new_body":"",
 		"changes":[{
-			"operation":"update_existing",
-			"asset_type":"prompt",
-			"asset_id":"prompt_self-improvement-analyst",
-			"base_version_id":"promptver_self_improvement_analyst_v1",
+				"operation":"update_existing",
+				"asset_type":"prompt",
+				"asset_id":"prompt_self-improvement-analyst",
+					"base_version_id":"promptver_self_improvement_analyst_v8",
 			"proposed_body":"Prefer files under 800 lines when practical.",
 			"rationale":"Feedback event 1 provides direct evidence."
 		}],
-		"suggested_rollout_scope":"workspace",
 		"no_auto_apply_confirmed":true
 	}`)}
 	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
@@ -121,11 +120,11 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeSelfImprovementFeedback: %v", err)
 	}
-	if rec.Status != selfimprovement.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
-		t.Fatalf("recommendation = %+v, want machine-owned status with analyzer prompt version", rec)
+	if rec.Status != selfimprovement.RecommendationStatusRecommended || rec.AnalyzerPromptVersionID == "" {
+		t.Fatalf("recommendation = %+v, want proposal-ready status with analyzer prompt version", rec)
 	}
-	if got := rec.StructuredOutput["status"]; got != selfimprovement.RecommendationStatusNeedsUserInput {
-		t.Fatalf("structured status = %v, want clamped machine-owned status", got)
+	if got := rec.StructuredOutput["status"]; got != selfimprovement.RecommendationStatusRecommended {
+		t.Fatalf("structured status = %v, want proposal-ready status", got)
 	}
 	if changes, ok := rec.StructuredOutput["changes"].([]any); !ok || len(changes) != 1 {
 		t.Fatalf("structured changes = %#v, want one bundle change preserved", rec.StructuredOutput["changes"])
@@ -151,7 +150,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if runner.req.Model != "gpt-5.5" {
 		t.Fatalf("assistant model = %q, want inferred configured agent model", runner.req.Model)
 	}
-	inputJSON := renderedPayloadBlock(t, runner.req.User, "analysis_input_json")
+	inputJSON := renderedSystemJSONBlock(t, runner.req.System)
 	var input selfImprovementInput
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		t.Fatalf("assistant input json: %v", err)
@@ -174,6 +173,71 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != selfImprovementInternalAgentName {
 		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
+	}
+}
+
+func TestCurrentCatalogVersionsRequiresAttribution(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "global-coder", Content: "Do coding work."}); err != nil {
+		t.Fatalf("upsert prompt: %v", err)
+	}
+	if err := st.UpsertSkill("go-api", fleet.Skill{Name: "go-api", Prompt: "Handle Go APIs."}); err != nil {
+		t.Fatalf("upsert skill: %v", err)
+	}
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+
+	versions := e.currentCatalogVersions(store.SelfImprovementFeedback{
+		WorkspaceID:    fleet.DefaultWorkspaceID,
+		RepoOwner:      "owner",
+		RepoName:       "repo",
+		LinkConfidence: "unresolved",
+	})
+	if len(versions) != 0 {
+		t.Fatalf("catalog versions = %+v, want none without attribution", versions)
+	}
+}
+
+func TestRecommendationInputFromAssistantNormalizesSinglePatchToBundle(t *testing.T) {
+	t.Parallel()
+
+	feedback := store.SelfImprovementFeedback{
+		ID:          91,
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		SourceURL:   "https://github.com/owner/repo/issues/1#issuecomment-91",
+	}
+	in, err := recommendationInputFromAssistant(feedback, "promptver_self_improvement_analyst_v6", json.RawMessage(`{
+		"type":"catalog_patch",
+		"status":"recommended",
+		"confidence":"medium",
+		"risk":"low",
+		"finding":"Update file guidance.",
+		"normalized_lesson":"Split large files semantically.",
+		"rationale":"Maintainer clarification is actionable.",
+		"evidence_feedback_ids":[91],
+		"evidence_source_urls":["https://github.com/owner/repo/issues/1#issuecomment-91"],
+		"attribution_confidence":"exact",
+		"target_asset_type":"skill",
+		"target_asset_id":"file-structure",
+		"target_base_version_id":"skillver_current",
+			"proposed_patch":"",
+			"proposed_new_body":"Full edited skill body.",
+			"changes":[],
+			"no_auto_apply_confirmed":true
+		}`))
+	if err != nil {
+		t.Fatalf("recommendationInputFromAssistant: %v", err)
+	}
+	if in.Type != "catalog_patch_bundle" {
+		t.Fatalf("type = %q, want catalog_patch_bundle", in.Type)
+	}
+	changes, ok := in.StructuredOutput["changes"].([]selfImprovementOutputChange)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("changes = %#v, want one normalized bundle change", in.StructuredOutput["changes"])
+	}
+	if changes[0].ProposedBody != "Full edited skill body." || changes[0].AssetID != "file-structure" {
+		t.Fatalf("normalized change = %+v", changes[0])
 	}
 }
 
@@ -201,7 +265,7 @@ func TestSelfImprovementRunEventPreservesQueuedEventIdentity(t *testing.T) {
 		EnqueuedAt:  enqueuedAt,
 	}
 
-	ev := selfImprovementRunEvent(feedback, selfImprovementInternalAgentName, `{"feedback_event_id":42}`, &queued)
+	ev := selfImprovementRunEvent(feedback, selfImprovementInternalAgentName, &queued)
 
 	if ev.ID != queued.ID || ev.QueueID != queued.QueueID || !ev.EnqueuedAt.Equal(enqueuedAt) {
 		t.Fatalf("event identity = id %q queue %d enqueued %s, want queued event", ev.ID, ev.QueueID, ev.EnqueuedAt)
@@ -225,23 +289,13 @@ func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
 		Body:             "Scope it only to refactorer prompts.",
 	}
 
-	memory := []selfimprovement.AssistantMemory{{
-		ID:          "mem-1",
-		WorkspaceID: "default",
-		Key:         "prefer_skills",
-		Value:       "Prefer reusable skills.",
-		Status:      selfimprovement.MemoryStatusActive,
-	}}
-	input := selfImprovementAnalysisInput(feedback, prior, clarification, nil, memory)
+	input := selfImprovementAnalysisInput(feedback, prior, clarification, nil)
 
 	if input.AnalysisMode != selfImprovementAnalysisModeClarification || !input.ClarificationPresent {
 		t.Fatalf("assistant input mode = %q clarification_present=%v, want clarification", input.AnalysisMode, input.ClarificationPresent)
 	}
 	if input.PriorRecommendation != prior || input.Clarification != clarification {
 		t.Fatalf("assistant input prior=%+v clarification=%+v, want provided objects", input.PriorRecommendation, input.Clarification)
-	}
-	if len(input.AssistantPreferenceMemory) != 1 || input.CurrentInstructionOverride == "" {
-		t.Fatalf("assistant memory input = %+v override=%q, want memory plus override", input.AssistantPreferenceMemory, input.CurrentInstructionOverride)
 	}
 }
 
@@ -335,6 +389,20 @@ func renderedPayloadBlock(t *testing.T, user, key string) string {
 		break
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderedSystemJSONBlock(t *testing.T, system string) string {
+	t.Helper()
+	start := strings.Index(system, "```json\n")
+	if start < 0 {
+		t.Fatalf("rendered system prompt missing analysis input JSON block: %s", system)
+	}
+	block := system[start+len("```json\n"):]
+	end := strings.Index(block, "\n```")
+	if end < 0 {
+		t.Fatalf("rendered system prompt has unterminated analysis input JSON block: %s", system)
+	}
+	return block[:end]
 }
 
 func TestAnalyzeSelfImprovementFeedbackMarksFailedWhenAssistantFails(t *testing.T) {

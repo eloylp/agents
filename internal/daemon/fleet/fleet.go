@@ -32,8 +32,6 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-const catalogVersionMetadataPublishError = "catalog version metadata (state, source_type, source_ref, author, changelog) is only allowed when creating a draft/proposal; set publish=false"
-
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
@@ -87,9 +85,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleSkillVersionReferences))).Methods(http.MethodGet)
-	r.Handle("/skills/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handleSkillVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/skills/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleSkillVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailsList))).Methods(http.MethodGet)
@@ -97,9 +93,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleGuardrailVersionReferences))).Methods(http.MethodGet)
-	r.Handle("/guardrails/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handleGuardrailVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/guardrails/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleGuardrailVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
 
@@ -108,9 +102,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handlePromptVersionReferences))).Methods(http.MethodGet)
-	r.Handle("/prompts/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handlePromptVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
-	r.Handle("/prompts/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handlePromptVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
@@ -156,24 +148,22 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 // ── Agent wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeAgentJSON struct {
-	ID              string            `json:"id,omitempty"`
-	WorkspaceID     string            `json:"workspace_id,omitempty"`
-	Name            string            `json:"name"`
-	Backend         string            `json:"backend"`
-	Model           string            `json:"model,omitempty"`
-	Skills          []string          `json:"skills"`
-	SkillVersionIDs map[string]string `json:"skill_version_ids,omitempty"`
-	Prompt          *string           `json:"prompt,omitempty"`
-	PromptID        string            `json:"prompt_id,omitempty"`
-	PromptRef       string            `json:"prompt_ref,omitempty"`
-	PromptScope     string            `json:"prompt_scope,omitempty"`
-	PromptVersionID string            `json:"prompt_version_id,omitempty"`
-	ScopeType       string            `json:"scope_type,omitempty"`
-	ScopeRepo       string            `json:"scope_repo,omitempty"`
-	AllowPRs        bool              `json:"allow_prs"`
-	AllowDispatch   bool              `json:"allow_dispatch"`
-	CanDispatch     []string          `json:"can_dispatch"`
-	Description     string            `json:"description"`
+	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
+	Name          string   `json:"name"`
+	Backend       string   `json:"backend"`
+	Model         string   `json:"model,omitempty"`
+	Skills        []string `json:"skills"`
+	Prompt        *string  `json:"prompt,omitempty"`
+	PromptID      string   `json:"prompt_id,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
+	ScopeType     string   `json:"scope_type,omitempty"`
+	ScopeRepo     string   `json:"scope_repo,omitempty"`
+	AllowPRs      bool     `json:"allow_prs"`
+	AllowDispatch bool     `json:"allow_dispatch"`
+	CanDispatch   []string `json:"can_dispatch"`
+	Description   string   `json:"description"`
 	// AllowMemory is a *bool so POST clients that omit the field get the
 	// default-true semantics (`Agent.AllowMemory == nil` → IsAllowMemory()
 	// returns true). Responses always populate it (see agentToStoreJSON) so
@@ -184,45 +174,42 @@ type storeAgentJSON struct {
 func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
-		ID:              a.ID,
-		WorkspaceID:     a.WorkspaceID,
-		Name:            a.Name,
-		Backend:         a.Backend,
-		Model:           a.Model,
-		Skills:          nilSafeStrings(a.Skills),
-		SkillVersionIDs: a.SkillVersionIDs,
-		PromptID:        a.PromptID,
-		PromptRef:       a.PromptRef,
-		PromptScope:     a.PromptScope,
-		PromptVersionID: a.PromptVersionID,
-		ScopeType:       a.ScopeType,
-		ScopeRepo:       a.ScopeRepo,
-		AllowPRs:        a.AllowPRs,
-		AllowDispatch:   a.AllowDispatch,
-		CanDispatch:     nilSafeStrings(a.CanDispatch),
-		Description:     a.Description,
-		AllowMemory:     &allowMem,
+		ID:            a.ID,
+		WorkspaceID:   a.WorkspaceID,
+		Name:          a.Name,
+		Backend:       a.Backend,
+		Model:         a.Model,
+		Skills:        nilSafeStrings(a.Skills),
+		PromptID:      a.PromptID,
+		PromptRef:     a.PromptRef,
+		PromptScope:   a.PromptScope,
+		ScopeType:     a.ScopeType,
+		ScopeRepo:     a.ScopeRepo,
+		AllowPRs:      a.AllowPRs,
+		AllowDispatch: a.AllowDispatch,
+		CanDispatch:   nilSafeStrings(a.CanDispatch),
+		Description:   a.Description,
+		AllowMemory:   &allowMem,
 	}
 }
 
 func (j storeAgentJSON) toConfig() fleet.Agent {
 	return fleet.Agent{
-		WorkspaceID:     j.WorkspaceID,
-		Name:            j.Name,
-		Backend:         j.Backend,
-		Model:           j.Model,
-		Skills:          nilSafeStrings(j.Skills),
-		PromptID:        j.PromptID,
-		PromptRef:       j.PromptRef,
-		PromptScope:     j.PromptScope,
-		PromptVersionID: j.PromptVersionID,
-		ScopeType:       j.ScopeType,
-		ScopeRepo:       j.ScopeRepo,
-		AllowPRs:        j.AllowPRs,
-		AllowDispatch:   j.AllowDispatch,
-		CanDispatch:     nilSafeStrings(j.CanDispatch),
-		Description:     j.Description,
-		AllowMemory:     j.AllowMemory,
+		WorkspaceID:   j.WorkspaceID,
+		Name:          j.Name,
+		Backend:       j.Backend,
+		Model:         j.Model,
+		Skills:        nilSafeStrings(j.Skills),
+		PromptID:      j.PromptID,
+		PromptRef:     j.PromptRef,
+		PromptScope:   j.PromptScope,
+		ScopeType:     j.ScopeType,
+		ScopeRepo:     j.ScopeRepo,
+		AllowPRs:      j.AllowPRs,
+		AllowDispatch: j.AllowDispatch,
+		CanDispatch:   nilSafeStrings(j.CanDispatch),
+		Description:   j.Description,
+		AllowMemory:   j.AllowMemory,
 	}
 }
 
@@ -233,22 +220,21 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 // record, then runs the merged entity through UpsertAgent so the same
 // validation and cron-reload paths apply.
 type AgentPatch struct {
-	WorkspaceID     *string   `json:"workspace_id,omitempty"`
-	Backend         *string   `json:"backend,omitempty"`
-	Model           *string   `json:"model,omitempty"`
-	Skills          *[]string `json:"skills,omitempty"`
-	Prompt          *string   `json:"prompt,omitempty"`
-	PromptID        *string   `json:"prompt_id,omitempty"`
-	PromptRef       *string   `json:"prompt_ref,omitempty"`
-	PromptScope     *string   `json:"prompt_scope,omitempty"`
-	PromptVersionID *string   `json:"prompt_version_id,omitempty"`
-	ScopeType       *string   `json:"scope_type,omitempty"`
-	ScopeRepo       *string   `json:"scope_repo,omitempty"`
-	AllowPRs        *bool     `json:"allow_prs,omitempty"`
-	AllowDispatch   *bool     `json:"allow_dispatch,omitempty"`
-	CanDispatch     *[]string `json:"can_dispatch,omitempty"`
-	Description     *string   `json:"description,omitempty"`
-	AllowMemory     *bool     `json:"allow_memory,omitempty"`
+	WorkspaceID   *string   `json:"workspace_id,omitempty"`
+	Backend       *string   `json:"backend,omitempty"`
+	Model         *string   `json:"model,omitempty"`
+	Skills        *[]string `json:"skills,omitempty"`
+	Prompt        *string   `json:"prompt,omitempty"`
+	PromptID      *string   `json:"prompt_id,omitempty"`
+	PromptRef     *string   `json:"prompt_ref,omitempty"`
+	PromptScope   *string   `json:"prompt_scope,omitempty"`
+	ScopeType     *string   `json:"scope_type,omitempty"`
+	ScopeRepo     *string   `json:"scope_repo,omitempty"`
+	AllowPRs      *bool     `json:"allow_prs,omitempty"`
+	AllowDispatch *bool     `json:"allow_dispatch,omitempty"`
+	CanDispatch   *[]string `json:"can_dispatch,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	AllowMemory   *bool     `json:"allow_memory,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
@@ -256,7 +242,7 @@ type AgentPatch struct {
 // payloads before hitting the store.
 func (p AgentPatch) AnyFieldSet() bool {
 	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil || p.PromptID != nil ||
-		p.PromptRef != nil || p.PromptScope != nil || p.PromptVersionID != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
+		p.PromptRef != nil || p.PromptScope != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
 }
@@ -278,25 +264,16 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 		a.PromptRef = *p.PromptRef
 		if strings.TrimSpace(*p.PromptRef) != "" {
 			a.PromptID = ""
-			if p.PromptVersionID == nil {
-				a.PromptVersionID = ""
-			}
 		}
 	}
 	if p.PromptScope != nil {
 		a.PromptScope = *p.PromptScope
-	}
-	if p.PromptVersionID != nil {
-		a.PromptVersionID = *p.PromptVersionID
 	}
 	if p.PromptID != nil {
 		a.PromptID = *p.PromptID
 		if strings.TrimSpace(*p.PromptID) != "" {
 			a.PromptRef = ""
 			a.PromptScope = ""
-			if p.PromptVersionID == nil {
-				a.PromptVersionID = ""
-			}
 		}
 	}
 	if p.ScopeType != nil {
@@ -497,35 +474,20 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 // PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
 // "don't touch".
 type SkillPatch struct {
-	Prompt     *string `json:"prompt,omitempty"`
-	Publish    *bool   `json:"publish,omitempty"`
-	State      *string `json:"state,omitempty"`
-	SourceType *string `json:"source_type,omitempty"`
-	SourceRef  *string `json:"source_ref,omitempty"`
-	Author     *string `json:"author,omitempty"`
-	Changelog  *string `json:"changelog,omitempty"`
+	Prompt *string `json:"prompt,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
 func (p SkillPatch) AnyFieldSet() bool {
-	return p.Prompt != nil || p.Publish != nil || p.State != nil || p.SourceType != nil ||
-		p.SourceRef != nil || p.Author != nil || p.Changelog != nil
+	return p.Prompt != nil
 }
 
 func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
-}
-
-func (p SkillPatch) versionMetadata() fleet.CatalogVersionMetadata {
-	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
-}
-
-func (p SkillPatch) hasVersionMetadata() bool {
-	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
@@ -596,25 +558,6 @@ func (h *Handler) handleSkillVersionReferences(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, refs)
 }
 
-func (h *Handler) handleSkillVersionRollout(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
-	fromVersionID := mux.Vars(r)["version_id"]
-	var req catalogVersionRolloutRequest
-	if !decodeBody(w, r, h.maxBodyBytes, &req) {
-		return
-	}
-	if req.ToVersionID == "" {
-		http.Error(w, "to_version_id is required", http.StatusBadRequest)
-		return
-	}
-	result, err := h.store.UpgradeSkillVersionReferences(name, fromVersionID, req.ToVersionID)
-	if err != nil {
-		h.writeErr(w, err, "skill version rollout")
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
@@ -627,21 +570,6 @@ func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) handleSkillVersionPublish(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
-	versionID := mux.Vars(r)["version_id"]
-	if err := h.ensureSkillVersionBelongsToRef(name, versionID); err != nil {
-		h.writeErr(w, err, "skill version publish")
-		return
-	}
-	name, skill, err := h.service.PublishSkillVersion(versionID)
-	if err != nil {
-		h.writeErr(w, err, "skill version publish")
-		return
-	}
-	writeJSON(w, http.StatusOK, skillToStoreJSON(name, skill))
 }
 
 func (h *Handler) ensureSkillVersionBelongsToRef(ref, versionID string) error {
@@ -708,10 +636,6 @@ func (h *Handler) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet
 	return h.updateSkill(name, patch)
 }
 
-func (h *Handler) PublishSkillVersion(versionID string) (string, fleet.Skill, error) {
-	return h.service.PublishSkillVersion(versionID)
-}
-
 func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skill, error) {
 	normalized := fleet.NormalizeSkillName(name)
 	skills, err := h.store.ReadSkills()
@@ -722,24 +646,19 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 	if !ok {
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
-	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return "", fleet.Skill{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
-	}
 	patch.apply(&existing)
-	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreateSkillDraft(normalized, existing, patch.versionMetadata())
-		if err != nil {
-			return "", fleet.Skill{}, err
-		}
-		existing.VersionID = version.ID
-		existing.Version = version.Version
-		return normalized, existing, nil
-	}
 	if err := h.service.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
 	}
-	fleet.NormalizeSkill(&existing)
-	return normalized, existing, nil
+	skills, err = h.store.ReadSkills()
+	if err != nil {
+		return "", fleet.Skill{}, err
+	}
+	persisted, ok := skills[normalized]
+	if !ok {
+		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found after update", normalized)}
+	}
+	return normalized, persisted, nil
 }
 
 // DeleteSkill removes the named skill from the store. Returns
@@ -765,21 +684,10 @@ type storePromptJSON struct {
 type PromptPatch struct {
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
-	Publish     *bool   `json:"publish,omitempty"`
-	State       *string `json:"state,omitempty"`
-	SourceType  *string `json:"source_type,omitempty"`
-	SourceRef   *string `json:"source_ref,omitempty"`
-	Author      *string `json:"author,omitempty"`
-	Changelog   *string `json:"changelog,omitempty"`
-}
-
-type catalogVersionRolloutRequest struct {
-	ToVersionID string `json:"to_version_id"`
 }
 
 func (p PromptPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Publish != nil || p.State != nil ||
-		p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
+	return p.Description != nil || p.Content != nil
 }
 
 func (p PromptPatch) apply(prompt *fleet.Prompt) {
@@ -789,34 +697,6 @@ func (p PromptPatch) apply(prompt *fleet.Prompt) {
 	if p.Content != nil {
 		prompt.Content = *p.Content
 	}
-}
-
-func (p PromptPatch) versionMetadata() fleet.CatalogVersionMetadata {
-	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
-}
-
-func (p PromptPatch) hasVersionMetadata() bool {
-	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
-}
-
-func catalogVersionMetadata(state, sourceType, sourceRef, author, changelog *string) fleet.CatalogVersionMetadata {
-	var meta fleet.CatalogVersionMetadata
-	if state != nil {
-		meta.State = *state
-	}
-	if sourceType != nil {
-		meta.SourceType = *sourceType
-	}
-	if sourceRef != nil {
-		meta.SourceRef = *sourceRef
-	}
-	if author != nil {
-		meta.Author = *author
-	}
-	if changelog != nil {
-		meta.Changelog = *changelog
-	}
-	return meta
 }
 
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
@@ -907,25 +787,6 @@ func (h *Handler) handlePromptVersionReferences(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, refs)
 }
 
-func (h *Handler) handlePromptVersionRollout(w http.ResponseWriter, r *http.Request) {
-	ref := mux.Vars(r)["id"]
-	fromVersionID := mux.Vars(r)["version_id"]
-	var req catalogVersionRolloutRequest
-	if !decodeBody(w, r, h.maxBodyBytes, &req) {
-		return
-	}
-	if req.ToVersionID == "" {
-		http.Error(w, "to_version_id is required", http.StatusBadRequest)
-		return
-	}
-	result, err := h.store.UpgradePromptVersionReferences(ref, fromVersionID, req.ToVersionID)
-	if err != nil {
-		h.writeErr(w, err, "prompt version rollout")
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {
 	ref := mux.Vars(r)["id"]
 	var req PromptPatch
@@ -939,21 +800,6 @@ func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) 
 	prompt, err := h.updatePrompt(ref, req)
 	if err != nil {
 		h.writeErr(w, err, "prompt patch")
-		return
-	}
-	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
-}
-
-func (h *Handler) handlePromptVersionPublish(w http.ResponseWriter, r *http.Request) {
-	ref := mux.Vars(r)["id"]
-	versionID := mux.Vars(r)["version_id"]
-	if err := h.ensurePromptVersionBelongsToRef(ref, versionID); err != nil {
-		h.writeErr(w, err, "prompt version publish")
-		return
-	}
-	prompt, err := h.service.PublishPromptVersion(versionID)
-	if err != nil {
-		h.writeErr(w, err, "prompt version publish")
 		return
 	}
 	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
@@ -996,29 +842,13 @@ func (h *Handler) UpdatePromptPatch(ref string, patch PromptPatch) (fleet.Prompt
 	return h.updatePrompt(ref, patch)
 }
 
-func (h *Handler) PublishPromptVersion(versionID string) (fleet.Prompt, error) {
-	return h.service.PublishPromptVersion(versionID)
-}
-
 func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, error) {
 	prompt, err := h.store.ReadPrompt(ref)
 	if err != nil {
 		return fleet.Prompt{}, err
 	}
-	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return fleet.Prompt{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
-	}
 	merged := prompt
 	patch.apply(&merged)
-	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreatePromptDraft(ref, merged, patch.versionMetadata())
-		if err != nil {
-			return fleet.Prompt{}, err
-		}
-		merged.VersionID = version.ID
-		merged.Version = version.Version
-		return merged, nil
-	}
 	return h.service.UpsertPrompt(merged)
 }
 

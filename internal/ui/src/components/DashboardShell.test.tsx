@@ -57,7 +57,7 @@ describe('<DashboardShell />', () => {
 
     const button = screen.getByTitle('Collapse navigation')
     expect(container.querySelector('.shell-sidebar .shell-menu-button')).toBe(button)
-    expect(container.querySelector('.shell-topbar .shell-menu-button')).not.toBeInTheDocument()
+    expect(container.querySelector('.shell-mobilebar')).not.toBeInTheDocument()
     expect(button).toHaveAttribute('aria-label', 'Collapse navigation')
     expect(button).toHaveAttribute('title', 'Collapse navigation')
     expect(button).not.toHaveTextContent('Menu')
@@ -110,16 +110,17 @@ describe('<DashboardShell />', () => {
     expect(window.localStorage.getItem('agents.sidebarCollapsed')).toBe('true')
   })
 
-  it('keeps the topbar hamburger opening mobile navigation', async () => {
+  it('keeps the mobile hamburger opening mobile navigation without a section title', async () => {
     mockShellFetch()
     mockViewport(true)
     const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
 
     await waitFor(() => {
-      expect(container.querySelector('.shell-topbar .shell-menu-button')).toBeInTheDocument()
+      expect(container.querySelector('.shell-mobilebar .shell-menu-button')).toBeInTheDocument()
     })
     const button = screen.getByTitle('Open navigation')
-    expect(container.querySelector('.shell-topbar .shell-menu-button')).toBe(button)
+    expect(container.querySelector('.shell-mobilebar .shell-menu-button')).toBe(button)
+    expect(container.querySelector('.shell-mobilebar')).not.toHaveTextContent('Fleet')
     expect(container.querySelector('.shell-sidebar .shell-menu-button')).not.toBeInTheDocument()
 
     fireEvent.click(button)

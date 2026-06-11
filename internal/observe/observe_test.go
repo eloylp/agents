@@ -645,6 +645,7 @@ func TestResolveRunAttributionExactMetadata(t *testing.T) {
 	s.RecordSpan(workflow.SpanInput{
 		SpanID: "span-exact", WorkspaceID: "default", Agent: "coder", Backend: "codex",
 		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		PromptVersionID: "promptver-1", SkillVersionIDs: []string{"skillver-1"}, GuardrailVersionIDs: []string{"guardrailver-1"},
 		Attribution: workflow.RunAttribution{
 			WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
 			SpanID: "span-exact", AgentName: "coder", BackendName: "codex", PromptRef: "coder",
@@ -660,6 +661,12 @@ func TestResolveRunAttributionExactMetadata(t *testing.T) {
 	}
 	if got.Snapshot == nil || got.Snapshot.SpanID != "span-exact" {
 		t.Fatalf("Snapshot = %+v, want span-exact", got.Snapshot)
+	}
+	if got.Snapshot.PromptVersionID != "promptver-1" {
+		t.Fatalf("PromptVersionID = %q, want span prompt version", got.Snapshot.PromptVersionID)
+	}
+	if !slices.Equal(got.Snapshot.SkillVersionIDs, []string{"skillver-1"}) || !slices.Equal(got.Snapshot.GuardrailVersionIDs, []string{"guardrailver-1"}) {
+		t.Fatalf("catalog versions = skills %#v guardrails %#v, want span versions", got.Snapshot.SkillVersionIDs, got.Snapshot.GuardrailVersionIDs)
 	}
 }
 

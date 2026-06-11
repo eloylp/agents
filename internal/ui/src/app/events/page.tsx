@@ -4,6 +4,7 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { formatTime } from '@/lib/datetime'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -53,7 +54,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
         fontSize: '0.8rem',
         alignItems: 'center',
       }}>
-        <span style={{ color: 'var(--text-faint)' }}>{new Date(event.at).toLocaleTimeString()}</span>
+        <span style={{ color: 'var(--text-faint)' }}>{formatTime(event.at)}</span>
         <span style={{
           background: style.bg,
           color: style.text,

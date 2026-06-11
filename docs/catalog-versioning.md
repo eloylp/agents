@@ -1,13 +1,14 @@
 # Catalog Versioning
 
 Prompts, skills, and guardrails have stable catalog identities and immutable
-version rows. Normal edits publish a new current version by default, while
-draft edits can be saved without affecting future agent runs.
+published version rows. A normal edit creates a new published current version
+immediately, so agents that track that catalog asset use the new content on
+their next run.
 
 ## References
 
-Agents and workspaces can either track the current published version or pin an
-exact version.
+Agents and workspaces track the current published version of each referenced
+catalog asset.
 
 ```yaml
 agents:
@@ -16,31 +17,25 @@ agents:
     skills:
       - go-testing
 
-  - name: cautious-coder
-    prompt_ref: coder
-    prompt_version_id: promptver_...
-    skills:
-      - go-testing@2
-
 workspaces:
   - name: default
     guardrails:
       - guardrail_name: security
       - guardrail_name: release-safety
-        guardrail_version_id: guardrailver_...
 ```
 
 Tracking references resolve to the asset's current published version at prompt
-composition time. Exact pins keep using the selected immutable version until a
-user updates the reference.
+composition time. To return to older content, use the rollback action to copy
+that historical version into the editor and save it as a new current published
+version.
 
 Every run stores the exact prompt, skill, and guardrail version ids that were
 resolved for that run. The composed prompt is still stored on the trace as
 before.
 
-## Drafts And Publishing
+## Editing
 
-The REST edit endpoints publish by default:
+The REST edit endpoints publish immediately:
 
 ```http
 PATCH /prompts/{id}
@@ -48,48 +43,21 @@ PATCH /skills/{id}
 PATCH /guardrails/{id}
 ```
 
-Send `"publish": false` to save a draft version instead. Drafts do not update
-the live catalog asset and do not affect agents tracking the current version.
+Example:
 
 ```json
 {
-  "content": "Updated prompt body",
-  "publish": false
+  "content": "Updated prompt body"
 }
 ```
 
-Recommendation and audit workflows can create attributed proposal versions
-through the same edit endpoints by setting `publish: false`,
-`state: "proposal"`, and source metadata:
+The MCP `update_prompt`, `update_skill`, and `update_guardrail` tools follow
+the same rule. There is no catalog draft state and no explicit publish endpoint
+for individual catalog versions.
 
-```json
-{
-  "content": "Updated prompt body",
-  "publish": false,
-  "state": "proposal",
-  "source_type": "feedback_recommendation",
-  "source_ref": "rec_123",
-  "author": "agents-assistant",
-  "changelog": "Proposed from repeated review feedback"
-}
-```
-
-Supported source types are `manual`, `feedback_recommendation`, and
-`audit_recommendation` for API-created versions. Migration-created seed
-versions use `migration`. Proposal versions are inert until a user explicitly
-publishes them.
-
-Publish a draft explicitly:
-
-```http
-POST /prompts/{id}/versions/{version_id}/publish
-POST /skills/{id}/versions/{version_id}/publish
-POST /guardrails/{id}/versions/{version_id}/publish
-```
-
-Publishing is guarded against stale drafts. If another version was published
-after a draft was created, refresh from the current version before publishing
-the older draft.
+The self-improvement workflow keeps proposed changes in proposal bundle tables
+until a human finalizes the bundle. Finalizing a bundle atomically creates the
+new published catalog versions for accepted publishable items.
 
 ## Reviewing Rollout Impact
 
@@ -109,8 +77,8 @@ GET /skills/{id}/versions/{version_id}/references
 GET /guardrails/{id}/versions/{version_id}/references
 ```
 
-The response names each referencing agent or workspace and marks whether the
-reference is tracking current or pinned exactly:
+The response names each agent or workspace that currently resolves to that
+version:
 
 ```json
 [
@@ -124,37 +92,12 @@ reference is tracking current or pinned exactly:
 ]
 ```
 
-Use this before publishing shared catalog changes. A tracking reference to the
-current version means the next publish will affect that agent or workspace on
-its next run; a pinned reference will not move until explicitly changed.
-
-Upgrade exact pins from one version to another:
-
-```http
-POST /prompts/{id}/versions/{from_version_id}/rollout
-POST /skills/{id}/versions/{from_version_id}/rollout
-POST /guardrails/{id}/versions/{from_version_id}/rollout
-```
-
-```json
-{
-  "to_version_id": "promptver_current"
-}
-```
-
-The rollout target must be a published version for the same prompt, skill, or
-guardrail. Tracking references are left alone because they already follow the
-current published version. The UI exposes the same action as "Upgrade N exact
-pins to vX" after you inspect a version's live references, and warns when a
-version has multiple live references.
-
-The request must include a non-empty `to_version_id`; otherwise the endpoint
-returns `400 Bad Request`. If `from_version_id` and `to_version_id` are the
-same published version, the endpoint validates the asset relationship and
-returns `updated: 0` without rewriting any references.
+Use this before saving shared catalog changes. A tracking reference to the
+current version means the next edit will affect that agent or workspace on its
+next run.
 
 ## Import And Export
 
-YAML import/export includes catalog version histories and exact agent skill,
-prompt, and workspace guardrail pins. Imported histories preserve version IDs
-so pinned references continue to resolve after a round trip.
+YAML import/export includes catalog version histories. Live agents and
+workspace guardrail references only store stable catalog asset references; they
+do not store exact version pins.

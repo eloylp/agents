@@ -229,26 +229,84 @@ func textOf(t *testing.T, res *mcpgo.CallToolResult) string {
 	return tc.Text
 }
 
-func TestToolImprovementProposalLifecycle(t *testing.T) {
+func TestToolAnalyzeImprovementFeedbackQueuesEvent(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	prompt, err := deps.Store.UpsertPrompt(fleet.Prompt{Name: "proposal-target", Description: "target desc", Content: "body v1"})
-	if err != nil {
-		t.Fatalf("seed prompt: %v", err)
-	}
 	feedback, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
 		WorkspaceID:      fleet.DefaultWorkspaceID,
 		RepoOwner:        "owner",
 		RepoName:         "one",
 		SourceType:       "issue_comment",
-		GitHubCommentID:  669001,
-		SourceURL:        "https://github.com/owner/one/issues/1#issuecomment-1",
+		GitHubCommentID:  683020,
+		SourceURL:        "https://github.com/owner/one/issues/683#issuecomment-20",
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
-		IssueNumber:      1,
-		RawBody:          "Please improve this prompt /agents improve",
+		IssueNumber:      683,
+		RawBody:          "Retry this proposal /agents improve",
 		Tag:              store.FeedbackTag,
-		LinkConfidence:   "exact",
+		LinkConfidence:   "unresolved",
+		Status:           store.FeedbackStatusNew,
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
+		WorkspaceID:           feedback.WorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "needs_more_context",
+		Status:                selfimprovement.RecommendationStatusNeedsUserInput,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               "Retry this proposal /agents improve",
+		NormalizedLesson:      "retry this proposal /agents improve",
+		Rationale:             "Seed recommendation for MCP analyze retry test.",
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: feedback.LinkConfidence,
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                    "needs_more_context",
+			"status":                  selfimprovement.RecommendationStatusNeedsUserInput,
+			"no_auto_apply_confirmed": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"feedback_event_id": float64(feedback.ID)}
+	res, err := toolAnalyzeImprovementFeedback(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("analyze feedback: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["id"] != rec.ID || got["status"] != selfimprovement.RecommendationStatusAnalyzing {
+		t.Fatalf("recommendation = %+v, want %s/analyzing", got, rec.ID)
+	}
+	events := drainQueue(t, deps.Channels, 1)
+	if len(events) != 1 || events[0].Kind != "agents.improvement" || events[0].Payload["recommendation_id"] != rec.ID || events[0].Payload["clarification"] != false {
+		t.Fatalf("queued events = %+v, want initial agents.improvement for %s", events, rec.ID)
+	}
+}
+
+func TestToolClarifyImprovementRecommendationRetriesFailedViaQueue(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	feedback, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "one",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  683021,
+		SourceURL:        "https://github.com/owner/one/issues/683#issuecomment-21",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      683,
+		RawBody:          "Clarified failed proposal /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "unresolved",
 		Status:           store.FeedbackStatusNew,
 	})
 	if err != nil {
@@ -257,81 +315,32 @@ func TestToolImprovementProposalLifecycle(t *testing.T) {
 	rec, err := deps.Improvements.RecordRecommendation(selfimprovement.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
-		Type:                  "prompt_guidance",
-		Status:                selfimprovement.RecommendationStatusAccepted,
-		Finding:               "tighten prompt guidance",
-		NormalizedLesson:      "Keep guidance concrete.",
-		Rationale:             "Feedback asked for a concrete prompt update.",
-		TargetAssetType:       "prompt",
-		TargetAssetID:         prompt.ID,
-		TargetBaseVersionID:   prompt.VersionID,
-		ProposedNewBody:       "body v2",
+		Type:                  "catalog_patch_bundle",
+		Status:                selfimprovement.RecommendationStatusFailed,
+		Finding:               "failed analysis",
+		Rationale:             "backend failed",
 		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		StructuredOutput:      map[string]any{"status": "recommended"},
-		AttributionConfidence: "exact",
+		AttributionConfidence: "unresolved",
+		Error:                 "runner failed",
 	})
 	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
+		t.Fatalf("seed failed recommendation: %v", err)
 	}
 
-	createReq := mcpgo.CallToolRequest{}
-	createReq.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
-	res, err := toolCreateImprovementProposal(deps)(context.Background(), createReq)
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"id": rec.ID, "body": "Retry with the stored clarification.", "author": "mcp-test"}
+	res, err := toolClarifyImprovementRecommendation(deps)(context.Background(), req)
 	if err != nil {
-		t.Fatalf("create proposal: %v", err)
+		t.Fatalf("clarify recommendation: %v", err)
 	}
-	var proposal map[string]any
-	decodeText(t, res, &proposal)
-	version, ok := proposal["version"].(map[string]any)
-	if !ok {
-		t.Fatalf("proposal version missing: %+v", proposal)
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["id"] != rec.ID || got["status"] != selfimprovement.RecommendationStatusClarifying {
+		t.Fatalf("recommendation = %+v, want %s/clarifying", got, rec.ID)
 	}
-	if proposal["recommendation_id"] != rec.ID || proposal["target_asset_type"] != "prompt" || proposal["target_asset_id"] != prompt.ID {
-		t.Fatalf("proposal linkage = %+v, want rec %s prompt %s", proposal, rec.ID, prompt.ID)
-	}
-	if version["state"] != "proposal" || version["source_type"] != "feedback_recommendation" || version["source_ref"] != rec.ID {
-		t.Fatalf("proposal version metadata = %+v, want inert recommendation proposal", version)
-	}
-	if version["base_version_id"] != prompt.VersionID {
-		t.Fatalf("proposal version base = %+v, want %s", version, prompt.VersionID)
-	}
-
-	getReq := mcpgo.CallToolRequest{}
-	getReq.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
-	res, err = toolGetImprovementProposal(deps)(context.Background(), getReq)
-	if err != nil {
-		t.Fatalf("get proposal: %v", err)
-	}
-	var proposals []map[string]any
-	decodeText(t, res, &proposals)
-	if len(proposals) != 1 {
-		t.Fatalf("proposals len = %d, want 1: %+v", len(proposals), proposals)
-	}
-	base, ok := proposals[0]["base_version"].(map[string]any)
-	if !ok {
-		t.Fatalf("proposal base version missing: %+v", proposals[0])
-	}
-	if base["id"] != prompt.VersionID || base["content"] != "body v1" {
-		t.Fatalf("proposal base version = %+v, want %s body v1", base, prompt.VersionID)
-	}
-	fetchedVersion, ok := proposals[0]["version"].(map[string]any)
-	if !ok {
-		t.Fatalf("proposal version missing from fetched proposal: %+v", proposals[0])
-	}
-	if fetchedVersion["content"] != "body v2" {
-		t.Fatalf("fetched proposal version = %+v, want body v2", fetchedVersion)
-	}
-
-	listReq := mcpgo.CallToolRequest{}
-	listReq.Params.Arguments = map[string]any{"workspace": fleet.DefaultWorkspaceID}
-	res, err = toolListImprovementRecommendationsWithProposals(deps)(context.Background(), listReq)
-	if err != nil {
-		t.Fatalf("list recommendations with proposals: %v", err)
-	}
-	var linked []map[string]any
-	decodeText(t, res, &linked)
-	if len(linked) != 1 || linked[0]["id"] != rec.ID {
-		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
+	events := drainQueue(t, deps.Channels, 1)
+	if len(events) != 1 || events[0].Kind != "agents.improvement" || events[0].Payload["recommendation_id"] != rec.ID || events[0].Payload["clarification"] != true {
+		t.Fatalf("queued events = %+v, want clarification agents.improvement for %s", events, rec.ID)
 	}
 }
 
@@ -364,7 +373,7 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                selfimprovement.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusRecommended,
 		Finding:               "tighten prompt and reuse an existing skill",
 		Rationale:             "Feedback spans more than one catalog item.",
 		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
@@ -380,9 +389,9 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
-	res, err := toolCreateImprovementProposalBundle(deps)(context.Background(), req)
+	res, err := toolGetImprovementProposalBundle(deps)(context.Background(), req)
 	if err != nil {
-		t.Fatalf("create bundle: %v", err)
+		t.Fatalf("get bundle: %v", err)
 	}
 	var bundle map[string]any
 	decodeText(t, res, &bundle)

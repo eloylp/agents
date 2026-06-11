@@ -118,6 +118,9 @@ func (s *Store) ReadWorkspaceGuardrails(workspace string) ([]fleet.WorkspaceGuar
 func (s *Store) ReplaceWorkspaceGuardrails(workspace string, refs []fleet.WorkspaceGuardrailRef) ([]fleet.WorkspaceGuardrailRef, error) {
 	return ReplaceWorkspaceGuardrails(s.db, workspace, refs)
 }
+func (s *Store) ReadGuardrailVersion(versionID string) (fleet.Guardrail, error) {
+	return ReadGuardrailVersion(s.db, versionID)
+}
 func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }
@@ -130,9 +133,6 @@ func (s *Store) ListPromptVersions(ref string) ([]fleet.CatalogVersion, error) {
 }
 func (s *Store) ListPromptVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
 	return ListPromptVersionReferences(s.db, ref, versionID)
-}
-func (s *Store) UpgradePromptVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
-	return UpgradePromptVersionReferences(s.db, ref, fromVersionID, toVersionID)
 }
 func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) }
 
@@ -147,9 +147,6 @@ func (s *Store) ListSkillVersions(ref string) ([]fleet.CatalogVersion, error) {
 }
 func (s *Store) ListSkillVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
 	return ListSkillVersionReferences(s.db, ref, versionID)
-}
-func (s *Store) UpgradeSkillVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
-	return UpgradeSkillVersionReferences(s.db, ref, fromVersionID, toVersionID)
 }
 func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
 func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
@@ -214,9 +211,6 @@ func (s *Store) ListGuardrailVersions(ref string) ([]fleet.CatalogVersion, error
 }
 func (s *Store) ListGuardrailVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
 	return ListGuardrailVersionReferences(s.db, ref, versionID)
-}
-func (s *Store) UpgradeGuardrailVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
-	return UpgradeGuardrailVersionReferences(s.db, ref, fromVersionID, toVersionID)
 }
 func (s *Store) UpsertGuardrail(g fleet.Guardrail) error { return UpsertGuardrail(s.db, g) }
 func (s *Store) DeleteGuardrail(name string) error       { return DeleteGuardrail(s.db, name) }

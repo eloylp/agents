@@ -110,11 +110,11 @@ type SelfImprovementRecommendationRow struct {
 	TargetBaseVersionID     string                            `json:"target_base_version_id,omitempty"`
 	ProposedPatch           string                            `json:"proposed_patch,omitempty"`
 	ProposedNewBody         string                            `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                            `json:"suggested_rollout_scope,omitempty"`
 	AnalyzerPromptRef       string                            `json:"analyzer_prompt_ref"`
 	AnalyzerPromptVersionID string                            `json:"analyzer_prompt_version_id,omitempty"`
 	StructuredOutput        map[string]any                    `json:"structured_output,omitempty"`
 	Error                   string                            `json:"error,omitempty"`
+	DecisionReason          string                            `json:"decision_reason,omitempty"`
 	CreatedAt               string                            `json:"created_at"`
 	UpdatedAt               string                            `json:"updated_at"`
 	Feedback                *SelfImprovementFeedback          `json:"feedback,omitempty"`
@@ -128,15 +128,6 @@ type SelfImprovementClarificationRow struct {
 	Body             string `json:"body"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
-}
-
-type SelfImprovementProposalRow struct {
-	RecommendationID string                `json:"recommendation_id"`
-	TargetAssetType  string                `json:"target_asset_type"`
-	TargetAssetID    string                `json:"target_asset_id"`
-	BaseVersionID    string                `json:"base_version_id,omitempty"`
-	BaseVersion      *fleet.CatalogVersion `json:"base_version,omitempty"`
-	Version          fleet.CatalogVersion  `json:"version"`
 }
 
 type SelfImprovementRecommendationInputRow struct {
@@ -157,7 +148,6 @@ type SelfImprovementRecommendationInputRow struct {
 	TargetBaseVersionID     string
 	ProposedPatch           string
 	ProposedNewBody         string
-	SuggestedRolloutScope   string
 	AnalyzerPromptRef       string
 	AnalyzerPromptVersionID string
 	StructuredOutput        map[string]any
@@ -190,14 +180,6 @@ func (s *Store) ListSelfImprovementRecommendations(workspace, status string, lim
 
 func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendationRow, error) {
 	return GetSelfImprovementRecommendation(s.db, id)
-}
-
-func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposalRow, error) {
-	return ListSelfImprovementProposals(s.db, id)
-}
-
-func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	return ListSelfImprovementRecommendationsWithProposals(s.db, workspace, limit)
 }
 
 func (s *Store) MarkSelfImprovementFeedbackFailed(id int64, cause string) error {
@@ -434,9 +416,9 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 			id, workspace_id, feedback_event_id, type, status, confidence, risk, finding,
 			normalized_lesson, rationale, evidence_feedback_ids, evidence_source_urls,
 			attribution_confidence, target_asset_type, target_asset_id, target_base_version_id,
-			proposed_patch, proposed_new_body, suggested_rollout_scope, analyzer_prompt_ref,
+			proposed_patch, proposed_new_body, analyzer_prompt_ref,
 			analyzer_prompt_version_id, structured_output, error
-		) VALUES ('rec_' || lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES ('rec_' || lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(workspace_id, feedback_event_id) DO UPDATE SET
 			type=excluded.type,
 			status=excluded.status,
@@ -453,7 +435,6 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 			target_base_version_id=excluded.target_base_version_id,
 			proposed_patch=excluded.proposed_patch,
 			proposed_new_body=excluded.proposed_new_body,
-			suggested_rollout_scope=excluded.suggested_rollout_scope,
 			analyzer_prompt_ref=excluded.analyzer_prompt_ref,
 			analyzer_prompt_version_id=excluded.analyzer_prompt_version_id,
 			structured_output=excluded.structured_output,
@@ -464,7 +445,7 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 		strings.TrimSpace(in.NormalizedLesson), strings.TrimSpace(in.Rationale), joinInt64s(in.EvidenceFeedbackIDs),
 		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), strings.TrimSpace(in.AttributionConfidence), strings.TrimSpace(in.TargetAssetType),
 		strings.TrimSpace(in.TargetAssetID), strings.TrimSpace(in.TargetBaseVersionID), strings.TrimSpace(in.ProposedPatch),
-		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), strings.TrimSpace(in.AnalyzerPromptRef),
+		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.AnalyzerPromptRef),
 		strings.TrimSpace(in.AnalyzerPromptVersionID), string(structured), strings.TrimSpace(in.Error),
 	)
 	return err
@@ -540,12 +521,36 @@ func UpsertSelfImprovementClarificationRow(q sqlExec, recommendationID, author, 
 }
 
 func UpdateSelfImprovementRecommendationStatusRow(q sqlExec, id, status string) error {
+	return UpdateSelfImprovementRecommendationDecisionRow(q, id, status, "")
+}
+
+func UpdateSelfImprovementRecommendationDecisionRow(q sqlExec, id, status, reason string) error {
 	id = strings.TrimSpace(id)
 	status = strings.TrimSpace(status)
 	if id == "" {
 		return &ErrValidation{Msg: "recommendation id is required"}
 	}
-	res, err := q.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
+	res, err := q.Exec(`UPDATE self_improvement_recommendations SET status=?, decision_reason=?, updated_at=datetime('now') WHERE id=?`, status, strings.TrimSpace(reason), id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+	}
+	return nil
+}
+
+func UpdateSelfImprovementRecommendationStatusErrorRow(q sqlExec, id, status, message string) error {
+	id = strings.TrimSpace(id)
+	status = strings.TrimSpace(status)
+	if id == "" {
+		return &ErrValidation{Msg: "recommendation id is required"}
+	}
+	res, err := q.Exec(`UPDATE self_improvement_recommendations SET status=?, error=?, updated_at=datetime('now') WHERE id=?`, status, strings.TrimSpace(message), id)
 	if err != nil {
 		return err
 	}
@@ -577,81 +582,7 @@ func UpdateSelfImprovementFeedbackStatusRow(q sqlExec, id int64, status string) 
 	return nil
 }
 
-func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposalRow, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, &ErrValidation{Msg: "recommendation id is required"}
-	}
-	rows, err := db.Query(`
-		SELECT 'prompt', p.ref, pv.id, pv.prompt_id, pv.version_number, pv.state, pv.description, pv.content, 0, 0,
-		       pv.source_type, pv.source_ref, pv.author, pv.changelog, COALESCE(pv.base_version_id, ''),
-		       pv.body_hash, pv.created_at, COALESCE(pv.published_at, '')
-		FROM prompt_versions pv
-		JOIN prompts p ON p.id = pv.prompt_id
-		WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=?
-		UNION ALL
-		SELECT 'skill', s.ref, sv.id, sv.skill_id, sv.version_number, sv.state, '', sv.prompt, 0, 0,
-		       sv.source_type, sv.source_ref, sv.author, sv.changelog, COALESCE(sv.base_version_id, ''),
-		       sv.body_hash, sv.created_at, COALESCE(sv.published_at, '')
-		FROM skill_versions sv
-		JOIN skills s ON s.id = sv.skill_id
-		WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=?
-		UNION ALL
-		SELECT 'guardrail', g.ref, gv.id, gv.guardrail_id, gv.version_number, gv.state, gv.description, gv.content,
-		       gv.enabled, gv.position,
-		       gv.source_type, gv.source_ref, gv.author, gv.changelog, COALESCE(gv.base_version_id, ''),
-		       gv.body_hash, gv.created_at, COALESCE(gv.published_at, '')
-		FROM guardrail_versions gv
-		JOIN guardrails g ON g.id = gv.guardrail_id
-		WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=?
-		ORDER BY created_at DESC`, id, id, id)
-	if err != nil {
-		return nil, fmt.Errorf("store: list self-improvement proposals: %w", err)
-	}
-	var out []SelfImprovementProposalRow
-	for rows.Next() {
-		var proposal SelfImprovementProposalRow
-		var enabled int
-		proposal.RecommendationID = id
-		if err := rows.Scan(
-			&proposal.TargetAssetType, &proposal.TargetAssetID, &proposal.Version.ID, &proposal.Version.AssetID,
-			&proposal.Version.Version, &proposal.Version.State, &proposal.Version.Description, &proposal.Version.Content,
-			&enabled, &proposal.Version.Position, &proposal.Version.SourceType, &proposal.Version.SourceRef, &proposal.Version.Author, &proposal.Version.Changelog,
-			&proposal.Version.BaseVersionID, &proposal.Version.BodyHash, &proposal.Version.CreatedAt, &proposal.Version.PublishedAt,
-		); err != nil {
-			return nil, fmt.Errorf("store: scan self-improvement proposal: %w", err)
-		}
-		if proposal.TargetAssetType == "skill" {
-			proposal.Version.Prompt = proposal.Version.Content
-			proposal.Version.Content = ""
-		}
-		if proposal.TargetAssetType == "guardrail" {
-			proposal.Version.Enabled = enabled != 0
-		}
-		proposal.BaseVersionID = proposal.Version.BaseVersionID
-		out = append(out, proposal)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("store: close self-improvement proposals: %w", err)
-	}
-	for i := range out {
-		if out[i].BaseVersionID == "" {
-			continue
-		}
-		base, err := readSelfImprovementProposalBaseVersion(db, out[i].TargetAssetType, out[i].BaseVersionID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].BaseVersion = &base
-	}
-	return out, nil
-}
-
-func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID string) (fleet.CatalogVersion, error) {
+func readSelfImprovementCatalogVersion(q querier, targetType, versionID string) (fleet.CatalogVersion, error) {
 	var version fleet.CatalogVersion
 	var err error
 	switch targetType {
@@ -693,48 +624,6 @@ func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID str
 	return version, nil
 }
 
-func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	allWorkspaces := selfImprovementAllWorkspaces(workspace)
-	workspaceID := fleet.NormalizeWorkspaceID(workspace)
-	where := `WHERE EXISTS (
-			SELECT 1 FROM prompt_versions pv WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=r.id
-			UNION ALL
-			SELECT 1 FROM skill_versions sv WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=r.id
-			UNION ALL
-			SELECT 1 FROM guardrail_versions gv WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=r.id
-		)`
-	args := []any{limit}
-	if !allWorkspaces {
-		where = `WHERE r.workspace_id=? AND EXISTS (
-			SELECT 1 FROM prompt_versions pv WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=r.id
-			UNION ALL
-			SELECT 1 FROM skill_versions sv WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=r.id
-			UNION ALL
-			SELECT 1 FROM guardrail_versions gv WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=r.id
-		)`
-		args = []any{workspaceID, limit}
-	}
-	rows, err := db.Query(recommendationSelectSQL()+`
-		`+where+`
-		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SelfImprovementRecommendationRow
-	for rows.Next() {
-		rec, err := scanSelfImprovementRecommendation(rows, false)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rec)
-	}
-	return out, rows.Err()
-}
-
 func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error {
 	if id <= 0 {
 		return &ErrValidation{Msg: "feedback id is required"}
@@ -752,8 +641,15 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 	}
 	_, err = db.Exec(
 		`UPDATE self_improvement_recommendations
-		SET status=?, error=?, updated_at=datetime('now')
-		WHERE feedback_event_id=?`,
+			SET status=?, error=?, updated_at=datetime('now')
+			WHERE feedback_event_id=?
+			  AND status <> 'rejected'
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM self_improvement_proposal_bundles b
+			      WHERE b.recommendation_id = self_improvement_recommendations.id
+			        AND b.status IN ('published', 'resolved', 'discarded')
+			  )`,
 		"failed", strings.TrimSpace(cause), id,
 	)
 	return err
@@ -796,8 +692,8 @@ func recommendationSelectSQL() string {
 	return `SELECT r.id, r.workspace_id, r.feedback_event_id, r.type, r.status, r.confidence, r.risk,
 		r.finding, r.normalized_lesson, r.rationale, r.evidence_feedback_ids, r.evidence_source_urls,
 		r.attribution_confidence, r.target_asset_type, r.target_asset_id, r.target_base_version_id,
-		r.proposed_patch, r.proposed_new_body, r.suggested_rollout_scope, r.analyzer_prompt_ref,
-		r.analyzer_prompt_version_id, r.structured_output, r.error, r.created_at, r.updated_at,
+		r.proposed_patch, r.proposed_new_body, r.analyzer_prompt_ref,
+		r.analyzer_prompt_version_id, r.structured_output, r.error, r.decision_reason, r.created_at, r.updated_at,
 		f.id, f.workspace_id, f.repo_owner, f.repo_name, f.source_type, f.github_comment_id, f.github_review_id,
 		f.github_delivery_id, f.source_url, f.author_login, f.author_authorized, f.issue_number, f.pr_number,
 		f.raw_body, f.tag, f.file_path, f.line, f.side, f.diff_hunk, f.commit_sha, f.github_created_at,
@@ -822,8 +718,8 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&rec.ID, &rec.WorkspaceID, &rec.FeedbackEventID, &rec.Type, &rec.Status, &rec.Confidence, &rec.Risk,
 		&rec.Finding, &rec.NormalizedLesson, &rec.Rationale, &evidenceIDs, &evidenceURLs,
 		&rec.AttributionConfidence, &rec.TargetAssetType, &rec.TargetAssetID, &rec.TargetBaseVersionID,
-		&rec.ProposedPatch, &rec.ProposedNewBody, &rec.SuggestedRolloutScope, &rec.AnalyzerPromptRef,
-		&rec.AnalyzerPromptVersionID, &structured, &rec.Error, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.ProposedPatch, &rec.ProposedNewBody, &rec.AnalyzerPromptRef,
+		&rec.AnalyzerPromptVersionID, &structured, &rec.Error, &rec.DecisionReason, &rec.CreatedAt, &rec.UpdatedAt,
 		&feedback.ID, &feedback.WorkspaceID, &feedback.RepoOwner, &feedback.RepoName, &feedback.SourceType,
 		&feedback.GitHubCommentID, &feedback.GitHubReviewID, &feedback.GitHubDeliveryID, &feedback.SourceURL,
 		&feedback.AuthorLogin, &authorized, &feedback.IssueNumber, &feedback.PRNumber, &feedback.RawBody,

@@ -12,7 +12,7 @@ export default function FullscreenModal({ title, onClose, children }: Fullscreen
       style={{
         position: 'fixed', inset: 0, background: 'var(--bg-modal-overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1100, padding: '2vh 2vw',
+        zIndex: 1300, padding: '2vh 2vw',
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >

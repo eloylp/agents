@@ -13,7 +13,7 @@ export default function Modal({ title, onClose, children, maxWidth = '600px' }: 
       style={{
         position: 'fixed', inset: 0, background: 'var(--bg-modal-overlay)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-        zIndex: 1000, padding: '2rem 1rem', overflowY: 'auto',
+        zIndex: 1200, padding: '2rem 1rem', overflowY: 'auto',
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >

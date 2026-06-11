@@ -16,6 +16,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           * { box-sizing: border-box; margin: 0; padding: 0; }
 
           :root, [data-theme="light"] {
+            --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
             --bg: #f0f4f8;
             --bg-grid: rgba(59,130,246,0.06);
             --bg-card: #ffffff;
@@ -88,7 +90,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }
 
           body {
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+            font-family: var(--font-sans);
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 1.45;
+            letter-spacing: 0;
+            font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
             background: var(--bg);
             background-image:
               linear-gradient(var(--bg-grid) 1px, transparent 1px),
@@ -97,9 +107,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             color: var(--text);
             min-height: 100vh;
           }
+          button, input, select, textarea { font: inherit; letter-spacing: 0; }
+          h1, h2, h3, h4, h5, h6, strong, th { font-weight: 600; }
           a { color: var(--link); text-decoration: none; }
           a:hover { text-decoration: underline; }
-          pre { font-family: inherit; }
+          code, pre, kbd, samp { font-family: var(--font-mono); }
+          pre { line-height: 1.45; }
           ::-webkit-scrollbar { width: 6px; height: 6px; }
           ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
           ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }

@@ -151,10 +151,10 @@ func attributionSnapshotFromSpan(in workflow.SpanInput, createdAt time.Time) Att
 		AgentName:           firstNonEmpty(a.AgentName, in.Agent),
 		BackendID:           firstNonEmpty(a.BackendID, in.Backend),
 		BackendName:         firstNonEmpty(a.BackendName, in.Backend),
-		PromptVersionID:     a.PromptVersionID,
+		PromptVersionID:     firstNonEmpty(a.PromptVersionID, in.PromptVersionID),
 		PromptRef:           a.PromptRef,
-		SkillVersionIDs:     a.SkillVersionIDs,
-		GuardrailVersionIDs: a.GuardrailVersionIDs,
+		SkillVersionIDs:     firstNonEmptyStrings(a.SkillVersionIDs, in.SkillVersionIDs),
+		GuardrailVersionIDs: firstNonEmptyStrings(a.GuardrailVersionIDs, in.GuardrailVersionIDs),
 		HeadSHA:             a.HeadSHA,
 		Branch:              a.Branch,
 		CreatedAt:           createdAt,
@@ -265,6 +265,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonEmptyStrings(values ...[]string) []string {
+	for _, v := range values {
+		if len(v) > 0 {
+			return append([]string(nil), v...)
+		}
+	}
+	return nil
 }
 
 func firstNonZero(a, b int) int {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -48,30 +47,25 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		if err != nil {
 			return err
 		}
-		promptVersionID, err := resolvePromptVersionPin(tx, promptID, a.PromptVersionID)
-		if err != nil {
-			return fmt.Errorf("store import: agent %s: %w", a.Name, err)
-		}
 		allowPRs := boolToInt(a.AllowPRs)
 		allowDispatch := boolToInt(a.AllowDispatch)
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT INTO agents
-			  (id,workspace_id,name,backend,model,prompt_id,prompt_version_id,scope_type,scope_repo,allow_prs,allow_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+			  (id,workspace_id,name,backend,model,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(workspace_id, name) DO UPDATE SET
 				id = excluded.id,
 				backend = excluded.backend,
 				model = excluded.model,
 				prompt_id = excluded.prompt_id,
-				prompt_version_id = excluded.prompt_version_id,
 				scope_type = excluded.scope_type,
 				scope_repo = excluded.scope_repo,
 				allow_prs = excluded.allow_prs,
 				allow_dispatch = excluded.allow_dispatch,
 				description = excluded.description,
 				allow_memory = excluded.allow_memory`,
-			id, workspaceID, a.Name, a.Backend, a.Model, promptID, promptVersionID, scopeType, a.ScopeRepo,
+			id, workspaceID, a.Name, a.Backend, a.Model, promptID, scopeType, a.ScopeRepo,
 			allowPRs, allowDispatch, a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
@@ -96,8 +90,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 }
 
 type agentSkillRef struct {
-	skillID        string
-	skillVersionID string
+	skillID string
 }
 
 func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType string) ([]agentSkillRef, error) {
@@ -107,7 +100,7 @@ func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType str
 	}
 	refs := make([]agentSkillRef, 0, len(a.Skills))
 	for _, raw := range a.Skills {
-		ref, version, err := parseSkillVersionRef(raw)
+		ref, err := parseSkillRef(raw)
 		if err != nil {
 			return nil, fmt.Errorf("store import: agent %s skill %q: %w", a.Name, raw, err)
 		}
@@ -126,31 +119,22 @@ func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType str
 			}
 			return nil, fmt.Errorf("store import: resolve skill %s for agent %s: %w", ref, a.Name, err)
 		}
-		versionID, err := resolveSkillVersionPin(tx, id, version)
-		if err != nil {
-			return nil, fmt.Errorf("store import: agent %s skill %s: %w", a.Name, ref, err)
-		}
-		refs = append(refs, agentSkillRef{skillID: id, skillVersionID: versionID})
+		refs = append(refs, agentSkillRef{skillID: id})
 	}
 	return refs, nil
 }
 
-func parseSkillVersionRef(raw string) (string, int, error) {
+func parseSkillRef(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	ref, versionRaw, found := strings.Cut(raw, "@")
+	ref, _, found := strings.Cut(raw, "@")
+	if found {
+		return "", &ErrValidation{Msg: "skill version suffixes are no longer supported; reference the skill by name and publish rollback content when needed"}
+	}
 	ref = fleet.NormalizeSkillName(ref)
-	if !found {
-		return ref, 0, nil
+	if ref == "" {
+		return "", &ErrValidation{Msg: "skill ref is required"}
 	}
-	versionRaw = strings.TrimSpace(versionRaw)
-	if versionRaw == "" {
-		return "", 0, &ErrValidation{Msg: "skill version is required after @"}
-	}
-	version, err := strconv.Atoi(versionRaw)
-	if err != nil || version <= 0 {
-		return "", 0, &ErrValidation{Msg: fmt.Sprintf("invalid skill version %q", versionRaw)}
-	}
-	return ref, version, nil
+	return ref, nil
 }
 
 func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
@@ -185,37 +169,6 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
 	return "", fmt.Errorf("store import: resolve prompt_ref %s for agent %s: %w", a.PromptRef, a.Name, err)
 }
 
-func resolvePromptVersionPin(q querier, promptID, versionID string) (string, error) {
-	versionID = strings.TrimSpace(versionID)
-	if versionID == "" {
-		return "", nil
-	}
-	var id string
-	err := q.QueryRow("SELECT id FROM prompt_versions WHERE id=? AND prompt_id=? AND state='published'", versionID, promptID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", &ErrValidation{Msg: fmt.Sprintf("prompt_version_id %q is not a published version of the selected prompt", versionID)}
-	}
-	if err != nil {
-		return "", fmt.Errorf("read prompt_version_id %q: %w", versionID, err)
-	}
-	return id, nil
-}
-
-func resolveSkillVersionPin(q querier, skillID string, version int) (string, error) {
-	if version == 0 {
-		return "", nil
-	}
-	var id string
-	err := q.QueryRow("SELECT id FROM skill_versions WHERE skill_id=? AND version_number=? AND state='published'", skillID, version).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", &ErrValidation{Msg: fmt.Sprintf("skill version %d is not a published version of the selected skill", version)}
-	}
-	if err != nil {
-		return "", fmt.Errorf("read skill version %d: %w", version, err)
-	}
-	return id, nil
-}
-
 func stableAgentID(q querier, workspaceID string, a fleet.Agent) (string, error) {
 	var existing string
 	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE workspace_id=? AND name=?", workspaceID, a.Name).Scan(&existing)
@@ -238,7 +191,7 @@ func newAgentID() (string, error) {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,COALESCE(p.ref, ''),COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),COALESCE(a.prompt_version_id, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.description,a.allow_memory
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,COALESCE(p.ref, ''),COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.description,a.allow_memory
 		FROM agents a
 		LEFT JOIN prompts p ON p.id = a.prompt_id
 		ORDER BY a.name`)
@@ -250,10 +203,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 	var agents []fleet.Agent
 	var agentIDs []string
 	for rows.Next() {
-		var id, workspaceID, name, backend, model, promptID, promptRef, promptWorkspace, promptRepo, promptVersionID, scopeType, scopeRepo, description string
+		var id, workspaceID, name, backend, model, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&id, &workspaceID, &name, &backend, &model, &promptID, &promptRef, &promptWorkspace, &promptRepo, &promptVersionID, &scopeType, &scopeRepo,
+			&id, &workspaceID, &name, &backend, &model, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
 			&allowPRs, &allowDispatch, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -267,21 +220,20 @@ func loadAgents(db querier, cfg *config.Config) error {
 			promptScope = fleet.CatalogScopePath(promptWorkspace, promptRepo)
 		}
 		agents = append(agents, fleet.Agent{
-			ID:              id,
-			WorkspaceID:     workspaceID,
-			Name:            name,
-			Backend:         backend,
-			Model:           model,
-			PromptID:        promptID,
-			PromptRef:       promptRef,
-			PromptScope:     promptScope,
-			PromptVersionID: promptVersionID,
-			ScopeType:       scopeType,
-			ScopeRepo:       scopeRepo,
-			AllowPRs:        intToBool(allowPRs),
-			AllowDispatch:   intToBool(allowDispatch),
-			Description:     description,
-			AllowMemory:     &allowMem,
+			ID:            id,
+			WorkspaceID:   workspaceID,
+			Name:          name,
+			Backend:       backend,
+			Model:         model,
+			PromptID:      promptID,
+			PromptRef:     promptRef,
+			PromptScope:   promptScope,
+			ScopeType:     scopeType,
+			ScopeRepo:     scopeRepo,
+			AllowPRs:      intToBool(allowPRs),
+			AllowDispatch: intToBool(allowDispatch),
+			Description:   description,
+			AllowMemory:   &allowMem,
 		})
 		agentIDs = append(agentIDs, id)
 	}
@@ -289,7 +241,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 		return fmt.Errorf("store load: iterate agents: %w", err)
 	}
 	for i, id := range agentIDs {
-		skills, skillPins, err := loadAgentSkillRefs(db, id)
+		skills, _, err := loadAgentSkillRefs(db, id)
 		if err != nil {
 			return fmt.Errorf("store load: load agent %s skills: %w", agents[i].Name, err)
 		}
@@ -298,7 +250,6 @@ func loadAgents(db querier, cfg *config.Config) error {
 			return fmt.Errorf("store load: load agent %s can_dispatch: %w", agents[i].Name, err)
 		}
 		agents[i].Skills = skills
-		agents[i].SkillVersionIDs = skillPins
 		agents[i].CanDispatch = canDispatch
 	}
 	cfg.Agents = agents
@@ -499,8 +450,8 @@ func replaceAgentSkills(tx *sql.Tx, agentID, agentName string, skills []agentSki
 	}
 	for i, skill := range skills {
 		if _, err := tx.Exec(
-			"INSERT INTO agent_skills(agent_id, skill_id, skill_version_id, position) VALUES(?,?,NULLIF(?, ''),?)",
-			agentID, skill.skillID, skill.skillVersionID, i,
+			"INSERT INTO agent_skills(agent_id, skill_id, position) VALUES(?,?,?)",
+			agentID, skill.skillID, i,
 		); err != nil {
 			return fmt.Errorf("store import: insert agent %s skill %s: %w", agentName, skill.skillID, err)
 		}
@@ -534,7 +485,7 @@ func replaceAgentDispatches(tx *sql.Tx, agentID, workspaceID, agentName string, 
 
 func loadAgentSkillRefs(q querier, agentID string) ([]string, map[string]string, error) {
 	rows, err := q.Query(`
-		SELECT s.ref, COALESCE(ask.skill_version_id, '')
+		SELECT s.ref
 		FROM agent_skills ask
 		JOIN skills s ON s.id = ask.skill_id
 		WHERE ask.agent_id=?
@@ -544,22 +495,14 @@ func loadAgentSkillRefs(q querier, agentID string) ([]string, map[string]string,
 	}
 	defer rows.Close()
 	var out []string
-	pins := map[string]string{}
 	for rows.Next() {
 		var id string
-		var versionID string
-		if err := rows.Scan(&id, &versionID); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, nil, err
-		}
-		if versionID != "" {
-			pins[id] = versionID
 		}
 		out = append(out, id)
 	}
-	if len(pins) == 0 {
-		pins = nil
-	}
-	return out, pins, rows.Err()
+	return out, nil, rows.Err()
 }
 
 func loadAgentDispatchRefs(q querier, agentID string) ([]string, error) {

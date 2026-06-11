@@ -138,14 +138,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/improvements/recommendations/rec_1"},
 		{http.MethodPost, "/improvements/recommendations/rec_1/status"},
 		{http.MethodPost, "/improvements/recommendations/rec_1/clarification"},
-		{http.MethodPost, "/improvements/recommendations/rec_1/proposal-bundle"},
 		{http.MethodGet, "/improvements/recommendations/rec_1/proposal-bundle"},
-		{http.MethodGet, "/improvements/memory"},
-		{http.MethodPost, "/improvements/memory"},
-		{http.MethodPatch, "/improvements/memory/mem_1"},
-		{http.MethodPost, "/improvements/memory/mem_1/approve"},
-		{http.MethodPost, "/improvements/memory/mem_1/reject"},
-		{http.MethodPost, "/improvements/memory/mem_1/archive"},
 		{http.MethodPatch, "/improvements/proposal-bundles/bundle_1/items/item_1"},
 		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/reject"},
 		{http.MethodPost, "/improvements/proposal-bundles/bundle_1/items/item_1/link-existing"},
@@ -168,25 +161,15 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 	}
 }
 
-func TestBuildRouterDoesNotRegisterDeleteImprovementMemoryArchive(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := newTestServer(t, testCfg(nil))
-	req := httptest.NewRequest(http.MethodDelete, "/improvements/memory/mem_1/archive", nil)
-	if srv.Router().Match(req, &mux.RouteMatch{}) {
-		t.Fatal("DELETE /improvements/memory/{id}/archive is registered, want POST-only archive route")
-	}
-}
-
 func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
 	t.Parallel()
 	srv, _ := newTestServer(t, testCfg(nil))
 	recID := seedProposalBundleRecommendation(t, srv, "publish")
 
 	var created selfimprovement.SelfImprovementProposalBundle
-	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &created)
+	serveJSON(t, srv, http.MethodGet, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &created)
 	if created.ID == "" || created.Status != selfimprovement.ProposalBundleStatusPending || len(created.Items) != 3 {
-		t.Fatalf("created bundle = %+v, want pending bundle with three items", created)
+		t.Fatalf("automatic bundle = %+v, want pending bundle with three items", created)
 	}
 
 	var fetched selfimprovement.SelfImprovementProposalBundle
@@ -236,7 +219,7 @@ func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
 
 	discardRecID := seedProposalBundleRecommendation(t, srv, "discard")
 	var discardBundle selfimprovement.SelfImprovementProposalBundle
-	serveJSON(t, srv, http.MethodPost, "/improvements/recommendations/"+discardRecID+"/proposal-bundle", "", http.StatusOK, &discardBundle)
+	serveJSON(t, srv, http.MethodGet, "/improvements/recommendations/"+discardRecID+"/proposal-bundle", "", http.StatusOK, &discardBundle)
 	var discarded selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodPost, "/improvements/proposal-bundles/"+discardBundle.ID+"/discard", "", http.StatusOK, &discarded)
 	if discarded.Status != selfimprovement.ProposalBundleStatusDiscarded {
@@ -296,7 +279,7 @@ func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix s
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                selfimprovement.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusRecommended,
 		Finding:               "coordinated catalog update",
 		Rationale:             "prompt, skill, and guardrail need a narrow update",
 		AnalyzerPromptRef:     "prompt_self-improvement-analyst",

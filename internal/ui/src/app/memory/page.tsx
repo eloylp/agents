@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { formatDateTime } from '@/lib/datetime'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -160,7 +161,7 @@ export default function MemoryPage() {
                 </span>
                 {file.mtime && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)' }}>
-                    last modified: {new Date(file.mtime).toLocaleString()}
+                    last modified: {formatDateTime(file.mtime)}
                   </span>
                 )}
               </div>

@@ -113,7 +113,52 @@ func InsertSelfImprovementProposalBundleItemRow(tx *Tx, item SelfImprovementBund
 	return nil
 }
 
-func UpdateSelfImprovementProposalBundleItemDraftRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
+func FindPendingSelfImprovementBundleItem(q querier, excludeBundleID string, item SelfImprovementBundleItemInputRow) (SelfImprovementBundleItemRow, error) {
+	where := `
+		FROM self_improvement_proposal_bundle_items i
+		JOIN self_improvement_proposal_bundles b ON b.id = i.bundle_id
+		WHERE b.status = 'pending'
+		  AND i.decision = 'accepted'
+		  AND i.asset_type = ?
+		  AND b.id <> ?`
+	args := []any{strings.TrimSpace(item.AssetType), strings.TrimSpace(excludeBundleID)}
+	switch strings.TrimSpace(item.Operation) {
+	case "update_existing":
+		where += ` AND i.operation = 'update_existing' AND i.asset_id = ?`
+		args = append(args, strings.TrimSpace(item.AssetID))
+	case "create_new":
+		where += ` AND i.operation = 'create_new' AND lower(i.proposed_scope) = lower(?) AND lower(i.proposed_ref) = lower(?)`
+		args = append(args, strings.TrimSpace(item.ProposedScope), strings.TrimSpace(item.ProposedRef))
+	default:
+		return SelfImprovementBundleItemRow{}, &ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
+	}
+	row := q.QueryRow(`
+		SELECT i.id, i.bundle_id, i.operation, i.asset_type, i.asset_id, i.base_version_id,
+		       i.proposed_ref, i.proposed_name, i.proposed_scope, i.proposed_body, i.proposed_description,
+		       i.proposed_enabled, i.proposed_position, i.analyst_proposed_body, i.duplicate_risk,
+		       i.rationale, i.decision, i.decision_reason, i.published_version_id, i.created_at, i.updated_at
+		`+where+`
+		ORDER BY i.updated_at DESC, i.id DESC
+		LIMIT 1`, args...)
+	var out SelfImprovementBundleItemRow
+	var enabled int
+	err := row.Scan(
+		&out.ID, &out.BundleID, &out.Operation, &out.AssetType, &out.AssetID, &out.BaseVersionID,
+		&out.ProposedRef, &out.ProposedName, &out.ProposedScope, &out.ProposedBody, &out.ProposedDescription,
+		&enabled, &out.ProposedPosition, &out.AnalystProposedBody, &out.DuplicateRisk,
+		&out.Rationale, &out.Decision, &out.DecisionReason, &out.PublishedVersionID, &out.CreatedAt, &out.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SelfImprovementBundleItemRow{}, &ErrNotFound{Msg: "no pending self-improvement bundle item found"}
+	}
+	if err != nil {
+		return SelfImprovementBundleItemRow{}, fmt.Errorf("store: find pending self-improvement bundle item: %w", err)
+	}
+	out.ProposedEnabled = enabled != 0
+	return out, nil
+}
+
+func UpdateSelfImprovementProposalBundleItemRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
 	if _, err := tx.Exec(`
 		UPDATE self_improvement_proposal_bundle_items
 		SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,
@@ -153,7 +198,7 @@ func UpdateSelfImprovementProposalBundleStatusRow(tx *Tx, bundleID, status strin
 }
 
 func DiscardPendingSelfImprovementProposalBundleItemRows(tx *Tx, bundleID, decision string) error {
-	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, decision, bundleID); err != nil {
+	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision='accepted'`, decision, bundleID); err != nil {
 		return fmt.Errorf("store: discard proposal bundle items: %w", err)
 	}
 	return nil
@@ -206,10 +251,6 @@ func (s *Store) GetSelfImprovementProposalBundleRow(id string) (SelfImprovementP
 
 func GetSelfImprovementProposalBundleRowTx(tx *Tx, id string) (SelfImprovementProposalBundleRow, error) {
 	return getSelfImprovementProposalBundleRow(tx, id)
-}
-
-func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
 }
 
 func GetSelfImprovementProposalBundleRow(db *sql.DB, id string) (SelfImprovementProposalBundleRow, error) {
@@ -276,23 +317,4 @@ func listSelfImprovementProposalBundleRowItems(q querier, bundleID string) ([]Se
 		return nil, err
 	}
 	return out, nil
-}
-
-func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	recs, err := ListSelfImprovementRecommendations(db, workspace, "", limit)
-	if err != nil {
-		return nil, err
-	}
-	for i := range recs {
-		bundle, err := GetSelfImprovementProposalBundleRow(db, recs[i].ID)
-		if err == nil {
-			recs[i].ProposalBundle = &bundle
-			continue
-		}
-		var nf *ErrNotFound
-		if !errors.As(err, &nf) {
-			return nil, err
-		}
-	}
-	return recs, nil
 }

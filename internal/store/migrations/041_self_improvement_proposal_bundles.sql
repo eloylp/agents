@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS self_improvement_proposal_bundles (
     recommendation_id                  TEXT NOT NULL UNIQUE REFERENCES self_improvement_recommendations(id) ON DELETE CASCADE,
     recommendation_updated_at_snapshot TEXT NOT NULL DEFAULT '',
     recommendation_snapshot_hash       TEXT NOT NULL DEFAULT '',
-    status                             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'published', 'discarded')),
+    status                             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'published', 'resolved', 'discarded')),
     created_at                         TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                         TEXT NOT NULL DEFAULT (datetime('now'))
 );

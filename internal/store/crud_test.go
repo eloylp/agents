@@ -513,88 +513,24 @@ func TestCatalogUpsertsSkipUnchangedVersions(t *testing.T) {
 	assertTableCount(t, db, "guardrail_versions", "guardrail_id=(SELECT id FROM guardrails WHERE ref=?)", "guardrail_unchanged-guardrail", 1)
 }
 
-func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
+func TestCreatePublishedCatalogVersionsRecordSourceMetadata(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "draftable", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "published-prompt", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin draft: %v", err)
-	}
-	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2", fleet.CatalogVersionMetadata{})
-	if err != nil {
-		tx.Rollback()
-		t.Fatalf("CreatePromptDraftTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit draft: %v", err)
-	}
-	if draft.State != "draft" || draft.Version != 2 || draft.ID == "" {
-		t.Fatalf("draft = (%q, %d, %q), want draft v2 with id", draft.State, draft.Version, draft.ID)
-	}
-
-	current, err := store.ReadPrompt(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("ReadPrompt before publish: %v", err)
-	}
-	if current.Content != "body v1" || current.Version != 1 {
-		t.Fatalf("current before publish = v%d %q, want v1 body", current.Version, current.Content)
-	}
-
-	tx, err = db.Begin()
-	if err != nil {
-		t.Fatalf("begin publish: %v", err)
-	}
-	published, err := store.PublishPromptVersionTx(tx, draft.ID)
-	if err != nil {
-		tx.Rollback()
-		t.Fatalf("PublishPromptVersionTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit publish: %v", err)
-	}
-	if published.Content != "body v2" || published.Version != 2 || published.VersionID != draft.ID {
-		t.Fatalf("published = v%d id=%q content=%q, want draft promoted", published.Version, published.VersionID, published.Content)
-	}
-	current, err = store.ReadPrompt(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("ReadPrompt after publish: %v", err)
-	}
-	if current.Content != "body v2" || current.VersionID != draft.ID {
-		t.Fatalf("current after publish = id=%q content=%q, want draft current", current.VersionID, current.Content)
-	}
-	versions, err := store.ListPromptVersions(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("ListPromptVersions: %v", err)
-	}
-	if len(versions) != 2 || versions[0].ID != draft.ID || versions[0].State != "published" || versions[1].Version != 1 {
-		t.Fatalf("versions = %#v, want published draft first and original second", versions)
-	}
-}
-
-func TestCreateCatalogProposalVersionsRecordSourceMetadata(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "proposal-prompt", Description: "first", Content: "body v1"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt: %v", err)
-	}
-	if err := store.UpsertSkill(db, "proposal-skill", fleet.Skill{Name: "proposal-skill", Prompt: "skill v1"}); err != nil {
+	if err := store.UpsertSkill(db, "published-skill", fleet.Skill{Name: "published-skill", Prompt: "skill v1"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
-	guardrail := fleet.Guardrail{Name: "proposal-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
+	guardrail := fleet.Guardrail{Name: "published-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
 	if err := store.UpsertGuardrail(db, guardrail); err != nil {
 		t.Fatalf("UpsertGuardrail: %v", err)
 	}
 
 	meta := fleet.CatalogVersionMetadata{
-		State:      "proposal",
+		State:      "published",
 		SourceType: "feedback_recommendation",
 		SourceRef:  "rec_123",
 		Author:     "assistant",
@@ -602,19 +538,19 @@ func TestCreateCatalogProposalVersionsRecordSourceMetadata(t *testing.T) {
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("begin proposal tx: %v", err)
+		t.Fatalf("begin version tx: %v", err)
 	}
-	promptVersion, err := store.CreatePromptDraftTx(tx, prompt.ID, "second", "body v2", meta)
+	promptVersion, err := store.CreatePublishedPromptVersionTx(tx, prompt.ID, "second", "body v2", meta)
 	if err != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePromptDraftTx: %v", err)
+		t.Fatalf("CreatePublishedPromptVersionTx: %v", err)
 	}
-	skillVersion, err := store.CreateSkillDraftTx(tx, "proposal-skill", "skill v2", meta)
+	skillVersion, err := store.CreatePublishedSkillVersionTx(tx, "published-skill", "skill v2", meta)
 	if err != nil {
 		tx.Rollback()
-		t.Fatalf("CreateSkillDraftTx: %v", err)
+		t.Fatalf("CreatePublishedSkillVersionTx: %v", err)
 	}
-	guardrailVersion, err := store.CreateGuardrailDraftTx(tx, "guardrail_proposal-guardrail", fleet.Guardrail{
+	guardrailVersion, err := store.CreatePublishedGuardrailVersionTx(tx, "guardrail_published-guardrail", fleet.Guardrail{
 		Description: "second",
 		Content:     "guardrail v2",
 		Enabled:     true,
@@ -622,25 +558,25 @@ func TestCreateCatalogProposalVersionsRecordSourceMetadata(t *testing.T) {
 	}, meta)
 	if err != nil {
 		tx.Rollback()
-		t.Fatalf("CreateGuardrailDraftTx: %v", err)
+		t.Fatalf("CreatePublishedGuardrailVersionTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit proposal tx: %v", err)
+		t.Fatalf("commit version tx: %v", err)
 	}
 
 	for _, version := range []fleet.CatalogVersion{promptVersion, skillVersion, guardrailVersion} {
-		if version.State != "proposal" || version.SourceType != meta.SourceType || version.SourceRef != meta.SourceRef ||
+		if version.State != "published" || version.SourceType != meta.SourceType || version.SourceRef != meta.SourceRef ||
 			version.Author != meta.Author || version.Changelog != meta.Changelog {
-			t.Fatalf("proposal metadata = %+v, want source metadata %+v", version, meta)
+			t.Fatalf("published metadata = %+v, want source metadata %+v", version, meta)
 		}
 	}
 }
 
-func TestCreateCatalogDraftRejectsInvalidMetadata(t *testing.T) {
+func TestCreatePublishedCatalogVersionRejectsInvalidMetadata(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "invalid-proposal-prompt", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "invalid-published-prompt", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
@@ -651,8 +587,8 @@ func TestCreateCatalogDraftRejectsInvalidMetadata(t *testing.T) {
 	}{
 		{
 			name: "state",
-			meta: fleet.CatalogVersionMetadata{State: "published"},
-			want: `invalid catalog version state "published"`,
+			meta: fleet.CatalogVersionMetadata{State: "draft"},
+			want: `invalid catalog version state "draft"`,
 		},
 		{
 			name: "source type",
@@ -668,26 +604,25 @@ func TestCreateCatalogDraftRejectsInvalidMetadata(t *testing.T) {
 			}
 			t.Cleanup(func() { tx.Rollback() })
 
-			_, err = store.CreatePromptDraftTx(tx, prompt.ID, "second", "body v2", tt.meta)
+			_, err = store.CreatePublishedPromptVersionTx(tx, prompt.ID, "second", "body v2", tt.meta)
 			var verr *store.ErrValidation
 			if !errors.As(err, &verr) || verr.Msg != tt.want {
-				t.Fatalf("CreatePromptDraftTx error = %v, want validation %q", err, tt.want)
+				t.Fatalf("CreatePublishedPromptVersionTx error = %v, want validation %q", err, tt.want)
 			}
 		})
 	}
 }
 
-func TestCatalogDraftPublishPaths(t *testing.T) {
+func TestCatalogPublishedVersionPaths(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name          string
 		createAsset   func(*testing.T, *sql.DB) string
-		createDraft   func(*testing.T, *sql.Tx, string) fleet.CatalogVersion
-		publishDraft  func(*testing.T, *sql.Tx, string)
+		createVersion func(*testing.T, *sql.Tx, string) fleet.CatalogVersion
 		readCurrent   func(*testing.T, *sql.DB, string) (string, string)
+		initialBody   string
 		currentBody   string
-		publishedBody string
 	}{
 		{
 			name: "skill",
@@ -698,19 +633,13 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 				}
 				return "architect"
 			},
-			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
+			createVersion: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
 				t.Helper()
-				draft, err := store.CreateSkillDraftTx(tx, ref, "skill v2", fleet.CatalogVersionMetadata{})
+				version, err := store.CreatePublishedSkillVersionTx(tx, ref, "skill v2", fleet.CatalogVersionMetadata{})
 				if err != nil {
-					t.Fatalf("CreateSkillDraftTx: %v", err)
+					t.Fatalf("CreatePublishedSkillVersionTx: %v", err)
 				}
-				return draft
-			},
-			publishDraft: func(t *testing.T, tx *sql.Tx, versionID string) {
-				t.Helper()
-				if _, _, err := store.PublishSkillVersionTx(tx, versionID); err != nil {
-					t.Fatalf("PublishSkillVersionTx: %v", err)
-				}
+				return version
 			},
 			readCurrent: func(t *testing.T, db *sql.DB, ref string) (string, string) {
 				t.Helper()
@@ -720,8 +649,8 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 				}
 				return skills[ref].VersionID, skills[ref].Prompt
 			},
-			currentBody:   "skill v1",
-			publishedBody: "skill v2",
+			initialBody: "skill v1",
+			currentBody: "skill v2",
 		},
 		{
 			name: "guardrail",
@@ -733,20 +662,14 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 				}
 				return "security-review"
 			},
-			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
+			createVersion: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
 				t.Helper()
 				g := fleet.Guardrail{Name: ref, Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20}
-				draft, err := store.CreateGuardrailDraftTx(tx, ref, g, fleet.CatalogVersionMetadata{})
+				version, err := store.CreatePublishedGuardrailVersionTx(tx, ref, g, fleet.CatalogVersionMetadata{})
 				if err != nil {
-					t.Fatalf("CreateGuardrailDraftTx: %v", err)
+					t.Fatalf("CreatePublishedGuardrailVersionTx: %v", err)
 				}
-				return draft
-			},
-			publishDraft: func(t *testing.T, tx *sql.Tx, versionID string) {
-				t.Helper()
-				if _, err := store.PublishGuardrailVersionTx(tx, versionID); err != nil {
-					t.Fatalf("PublishGuardrailVersionTx: %v", err)
-				}
+				return version
 			},
 			readCurrent: func(t *testing.T, db *sql.DB, ref string) (string, string) {
 				t.Helper()
@@ -756,8 +679,8 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 				}
 				return g.VersionID, g.Content
 			},
-			currentBody:   "guardrail v1",
-			publishedBody: "guardrail v2",
+			initialBody: "guardrail v1",
+			currentBody: "guardrail v2",
 		},
 	}
 
@@ -767,38 +690,25 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 			t.Parallel()
 			db := openTestDB(t)
 			ref := tc.createAsset(t, db)
-			originalVersionID, body := tc.readCurrent(t, db, ref)
-			if body != tc.currentBody {
-				t.Fatalf("initial body = %q, want %q", body, tc.currentBody)
+			_, body := tc.readCurrent(t, db, ref)
+			if body != tc.initialBody {
+				t.Fatalf("initial body = %q, want %q", body, tc.initialBody)
 			}
 
 			tx, err := db.Begin()
 			if err != nil {
-				t.Fatalf("begin draft: %v", err)
+				t.Fatalf("begin version: %v", err)
 			}
-			draft := tc.createDraft(t, tx, ref)
+			version := tc.createVersion(t, tx, ref)
 			if err := tx.Commit(); err != nil {
-				t.Fatalf("commit draft: %v", err)
+				t.Fatalf("commit version: %v", err)
 			}
-			if draft.State != "draft" || draft.Version != 2 || draft.ID == "" {
-				t.Fatalf("draft = (%q, %d, %q), want draft v2 with id", draft.State, draft.Version, draft.ID)
+			if version.State != "published" || version.Version != 2 || version.ID == "" {
+				t.Fatalf("version = (%q, %d, %q), want published v2 with id", version.State, version.Version, version.ID)
 			}
 			versionID, body := tc.readCurrent(t, db, ref)
-			if versionID != originalVersionID || body != tc.currentBody {
-				t.Fatalf("current after draft = (%q, %q), want original (%q, %q)", versionID, body, originalVersionID, tc.currentBody)
-			}
-
-			tx, err = db.Begin()
-			if err != nil {
-				t.Fatalf("begin publish: %v", err)
-			}
-			tc.publishDraft(t, tx, draft.ID)
-			if err := tx.Commit(); err != nil {
-				t.Fatalf("commit publish: %v", err)
-			}
-			versionID, body = tc.readCurrent(t, db, ref)
-			if versionID != draft.ID || body != tc.publishedBody {
-				t.Fatalf("current after publish = (%q, %q), want draft (%q, %q)", versionID, body, draft.ID, tc.publishedBody)
+			if versionID != version.ID || body != tc.currentBody {
+				t.Fatalf("current after published version = (%q, %q), want (%q, %q)", versionID, body, version.ID, tc.currentBody)
 			}
 		})
 	}
@@ -818,9 +728,9 @@ func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
 		t.Fatalf("UpsertPrompt v2: %v", err)
 	}
 	assertPromptCurrentSnapshot(t, db, prompt.ID)
-	promptV3 := publishPromptDraft(t, db, prompt.ID, "third", "prompt v3")
+	promptV3 := publishPromptVersion(t, db, prompt.ID, "third", "prompt v3")
 	if promptV3 == "" {
-		t.Fatal("published prompt draft id is empty")
+		t.Fatal("published prompt version id is empty")
 	}
 	assertPromptCurrentSnapshot(t, db, prompt.ID)
 
@@ -831,9 +741,9 @@ func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
 		t.Fatalf("UpsertSkill v2: %v", err)
 	}
 	assertSkillCurrentSnapshot(t, db, "mirror-skill")
-	skillV3 := publishSkillDraft(t, db, "mirror-skill", "skill v3")
+	skillV3 := publishSkillVersion(t, db, "mirror-skill", "skill v3")
 	if skillV3 == "" {
-		t.Fatal("published skill draft id is empty")
+		t.Fatal("published skill version id is empty")
 	}
 	assertSkillCurrentSnapshot(t, db, "mirror-skill")
 
@@ -848,9 +758,9 @@ func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
 		t.Fatalf("UpsertGuardrail v2: %v", err)
 	}
 	assertGuardrailCurrentSnapshot(t, db, "guardrail_mirror-guardrail")
-	guardrailV3 := publishGuardrailDraft(t, db, "mirror-guardrail", fleet.Guardrail{Name: "mirror-guardrail", Description: "third", Content: "guardrail v3", Enabled: false, Position: 30})
+	guardrailV3 := publishGuardrailVersion(t, db, "mirror-guardrail", fleet.Guardrail{Name: "mirror-guardrail", Description: "third", Content: "guardrail v3", Enabled: false, Position: 30})
 	if guardrailV3 == "" {
-		t.Fatal("published guardrail draft id is empty")
+		t.Fatal("published guardrail version id is empty")
 	}
 	assertGuardrailCurrentSnapshot(t, db, "guardrail_mirror-guardrail")
 	if err := store.ResetGuardrail(db, "mirror-guardrail"); err != nil {
@@ -918,303 +828,32 @@ func TestCatalogVersionReferences(t *testing.T) {
 		t.Fatalf("ReplaceWorkspaceGuardrails default: %v", err)
 	}
 
-	promptV2 := publishPromptDraft(t, db, promptRef, "v2", "prompt v2")
-	skillV2 := publishSkillDraft(t, db, "architect", "skill v2")
-	guardrailV2 := publishGuardrailDraft(t, db, "security-review", fleet.Guardrail{Name: "security-review", Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20})
+	promptV2 := publishPromptVersion(t, db, promptRef, "v2", "prompt v2")
+	skillV2 := publishSkillVersion(t, db, "architect", "skill v2")
+	guardrailV2 := publishGuardrailVersion(t, db, "security-review", fleet.Guardrail{Name: "security-review", Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20})
 
-	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "pinned-agent", Backend: "claude", PromptRef: "coder", PromptVersionID: promptV1, Skills: []string{"architect@1"}, Description: "pins old versions",
-	}); err != nil {
-		t.Fatalf("UpsertAgent pinned-agent: %v", err)
-	}
 	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", []fleet.WorkspaceGuardrailRef{{
-		GuardrailName: "security-review", GuardrailVersionID: guardrailV1, Position: 10, Enabled: true,
+		GuardrailName: "security-review", Position: 10, Enabled: true,
 	}}); err != nil {
 		t.Fatalf("ReplaceWorkspaceGuardrails team-a: %v", err)
 	}
 
-	assertVersionRefs(t, "prompt v1", mustPromptRefs(t, db, promptRef, promptV1), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "prompt", VersionID: promptV1, Tracking: false,
-	}})
+	assertVersionRefs(t, "prompt v1", mustPromptRefs(t, db, promptRef, promptV1), []fleet.CatalogVersionReference{})
 	assertVersionRefs(t, "prompt v2", mustPromptRefs(t, db, promptRef, promptV2), []fleet.CatalogVersionReference{{
 		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "prompt", VersionID: promptV2, Tracking: true,
 	}})
-	assertVersionRefs(t, "skill v1", mustSkillRefs(t, db, "architect", skillV1), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "skill", VersionID: skillV1, Tracking: false,
-	}})
+	assertVersionRefs(t, "skill v1", mustSkillRefs(t, db, "architect", skillV1), []fleet.CatalogVersionReference{})
 	assertVersionRefs(t, "skill v2", mustSkillRefs(t, db, "architect", skillV2), []fleet.CatalogVersionReference{{
 		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "skill", VersionID: skillV2, Tracking: true,
 	}})
-	assertVersionRefs(t, "guardrail v1", mustGuardrailRefs(t, db, "security-review", guardrailV1), []fleet.CatalogVersionReference{{
-		Kind: "workspace", WorkspaceID: "team-a", Name: "team-a", Reference: "guardrail", VersionID: guardrailV1, Tracking: false,
-	}})
-	assertVersionRefs(t, "guardrail v2", mustGuardrailRefs(t, db, "security-review", guardrailV2), []fleet.CatalogVersionReference{{
-		Kind: "workspace", WorkspaceID: fleet.DefaultWorkspaceID, Name: fleet.DefaultWorkspaceID, Reference: "guardrail", VersionID: guardrailV2, Tracking: true,
-	}})
-}
-
-func TestUpgradeCatalogVersionReferences(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	seedBackend(t, db, "claude")
-	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
-		t.Fatalf("UpsertSkill: %v", err)
-	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
-		t.Fatalf("UpsertGuardrail: %v", err)
-	}
-
-	promptRef := "prompt_coder"
-	promptV1 := currentPromptVersionID(t, db, promptRef)
-	skillV1 := currentSkillVersionID(t, db, "architect")
-	guardrailV1 := currentGuardrailVersionID(t, db, "security-review")
-	promptV2 := publishPromptDraft(t, db, promptRef, "v2", "prompt v2")
-	skillV2 := publishSkillDraft(t, db, "architect", "skill v2")
-	guardrailV2 := publishGuardrailDraft(t, db, "security-review", fleet.Guardrail{Name: "security-review", Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20})
-
-	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "pinned-agent", Backend: "claude", PromptRef: "coder", PromptVersionID: promptV1, Skills: []string{"architect@1"}, Description: "pins old versions",
-	}); err != nil {
-		t.Fatalf("UpsertAgent pinned-agent: %v", err)
-	}
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", []fleet.WorkspaceGuardrailRef{{
-		GuardrailName: "security-review", GuardrailVersionID: guardrailV1, Position: 10, Enabled: true,
-	}}); err != nil {
-		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		upgrade func() (fleet.CatalogVersionRolloutResult, error)
-		noop    func() (fleet.CatalogVersionRolloutResult, error)
-		oldRefs func() []fleet.CatalogVersionReference
-		newRefs func() []fleet.CatalogVersionReference
-	}{
-		{
-			name: "prompt",
-			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradePromptVersionReferences(db, promptRef, promptV1, promptV2)
-			},
-			noop: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradePromptVersionReferences(db, promptRef, promptV2, promptV2)
-			},
-			oldRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV1) },
-			newRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV2) },
-		},
-		{
-			name: "skill",
-			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradeSkillVersionReferences(db, "architect", skillV1, skillV2)
-			},
-			noop: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradeSkillVersionReferences(db, "architect", skillV2, skillV2)
-			},
-			oldRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV1) },
-			newRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV2) },
-		},
-		{
-			name: "guardrail",
-			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradeGuardrailVersionReferences(db, "security-review", guardrailV1, guardrailV2)
-			},
-			noop: func() (fleet.CatalogVersionRolloutResult, error) {
-				return store.UpgradeGuardrailVersionReferences(db, "security-review", guardrailV2, guardrailV2)
-			},
-			oldRefs: func() []fleet.CatalogVersionReference {
-				return mustGuardrailRefs(t, db, "security-review", guardrailV1)
-			},
-			newRefs: func() []fleet.CatalogVersionReference {
-				return mustGuardrailRefs(t, db, "security-review", guardrailV2)
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := tc.upgrade()
-			if err != nil {
-				t.Fatalf("upgrade %s refs: %v", tc.name, err)
-			}
-			if result.Updated != 1 {
-				t.Fatalf("updated = %d, want 1", result.Updated)
-			}
-			if refs := tc.oldRefs(); len(refs) != 0 {
-				t.Fatalf("old refs after upgrade = %#v, want none", refs)
-			}
-			exact := slices.ContainsFunc(tc.newRefs(), func(ref fleet.CatalogVersionReference) bool {
-				return !ref.Tracking
-			})
-			if !exact {
-				t.Fatalf("new refs after upgrade have no exact pin")
-			}
-			result, err = tc.noop()
-			if err != nil {
-				t.Fatalf("noop upgrade %s refs: %v", tc.name, err)
-			}
-			if result.Updated != 0 {
-				t.Fatalf("noop updated = %d, want 0", result.Updated)
-			}
-		})
-	}
-}
-
-func TestUpgradeCatalogVersionReferencesRejectUnknownWrongOrUnpublished(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	promptA, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-a", Content: "a"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt prompt-a: %v", err)
-	}
-	promptB, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-b", Content: "b"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt prompt-b: %v", err)
-	}
-	if err := store.UpsertSkill(db, "skill-a", fleet.Skill{Prompt: "a"}); err != nil {
-		t.Fatalf("UpsertSkill skill-a: %v", err)
-	}
-	if err := store.UpsertSkill(db, "skill-b", fleet.Skill{Prompt: "b"}); err != nil {
-		t.Fatalf("UpsertSkill skill-b: %v", err)
-	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-a", Description: "a", Content: "a", Enabled: true, Position: 10}); err != nil {
-		t.Fatalf("UpsertGuardrail guardrail-a: %v", err)
-	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-b", Description: "b", Content: "b", Enabled: true, Position: 20}); err != nil {
-		t.Fatalf("UpsertGuardrail guardrail-b: %v", err)
-	}
-
-	promptADraft := createPromptDraft(t, db, promptA.ID, "draft", "draft")
-	skillADraft := createSkillDraft(t, db, "skill-a", "draft")
-	guardrailADraft := createGuardrailDraft(t, db, "guardrail-a", fleet.Guardrail{Name: "guardrail-a", Description: "draft", Content: "draft", Enabled: true, Position: 30})
-	skillAV1 := currentSkillVersionID(t, db, "skill-a")
-	skillBV1 := currentSkillVersionID(t, db, "skill-b")
-	guardrailAV1 := currentGuardrailVersionID(t, db, "guardrail-a")
-	guardrailBV1 := currentGuardrailVersionID(t, db, "guardrail-b")
-
-	tests := []struct {
-		name    string
-		upgrade func() error
-	}{
-		{
-			name: "unknown prompt from version",
-			upgrade: func() error {
-				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, "missing-version", promptA.VersionID)
-				return err
-			},
-		},
-		{
-			name: "unknown prompt to version",
-			upgrade: func() error {
-				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, "missing-version")
-				return err
-			},
-		},
-		{
-			name: "wrong prompt from asset",
-			upgrade: func() error {
-				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptB.VersionID, promptA.VersionID)
-				return err
-			},
-		},
-		{
-			name: "wrong prompt to asset",
-			upgrade: func() error {
-				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, promptB.VersionID)
-				return err
-			},
-		},
-		{
-			name: "unpublished prompt target",
-			upgrade: func() error {
-				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, promptADraft)
-				return err
-			},
-		},
-		{
-			name: "unknown skill from version",
-			upgrade: func() error {
-				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", "missing-version", skillAV1)
-				return err
-			},
-		},
-		{
-			name: "unknown skill to version",
-			upgrade: func() error {
-				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, "missing-version")
-				return err
-			},
-		},
-		{
-			name: "wrong skill from asset",
-			upgrade: func() error {
-				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillBV1, skillAV1)
-				return err
-			},
-		},
-		{
-			name: "wrong skill to asset",
-			upgrade: func() error {
-				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, skillBV1)
-				return err
-			},
-		},
-		{
-			name: "unpublished skill target",
-			upgrade: func() error {
-				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, skillADraft)
-				return err
-			},
-		},
-		{
-			name: "unknown guardrail from version",
-			upgrade: func() error {
-				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", "missing-version", guardrailAV1)
-				return err
-			},
-		},
-		{
-			name: "unknown guardrail to version",
-			upgrade: func() error {
-				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, "missing-version")
-				return err
-			},
-		},
-		{
-			name: "wrong guardrail from asset",
-			upgrade: func() error {
-				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailBV1, guardrailAV1)
-				return err
-			},
-		},
-		{
-			name: "wrong guardrail to asset",
-			upgrade: func() error {
-				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, guardrailBV1)
-				return err
-			},
-		},
-		{
-			name: "unpublished guardrail target",
-			upgrade: func() error {
-				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, guardrailADraft)
-				return err
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var notFound *store.ErrNotFound
-			if err := tc.upgrade(); !errors.As(err, &notFound) {
-				t.Fatalf("error = %v, want ErrNotFound", err)
-			}
-		})
-	}
+	assertVersionRefs(t, "guardrail v1", mustGuardrailRefs(t, db, "security-review", guardrailV1), []fleet.CatalogVersionReference{})
+	assertVersionRefs(t, "guardrail v2", mustGuardrailRefs(t, db, "security-review", guardrailV2), []fleet.CatalogVersionReference{
+		{Kind: "workspace", WorkspaceID: fleet.DefaultWorkspaceID, Name: fleet.DefaultWorkspaceID, Reference: "guardrail", VersionID: guardrailV2, Tracking: true},
+		{Kind: "workspace", WorkspaceID: "team-a", Name: "team-a", Reference: "guardrail", VersionID: guardrailV2, Tracking: true},
+	})
 }
 
 func TestCatalogVersionReferencesRejectUnknownOrWrongAsset(t *testing.T) {
@@ -1389,109 +1028,52 @@ func assertGuardrailCurrentSnapshot(t *testing.T, db *sql.DB, ref string) {
 	}
 }
 
-func publishPromptDraft(t *testing.T, db *sql.DB, ref, description, content string) string {
+func publishPromptVersion(t *testing.T, db *sql.DB, ref, description, content string) string {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("begin prompt draft: %v", err)
+		t.Fatalf("begin prompt version: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, ref, description, content, fleet.CatalogVersionMetadata{})
+	version, err := store.CreatePublishedPromptVersionTx(tx, ref, description, content, fleet.CatalogVersionMetadata{})
 	if err != nil {
-		t.Fatalf("CreatePromptDraftTx: %v", err)
-	}
-	if _, err := store.PublishPromptVersionTx(tx, draft.ID); err != nil {
-		t.Fatalf("PublishPromptVersionTx: %v", err)
+		t.Fatalf("CreatePublishedPromptVersionTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit prompt draft: %v", err)
+		t.Fatalf("commit prompt version: %v", err)
 	}
-	return draft.ID
+	return version.ID
 }
 
-func createPromptDraft(t *testing.T, db *sql.DB, ref, description, content string) string {
+func publishSkillVersion(t *testing.T, db *sql.DB, ref, prompt string) string {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("begin prompt draft: %v", err)
+		t.Fatalf("begin skill version: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, ref, description, content, fleet.CatalogVersionMetadata{})
+	version, err := store.CreatePublishedSkillVersionTx(tx, ref, prompt, fleet.CatalogVersionMetadata{})
 	if err != nil {
-		t.Fatalf("CreatePromptDraftTx: %v", err)
+		t.Fatalf("CreatePublishedSkillVersionTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit prompt draft: %v", err)
+		t.Fatalf("commit skill version: %v", err)
 	}
-	return draft.ID
+	return version.ID
 }
 
-func publishSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
+func publishGuardrailVersion(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("begin skill draft: %v", err)
+		t.Fatalf("begin guardrail version: %v", err)
 	}
-	draft, err := store.CreateSkillDraftTx(tx, ref, prompt, fleet.CatalogVersionMetadata{})
+	version, err := store.CreatePublishedGuardrailVersionTx(tx, ref, guardrail, fleet.CatalogVersionMetadata{})
 	if err != nil {
-		t.Fatalf("CreateSkillDraftTx: %v", err)
-	}
-	if _, _, err := store.PublishSkillVersionTx(tx, draft.ID); err != nil {
-		t.Fatalf("PublishSkillVersionTx: %v", err)
+		t.Fatalf("CreatePublishedGuardrailVersionTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit skill draft: %v", err)
+		t.Fatalf("commit guardrail version: %v", err)
 	}
-	return draft.ID
-}
-
-func createSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
-	t.Helper()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin skill draft: %v", err)
-	}
-	draft, err := store.CreateSkillDraftTx(tx, ref, prompt, fleet.CatalogVersionMetadata{})
-	if err != nil {
-		t.Fatalf("CreateSkillDraftTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit skill draft: %v", err)
-	}
-	return draft.ID
-}
-
-func publishGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
-	t.Helper()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin guardrail draft: %v", err)
-	}
-	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail, fleet.CatalogVersionMetadata{})
-	if err != nil {
-		t.Fatalf("CreateGuardrailDraftTx: %v", err)
-	}
-	if _, err := store.PublishGuardrailVersionTx(tx, draft.ID); err != nil {
-		t.Fatalf("PublishGuardrailVersionTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit guardrail draft: %v", err)
-	}
-	return draft.ID
-}
-
-func createGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
-	t.Helper()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin guardrail draft: %v", err)
-	}
-	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail, fleet.CatalogVersionMetadata{})
-	if err != nil {
-		t.Fatalf("CreateGuardrailDraftTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit guardrail draft: %v", err)
-	}
-	return draft.ID
+	return version.ID
 }
 
 func mustPromptRefs(t *testing.T, db *sql.DB, ref, versionID string) []fleet.CatalogVersionReference {
@@ -1525,76 +1107,6 @@ func assertVersionRefs(t *testing.T, name string, got, want []fleet.CatalogVersi
 	t.Helper()
 	if !slices.Equal(got, want) {
 		t.Fatalf("%s refs = %#v, want %#v", name, got, want)
-	}
-}
-
-func TestPublishCatalogVersionRejectsAlreadyPublished(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "already-published", Description: "first", Content: "body v1"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt: %v", err)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin publish: %v", err)
-	}
-	_, err = store.PublishPromptVersionTx(tx, prompt.VersionID)
-	if rollbackErr := tx.Rollback(); rollbackErr != nil {
-		t.Fatalf("rollback publish: %v", rollbackErr)
-	}
-	var validationErr *store.ErrValidation
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("PublishPromptVersionTx already-published error = %v, want ErrValidation", err)
-	}
-}
-
-func TestPublishCatalogVersionRejectsStaleDraft(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "stale-draft", Description: "first", Content: "body v1"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt v1: %v", err)
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin draft: %v", err)
-	}
-	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2", fleet.CatalogVersionMetadata{})
-	if err != nil {
-		tx.Rollback()
-		t.Fatalf("CreatePromptDraftTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit draft: %v", err)
-	}
-	prompt.Content = "body v3"
-	if _, err := store.UpsertPrompt(db, prompt); err != nil {
-		t.Fatalf("UpsertPrompt v3: %v", err)
-	}
-
-	tx, err = db.Begin()
-	if err != nil {
-		t.Fatalf("begin stale publish: %v", err)
-	}
-	_, err = store.PublishPromptVersionTx(tx, draft.ID)
-	if rollbackErr := tx.Rollback(); rollbackErr != nil {
-		t.Fatalf("rollback stale publish: %v", rollbackErr)
-	}
-	var validationErr *store.ErrValidation
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("PublishPromptVersionTx stale error = %v, want ErrValidation", err)
-	}
-
-	current, err := store.ReadPrompt(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("ReadPrompt: %v", err)
-	}
-	if current.Content != "body v3" || current.Version != 3 {
-		t.Fatalf("current after stale publish = v%d %q, want v3 body", current.Version, current.Content)
 	}
 }
 

@@ -17,20 +17,14 @@ type Agent struct {
 	Backend     string   `yaml:"backend"`
 	Model       string   `yaml:"model"`
 	Skills      []string `yaml:"skills"`
-	// SkillVersionIDs pins individual skill refs to immutable skill_versions
-	// rows. It is internal runtime state; YAML exact pins use skill@version.
-	SkillVersionIDs map[string]string `yaml:"-" json:"-"`
-	PromptID        string            `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`
+	PromptID    string   `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`
 	// PromptRef names a prompt catalog entry visible to this agent. PromptID is
 	// authoritative when present; PromptRef plus optional PromptScope is the
 	// human-facing selector used by YAML/API callers.
 	PromptRef   string `yaml:"prompt_ref,omitempty"`
 	PromptScope string `yaml:"prompt_scope,omitempty" json:"prompt_scope,omitempty"`
-	// PromptVersionID optionally pins the agent to an exact immutable prompt
-	// version. Empty means track the prompt asset's current published version.
-	PromptVersionID string `yaml:"prompt_version_id,omitempty" json:"prompt_version_id,omitempty"`
-	ScopeType       string `yaml:"scope_type,omitempty"`
-	ScopeRepo       string `yaml:"scope_repo,omitempty"`
+	ScopeType   string `yaml:"scope_type,omitempty"`
+	ScopeRepo   string `yaml:"scope_repo,omitempty"`
 	// AllowPRs controls whether the agent is permitted to open pull requests.
 	// Defaults to false; the scheduler prepends a hard no-PR instruction when
 	// false so the gate is code-level rather than relying on prompt wording.
