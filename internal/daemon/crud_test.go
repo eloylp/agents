@@ -2465,16 +2465,14 @@ workspaces:
     name: Default
     guardrails:
       - guardrail_name: policy
-        guardrail_version_id: guardrailver_one
         enabled: true
         position: 1
     agents:
       - name: coder
         backend: claude
         prompt_ref: catalog
-        prompt_version_id: promptver_one
         description: imported agent
-        skills: [imported-skill@1]
+        skills: [imported-skill]
         can_dispatch: []
     repos:
       - name: owner/repo
@@ -2531,31 +2529,26 @@ workspaces:
 		t.Fatalf("guardrail version[0].ID = %q, want %q", got, want)
 	}
 
-	agents, err := s.Store().ReadAgents()
-	if err != nil {
-		t.Fatalf("read agents: %v", err)
-	}
-	if got, want := agents[0].PromptVersionID, "promptver_one"; got != want {
-		t.Fatalf("agent prompt pin = %q, want %q", got, want)
-	}
-	if got, want := agents[0].SkillVersionIDs["imported-skill"], "skillver_one"; got != want {
-		t.Fatalf("agent skill pin = %q, want %q", got, want)
-	}
 	guardrails, err := s.Store().ReadWorkspaceGuardrails("default")
 	if err != nil {
 		t.Fatalf("read workspace guardrails: %v", err)
 	}
-	if got, want := guardrails[0].GuardrailVersionID, "guardrailver_one"; got != want {
-		t.Fatalf("workspace guardrail pin = %q, want %q", got, want)
+	if got, want := guardrails[0].GuardrailName, "guardrail_policy"; got != want {
+		t.Fatalf("workspace guardrail ref = %q, want %q", got, want)
 	}
 
 	exported := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
 	if exported.Code != http.StatusOK {
 		t.Fatalf("export versioned catalog: got %d, %s", exported.Code, exported.Body.String())
 	}
-	for _, want := range []string{"versions:", "id: promptver_one", "id: skillver_two", "id: guardrailver_one", "prompt_version_id: promptver_one", "guardrail_version_id: guardrailver_one"} {
+	for _, want := range []string{"versions:", "id: promptver_one", "id: skillver_two", "id: guardrailver_one"} {
 		if !strings.Contains(exported.Body.String(), want) {
 			t.Fatalf("export missing %q: %s", want, exported.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"prompt_version_id:", "guardrail_version_id:", "imported-skill@"} {
+		if strings.Contains(exported.Body.String(), forbidden) {
+			t.Fatalf("export contains removed live pin field %q: %s", forbidden, exported.Body.String())
 		}
 	}
 }

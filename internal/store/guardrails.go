@@ -38,7 +38,7 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
 		FROM workspace_guardrails wg
 		JOIN guardrails g ON g.id = wg.guardrail_name
-		LEFT JOIN guardrail_versions gv ON gv.id = COALESCE(wg.guardrail_version_id, g.current_version_id)
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
 		WHERE wg.workspace_id = ? AND wg.enabled = 1
 		ORDER BY wg.position ASC, g.ref ASC`
 	return scanGuardrails(db, q, workspaceID)

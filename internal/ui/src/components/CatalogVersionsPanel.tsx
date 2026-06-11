@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { formatDateTime } from '@/lib/datetime'
 
 type AssetType = 'prompt' | 'skill' | 'guardrail'
 
@@ -99,10 +100,7 @@ function shortRef(ref?: string) {
 }
 
 function formatDate(value?: string) {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatDateTime(value)
 }
 
 function sameTimestamp(a?: string, b?: string) {
@@ -116,7 +114,6 @@ function sameTimestamp(a?: string, b?: string) {
 function countRefs(refs: CatalogVersionReference[]) {
   return {
     tracking: refs.filter(ref => ref.tracking).length,
-    pinned: refs.filter(ref => !ref.tracking).length,
   }
 }
 
@@ -170,13 +167,14 @@ function Badge({ children }: { children: ReactNode }) {
 }
 
 export default function CatalogVersionsPanel({
-  type, assetID, currentVersionID, onChanged, onRestoreVersion,
+  type, assetID, currentVersionID, onChanged, onRestoreVersion, onOpenDraftChange,
 }: {
   type: AssetType
   assetID: string
   currentVersionID?: string
   onChanged?: () => void
   onRestoreVersion?: (version: CatalogVersion) => void
+  onOpenDraftChange?: (hasOpenDraft: boolean) => void
 }) {
   const [versions, setVersions] = useState<CatalogVersion[]>([])
   const [references, setReferences] = useState<Record<string, CatalogVersionReference[]>>({})
@@ -197,6 +195,7 @@ export default function CatalogVersionsPanel({
       .then((data: CatalogVersion[]) => {
         const next = data ?? []
         setVersions(next)
+        onOpenDraftChange?.(next.some(v => v.state === 'draft' || v.state === 'proposal'))
         setExpanded(e => e || next[0]?.id || '')
         return Promise.all(next.map(v =>
           fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(v.id)}/references`, { cache: 'no-store', signal })
@@ -220,7 +219,7 @@ export default function CatalogVersionsPanel({
         if (e instanceof DOMException && e.name === 'AbortError') return
         setError(String(e))
       })
-  }, [assetID, type])
+  }, [assetID, type, onOpenDraftChange])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -243,25 +242,6 @@ export default function CatalogVersionsPanel({
     }
   }
 
-  const rollout = async (fromVersionID: string, toVersionID: string) => {
-    setBusy(fromVersionID)
-    setError('')
-    try {
-      const res = await fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(fromVersionID)}/rollout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to_version_id: toVersionID }),
-      })
-      if (!res.ok) throw new Error(await res.text() || 'Rollout failed')
-      load()
-      onChanged?.()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy('')
-    }
-  }
-
   if (!assetID) return null
 
   return (
@@ -271,6 +251,11 @@ export default function CatalogVersionsPanel({
         <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{versions.length} total</span>
       </div>
       {error && <p style={{ color: 'var(--text-danger)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>{error}</p>}
+      {versions.some(v => v.state === 'draft' || v.state === 'proposal') && (
+        <p style={{ color: 'var(--text-muted)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>
+          This catalog item already has an open draft. Publish or resolve it before saving another draft.
+        </p>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', minHeight: 220 }}>
         <div style={{ borderRight: panelBorder, background: 'var(--bg-card)', padding: '0.5rem 0', maxHeight: 360, overflow: 'auto' }}>
           {versions.map(v => {
@@ -304,7 +289,6 @@ export default function CatalogVersionsPanel({
                     {staleDraft && <Badge>Never published</Badge>}
                     {!staleDraft && v.state === 'draft' && <Badge>Draft</Badge>}
                     {counts.tracking > 0 && <Badge>{counts.tracking} tracking</Badge>}
-                    {counts.pinned > 0 && <Badge>{counts.pinned} pinned</Badge>}
                   </span>
                   <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>
                     {label} · {v.state === 'published' && publishedLabel ? publishedLabel : createdLabel}
@@ -329,8 +313,6 @@ export default function CatalogVersionsPanel({
           {versions.filter(v => v.id === expanded).map(v => {
             const base = versions.find(candidate => candidate.id === v.base_version_id) || versions.find(candidate => candidate.version === v.version - 1)
             const refs = references[v.id] || []
-            const exactRefs = refs.filter(ref => !ref.tracking)
-            const canRollout = current && current.id !== v.id && exactRefs.length > 0
             const staleDraft = isStaleDraft(v, current)
             const canPublish = v.state !== 'published' && !staleDraft
             const canRestore = !!onRestoreVersion && !!current && v.version < current.version
@@ -355,16 +337,11 @@ export default function CatalogVersionsPanel({
                         Publish
                       </button>
                     )}
-                    {canRollout && (
-                      <button disabled={busy === v.id} onClick={() => rollout(v.id, current.id)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', cursor: 'pointer' }}>
-                        Upgrade {exactRefs.length} exact pin{exactRefs.length === 1 ? '' : 's'} to v{current.version}
-                      </button>
-                    )}
                   </div>
                 </div>
                 {refs.length > 1 && (
                   <div style={{ border: '1px solid var(--border-warning, #f59e0b)', background: 'var(--bg-warning, rgba(245,158,11,0.08))', color: 'var(--text)', borderRadius: 6, padding: '0.55rem 0.65rem', fontSize: '0.8rem' }}>
-                    Publishing or rolling out changes can affect {refs.length} live references.
+                    Publishing changes can affect {refs.length} live references.
                   </div>
                 )}
                 <div>

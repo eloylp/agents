@@ -162,25 +162,6 @@ func (h *Handler) handleGuardrailVersionReferences(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, refs)
 }
 
-func (h *Handler) handleGuardrailVersionRollout(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
-	fromVersionID := mux.Vars(r)["version_id"]
-	var req catalogVersionRolloutRequest
-	if !decodeBody(w, r, h.maxBodyBytes, &req) {
-		return
-	}
-	if req.ToVersionID == "" {
-		http.Error(w, "to_version_id is required", http.StatusBadRequest)
-		return
-	}
-	result, err := h.store.UpgradeGuardrailVersionReferences(name, fromVersionID, req.ToVersionID)
-	if err != nil {
-		h.writeErr(w, err, "guardrail version rollout")
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) handleGuardrailPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	h.handleGuardrailPatch(w, r, name)

@@ -8,7 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func TestToolPromptCatalogVersionLifecycleAndAgentPin(t *testing.T) {
+func TestToolPromptCatalogVersionLifecycleTracksCurrent(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 
@@ -41,18 +41,6 @@ func TestToolPromptCatalogVersionLifecycleAndAgentPin(t *testing.T) {
 		t.Fatalf("draft prompt version = (%q, %v), want v2: %+v", v2, draftPrompt["version"], draftPrompt)
 	}
 
-	pinReq := mcpgo.CallToolRequest{}
-	pinReq.Params.Arguments = map[string]any{"name": "coder", "prompt_version_id": v1}
-	res, err = toolUpdateAgent(deps)(context.Background(), pinReq)
-	if err != nil {
-		t.Fatalf("pin agent prompt version: %v", err)
-	}
-	var agent map[string]any
-	decodeText(t, res, &agent)
-	if got := agent["prompt_version_id"]; got != v1 {
-		t.Fatalf("agent prompt_version_id = %v, want %s", got, v1)
-	}
-
 	refsReq := mcpgo.CallToolRequest{}
 	refsReq.Params.Arguments = map[string]any{"name": "coder", "version_id": v1}
 	res, err = toolListPromptVersionReferences(deps)(context.Background(), refsReq)
@@ -61,8 +49,8 @@ func TestToolPromptCatalogVersionLifecycleAndAgentPin(t *testing.T) {
 	}
 	var refs []map[string]any
 	decodeText(t, res, &refs)
-	if len(refs) != 1 || refs[0]["tracking"] != false || refs[0]["version_id"] != v1 {
-		t.Fatalf("prompt refs = %+v, want one exact v1 ref", refs)
+	if len(refs) != 1 || refs[0]["tracking"] != true || refs[0]["version_id"] != v1 {
+		t.Fatalf("prompt refs = %+v, want one tracking v1 ref", refs)
 	}
 
 	publishReq := mcpgo.CallToolRequest{}
@@ -77,16 +65,23 @@ func TestToolPromptCatalogVersionLifecycleAndAgentPin(t *testing.T) {
 		t.Fatalf("published prompt version_id = %v, want %s", got, v2)
 	}
 
-	rolloutReq := mcpgo.CallToolRequest{}
-	rolloutReq.Params.Arguments = map[string]any{"name": "coder", "from_version_id": v1, "to_version_id": v2}
-	res, err = toolRolloutPromptVersionRefs(deps)(context.Background(), rolloutReq)
+	refsReq.Params.Arguments = map[string]any{"name": "coder", "version_id": v1}
+	res, err = toolListPromptVersionReferences(deps)(context.Background(), refsReq)
 	if err != nil {
-		t.Fatalf("rollout prompt version refs: %v", err)
+		t.Fatalf("list old prompt version refs: %v", err)
 	}
-	var rollout map[string]any
-	decodeText(t, res, &rollout)
-	if got := rollout["updated"]; got != float64(1) {
-		t.Fatalf("rollout updated = %v, want 1", got)
+	decodeText(t, res, &refs)
+	if len(refs) != 0 {
+		t.Fatalf("old prompt refs = %+v, want none", refs)
+	}
+	refsReq.Params.Arguments = map[string]any{"name": "coder", "version_id": v2}
+	res, err = toolListPromptVersionReferences(deps)(context.Background(), refsReq)
+	if err != nil {
+		t.Fatalf("list current prompt version refs: %v", err)
+	}
+	decodeText(t, res, &refs)
+	if len(refs) != 1 || refs[0]["tracking"] != true || refs[0]["version_id"] != v2 {
+		t.Fatalf("current prompt refs = %+v, want one tracking v2 ref", refs)
 	}
 }
 

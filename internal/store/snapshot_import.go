@@ -340,6 +340,11 @@ func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, repla
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
 		return err
 	}
+	if replace {
+		if err := reseedSelfImprovementAnalystPromptTx(tx); err != nil {
+			return err
+		}
+	}
 	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
@@ -348,6 +353,26 @@ func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, repla
 	}
 	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {
 		return err
+	}
+	return nil
+}
+
+func reseedSelfImprovementAnalystPromptTx(tx *sql.Tx) error {
+	for _, name := range []string{
+		"038_self_improvement_recommendations.sql",
+		"039_self_improvement_analyst_prompt_v2.sql",
+		"042_self_improvement_analyst_prompt_v3_bundles.sql",
+		"044_self_improvement_analyst_prompt_v4_code_examples.sql",
+		"045_self_improvement_analyst_prompt_v5_intelligence_language.sql",
+		"048_self_improvement_analyst_prompt_v6_bundle_contract.sql",
+	} {
+		data, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("store: reseed self-improvement analyst prompt: read %s: %w", name, err)
+		}
+		if _, err := tx.Exec(string(data)); err != nil {
+			return fmt.Errorf("store: reseed self-improvement analyst prompt: apply %s: %w", name, err)
+		}
 	}
 	return nil
 }

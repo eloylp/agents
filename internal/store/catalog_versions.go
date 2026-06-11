@@ -506,6 +506,9 @@ func normalizeNewCatalogVersionMetadata(meta fleet.CatalogVersionMetadata, defau
 }
 
 func createPromptVersionTx(tx *sql.Tx, promptID string, meta fleet.CatalogVersionMetadata, description, content string) (fleet.CatalogVersion, error) {
+	if err := ensureNoOpenCatalogVersion(tx, "prompt", "prompt_versions", "prompt_id", promptID); err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	version, err := nextCatalogVersion(tx, "prompt_versions", "prompt_id", promptID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -540,6 +543,9 @@ func createPromptVersionTx(tx *sql.Tx, promptID string, meta fleet.CatalogVersio
 }
 
 func createSkillVersionTx(tx *sql.Tx, skillID string, meta fleet.CatalogVersionMetadata, prompt string) (fleet.CatalogVersion, error) {
+	if err := ensureNoOpenCatalogVersion(tx, "skill", "skill_versions", "skill_id", skillID); err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	version, err := nextCatalogVersion(tx, "skill_versions", "skill_id", skillID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -574,6 +580,9 @@ func createSkillVersionTx(tx *sql.Tx, skillID string, meta fleet.CatalogVersionM
 }
 
 func createGuardrailVersionTx(tx *sql.Tx, guardrailID string, meta fleet.CatalogVersionMetadata, g fleet.Guardrail) (fleet.CatalogVersion, error) {
+	if err := ensureNoOpenCatalogVersion(tx, "guardrail", "guardrail_versions", "guardrail_id", guardrailID); err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	version, err := nextCatalogVersion(tx, "guardrail_versions", "guardrail_id", guardrailID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -605,6 +614,21 @@ func createGuardrailVersionTx(tx *sql.Tx, guardrailID string, meta fleet.Catalog
 		ID: id, AssetID: guardrailID, Version: version, State: meta.State, SourceType: meta.SourceType, SourceRef: meta.SourceRef,
 		Author: meta.Author, Changelog: meta.Changelog, BaseVersionID: baseID, BodyHash: hash,
 	}, nil
+}
+
+func ensureNoOpenCatalogVersion(q querier, assetType, table, column, assetID string) error {
+	var existingID, state string
+	err := q.QueryRow(
+		fmt.Sprintf(`SELECT id, state FROM %s WHERE %s=? AND state IN ('draft', 'proposal') ORDER BY version_number DESC LIMIT 1`, table, column),
+		assetID,
+	).Scan(&existingID, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: check open %s draft: %w", assetType, err)
+	}
+	return &ErrConflict{Msg: fmt.Sprintf("%s already has an open %s version %s; publish or resolve it before creating another draft", assetType, state, existingID)}
 }
 
 func PublishPromptVersionTx(tx *sql.Tx, versionID string) (fleet.Prompt, error) {
