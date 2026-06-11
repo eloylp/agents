@@ -123,22 +123,13 @@ function diffLabel(type: AssetType, base?: CatalogVersion) {
   return `Diff: ${subject} against v${base.version}`
 }
 
-function isStaleDraft(version: CatalogVersion, current?: CatalogVersion) {
-  if (version.state === 'published') return false
-  return !current || version.base_version_id !== current.id
-}
-
-function versionStateLabel(version: CatalogVersion, current?: CatalogVersion) {
-  if (isStaleDraft(version, current)) return 'Never published'
-  if (version.state === 'draft') return 'Draft'
-  if (version.state === 'proposal') return 'Proposal'
+function versionStateLabel(version: CatalogVersion) {
   if (version.state === 'published') return 'Published'
   return version.state
 }
 
 function TimelineDot({ state }: { state: string }) {
   const published = state === 'published'
-  const proposal = state === 'proposal'
   return (
     <span
       aria-hidden="true"
@@ -146,7 +137,7 @@ function TimelineDot({ state }: { state: string }) {
         width: 12,
         height: 12,
         borderRadius: '50%',
-        border: proposal ? '2px dashed var(--accent)' : '2px solid var(--accent)',
+        border: '2px solid var(--accent)',
         background: published ? 'var(--accent)' : 'var(--bg-card)',
         flex: '0 0 auto',
         marginTop: 3,
@@ -167,20 +158,17 @@ function Badge({ children }: { children: ReactNode }) {
 }
 
 export default function CatalogVersionsPanel({
-  type, assetID, currentVersionID, onChanged, onRestoreVersion, onOpenDraftChange,
+  type, assetID, currentVersionID, onRestoreVersion,
 }: {
   type: AssetType
   assetID: string
   currentVersionID?: string
-  onChanged?: () => void
   onRestoreVersion?: (version: CatalogVersion) => void
-  onOpenDraftChange?: (hasOpenDraft: boolean) => void
 }) {
   const [versions, setVersions] = useState<CatalogVersion[]>([])
   const [references, setReferences] = useState<Record<string, CatalogVersionReference[]>>({})
   const [expanded, setExpanded] = useState('')
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState('')
 
   const current = useMemo(() => versions.find(v => v.id === currentVersionID) || versions.find(v => v.state === 'published'), [versions, currentVersionID])
 
@@ -195,7 +183,6 @@ export default function CatalogVersionsPanel({
       .then((data: CatalogVersion[]) => {
         const next = data ?? []
         setVersions(next)
-        onOpenDraftChange?.(next.some(v => v.state === 'draft' || v.state === 'proposal'))
         setExpanded(e => e || next[0]?.id || '')
         return Promise.all(next.map(v =>
           fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(v.id)}/references`, { cache: 'no-store', signal })
@@ -219,28 +206,13 @@ export default function CatalogVersionsPanel({
         if (e instanceof DOMException && e.name === 'AbortError') return
         setError(String(e))
       })
-  }, [assetID, type, onOpenDraftChange])
+  }, [assetID, type])
 
   useEffect(() => {
     const controller = new AbortController()
     load(controller.signal)
     return () => controller.abort()
   }, [load])
-
-  const publish = async (versionID: string) => {
-    setBusy(versionID)
-    setError('')
-    try {
-      const res = await fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(versionID)}/publish`, { method: 'POST' })
-      if (!res.ok) throw new Error(await res.text() || 'Publish failed')
-      load()
-      onChanged?.()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy('')
-    }
-  }
 
   if (!assetID) return null
 
@@ -251,11 +223,6 @@ export default function CatalogVersionsPanel({
         <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{versions.length} total</span>
       </div>
       {error && <p style={{ color: 'var(--text-danger)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>{error}</p>}
-      {versions.some(v => v.state === 'draft' || v.state === 'proposal') && (
-        <p style={{ color: 'var(--text-muted)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>
-          This catalog item already has an open draft. Publish or resolve it before saving another draft.
-        </p>
-      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', minHeight: 220 }}>
         <div style={{ borderRight: panelBorder, background: 'var(--bg-card)', padding: '0.5rem 0', maxHeight: 360, overflow: 'auto' }}>
           {versions.map(v => {
@@ -263,8 +230,7 @@ export default function CatalogVersionsPanel({
             const counts = countRefs(refs)
             const isCurrent = v.id === currentVersionID
             const base = versions.find(candidate => candidate.id === v.base_version_id)
-            const staleDraft = isStaleDraft(v, current)
-            const label = versionStateLabel(v, current)
+            const label = versionStateLabel(v)
             const createdLabel = formatDate(v.created_at) || 'created time unknown'
             const publishedLabel = formatDate(v.published_at)
             const showCreated = v.state !== 'published' || !v.published_at || !sameTimestamp(v.created_at, v.published_at)
@@ -286,8 +252,6 @@ export default function CatalogVersionsPanel({
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontWeight: 700 }}>
                     v{v.version}
                     {isCurrent && <Badge>Current</Badge>}
-                    {staleDraft && <Badge>Never published</Badge>}
-                    {!staleDraft && v.state === 'draft' && <Badge>Draft</Badge>}
                     {counts.tracking > 0 && <Badge>{counts.tracking} tracking</Badge>}
                   </span>
                   <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>
@@ -313,8 +277,6 @@ export default function CatalogVersionsPanel({
           {versions.filter(v => v.id === expanded).map(v => {
             const base = versions.find(candidate => candidate.id === v.base_version_id) || versions.find(candidate => candidate.version === v.version - 1)
             const refs = references[v.id] || []
-            const staleDraft = isStaleDraft(v, current)
-            const canPublish = v.state !== 'published' && !staleDraft
             const canRestore = !!onRestoreVersion && !!current && v.version < current.version
             const diff = diffLines(base ? versionBody(type, base) : '', versionBody(type, v))
             return (
@@ -323,25 +285,20 @@ export default function CatalogVersionsPanel({
                   <div>
                     <div style={{ color: 'var(--text-heading)', fontWeight: 700 }}>Version {v.version}</div>
                     <div title={v.source_ref || undefined} style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                      {versionStateLabel(v, current)}{v.source_type ? ` · ${v.source_type}` : ''}{v.source_ref ? ` · ${shortRef(v.source_ref)}` : ''}{v.published_at ? ` · published ${formatDate(v.published_at)}` : ''}
+                      {versionStateLabel(v)}{v.source_type ? ` · ${v.source_type}` : ''}{v.source_ref ? ` · ${shortRef(v.source_ref)}` : ''}{v.published_at ? ` · published ${formatDate(v.published_at)}` : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {canRestore && (
-                      <button disabled={busy === v.id} onClick={() => onRestoreVersion(v)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', cursor: 'pointer' }}>
+                      <button onClick={() => onRestoreVersion(v)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', cursor: 'pointer' }}>
                         Rollback to this version
-                      </button>
-                    )}
-                    {canPublish && (
-                      <button disabled={busy === v.id} onClick={() => publish(v.id)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer' }}>
-                        Publish
                       </button>
                     )}
                   </div>
                 </div>
                 {refs.length > 1 && (
                   <div style={{ border: '1px solid var(--border-warning, #f59e0b)', background: 'var(--bg-warning, rgba(245,158,11,0.08))', color: 'var(--text)', borderRadius: 6, padding: '0.55rem 0.65rem', fontSize: '0.8rem' }}>
-                    Publishing changes can affect {refs.length} live references.
+                    Changes to this catalog item can affect {refs.length} live references.
                   </div>
                 )}
                 <div>

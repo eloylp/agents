@@ -253,7 +253,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		Type:                  "catalog_patch_bundle",
 		Status:                RecommendationStatusRecommended,
 		Finding:               "duplicate catalog update",
-		Rationale:             "same prompt should already have one open draft",
+		Rationale:             "same prompt should already have one pending bundle item",
 		AttributionConfidence: "exact",
 		StructuredOutput: map[string]any{
 			"changes": []map[string]any{
@@ -264,7 +264,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordRecommendation duplicate: %v", err)
 	}
-	if duplicateRec.Status != RecommendationStatusNeedsUserInput || duplicateRec.ProposalBundle != nil || !strings.Contains(duplicateRec.Error, "already has an open proposal draft") {
+	if duplicateRec.Status != RecommendationStatusNeedsUserInput || duplicateRec.ProposalBundle != nil || !strings.Contains(duplicateRec.Error, "already has a pending proposal item") {
 		t.Fatalf("duplicate recommendation = %+v, want needs_user_input conflict without bundle", duplicateRec)
 	}
 	var promptItem, skillItem SelfImprovementBundleItem

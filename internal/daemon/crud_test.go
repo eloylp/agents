@@ -2603,7 +2603,7 @@ func TestStoreImportYAMLRejectsInvalidCatalogVersions(t *testing.T) {
 			wantBody: "guardrail version content is required",
 		},
 		{
-			name: "no published version",
+			name: "draft version state",
 			body: `prompts:
   - id: prompt_bad
     name: bad
@@ -2614,7 +2614,7 @@ func TestStoreImportYAMLRejectsInvalidCatalogVersions(t *testing.T) {
         state: draft
         content: draft prompt
 `,
-			wantBody: "prompt versions require at least one published version",
+			wantBody: `invalid catalog version state "draft"`,
 		},
 		{
 			name: "duplicate version number",
@@ -3286,108 +3286,7 @@ func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
 	}
 }
 
-func TestStoreCRUDCatalogVersionPublishRejectsWrongAsset(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
-		"name": "coder-a", "description": "a", "content": "prompt a v1",
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST coder-a prompt: got %d, %s", rr.Code, rr.Body.String())
-	}
-	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
-		"name": "coder-b", "description": "b", "content": "prompt b v1",
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST coder-b prompt: got %d, %s", rr.Code, rr.Body.String())
-	}
-	var promptB storePromptJSON
-	if err := json.NewDecoder(rr.Body).Decode(&promptB); err != nil {
-		t.Fatalf("decode coder-b prompt: %v", err)
-	}
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+promptB.ID, map[string]any{
-		"content": "prompt b v2", "publish": false,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH coder-b draft: got %d, %s", rr.Code, rr.Body.String())
-	}
-	var promptDraft storePromptJSON
-	if err := json.NewDecoder(rr.Body).Decode(&promptDraft); err != nil {
-		t.Fatalf("decode draft prompt: %v", err)
-	}
-	if promptDraft.VersionID == "" || promptDraft.Version != 2 {
-		t.Fatalf("draft prompt version = (%q, %d), want draft v2", promptDraft.VersionID, promptDraft.Version)
-	}
-	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts/prompt_coder-a/versions/"+promptDraft.VersionID+"/publish", nil)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("POST wrong prompt publish: got %d, want 404, %s", rr.Code, rr.Body.String())
-	}
-
-	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
-		"name": "architect", "prompt": "architecture v1",
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST architect skill: got %d, %s", rr.Code, rr.Body.String())
-	}
-	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
-		"name": "reviewer", "prompt": "review v1",
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST reviewer skill: got %d, %s", rr.Code, rr.Body.String())
-	}
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/reviewer", map[string]any{
-		"prompt": "review v2", "publish": false,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH reviewer draft: got %d, %s", rr.Code, rr.Body.String())
-	}
-	var draft storeSkillJSON
-	if err := json.NewDecoder(rr.Body).Decode(&draft); err != nil {
-		t.Fatalf("decode draft skill: %v", err)
-	}
-	if draft.VersionID == "" || draft.Version != 2 {
-		t.Fatalf("draft skill version = (%q, %d), want draft v2", draft.VersionID, draft.Version)
-	}
-
-	rr = doCRUDRequest(t, s, http.MethodPost, "/skills/architect/versions/"+draft.VersionID+"/publish", nil)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("POST wrong skill publish: got %d, want 404, %s", rr.Code, rr.Body.String())
-	}
-
-	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
-		"name": "Guardrail A", "description": "a", "content": "guardrail a v1", "enabled": true, "position": 10,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST guardrail-a: got %d, %s", rr.Code, rr.Body.String())
-	}
-	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
-		"name": "Guardrail B", "description": "b", "content": "guardrail b v1", "enabled": true, "position": 20,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST guardrail-b: got %d, %s", rr.Code, rr.Body.String())
-	}
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/guardrail-b", map[string]any{
-		"content": "guardrail b v2", "publish": false,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH guardrail-b draft: got %d, %s", rr.Code, rr.Body.String())
-	}
-	var guardrailDraft map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&guardrailDraft); err != nil {
-		t.Fatalf("decode draft guardrail: %v", err)
-	}
-	guardrailVersionID, _ := guardrailDraft["version_id"].(string)
-	if guardrailVersionID == "" || guardrailDraft["version"] != float64(2) {
-		t.Fatalf("draft guardrail version = (%q, %v), want draft v2", guardrailVersionID, guardrailDraft["version"])
-	}
-	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails/guardrail-a/versions/"+guardrailVersionID+"/publish", nil)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("POST wrong guardrail publish: got %d, want 404, %s", rr.Code, rr.Body.String())
-	}
-}
-
-func TestStoreCRUDPromptPatchCanCreateAttributedProposalVersion(t *testing.T) {
+func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
@@ -3401,140 +3300,92 @@ func TestStoreCRUDPromptPatchCanCreateAttributedProposalVersion(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
 		t.Fatalf("decode prompt: %v", err)
 	}
+	promptInitialVersion := prompt.Version
 	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+prompt.ID, map[string]any{
-		"content":     "prompt v2",
-		"publish":     false,
-		"state":       "proposal",
-		"source_type": "feedback_recommendation",
-		"source_ref":  "rec_123",
-		"author":      "assistant",
-		"changelog":   "tighten guidance from review feedback",
+		"content": "prompt v2",
 	})
 	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH prompt proposal: got %d, %s", rr.Code, rr.Body.String())
+		t.Fatalf("PATCH prompt: got %d, %s", rr.Code, rr.Body.String())
 	}
-
+	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode updated prompt: %v", err)
+	}
+	if prompt.VersionID == "" || prompt.Version != promptInitialVersion+1 || prompt.Content != "prompt v2" {
+		t.Fatalf("updated prompt = %+v, want current published version after v%d", prompt, promptInitialVersion)
+	}
 	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/"+prompt.ID+"/versions", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET prompt versions: got %d, %s", rr.Code, rr.Body.String())
 	}
-	var versions []fleet.CatalogVersion
-	if err := json.NewDecoder(rr.Body).Decode(&versions); err != nil {
-		t.Fatalf("decode versions: %v", err)
+	var promptVersions []fleet.CatalogVersion
+	if err := json.NewDecoder(rr.Body).Decode(&promptVersions); err != nil {
+		t.Fatalf("decode prompt versions: %v", err)
 	}
-	if len(versions) < 2 {
-		t.Fatalf("versions len = %d, want at least 2: %+v", len(versions), versions)
+	if len(promptVersions) < 2 || promptVersions[0].ID != prompt.VersionID || promptVersions[0].State != "published" {
+		t.Fatalf("prompt versions = %+v, want current published version first", promptVersions)
 	}
-	got := versions[0]
-	if got.State != "proposal" || got.SourceType != "feedback_recommendation" || got.SourceRef != "rec_123" ||
-		got.Author != "assistant" || got.Changelog != "tighten guidance from review feedback" {
-		t.Fatalf("proposal metadata = %+v", got)
-	}
-}
 
-func TestStoreCRUDPatchRejectsVersionMetadataUnlessDraft(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		seed   func(*testing.T, *daemon.Daemon) string
-		method string
-		body   map[string]any
-	}{
-		{
-			name: "prompt omitted publish",
-			seed: func(t *testing.T, s *daemon.Daemon) string {
-				t.Helper()
-				rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
-					"name": "coder", "description": "v1", "content": "prompt v1",
-				})
-				if rr.Code != http.StatusOK {
-					t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
-				}
-				var prompt storePromptJSON
-				if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
-					t.Fatalf("decode prompt: %v", err)
-				}
-				return "/prompts/" + prompt.ID
-			},
-			method: http.MethodPatch,
-			body: map[string]any{
-				"content": "prompt v2",
-				"state":   "proposal",
-			},
-		},
-		{
-			name: "prompt publish true",
-			seed: func(t *testing.T, s *daemon.Daemon) string {
-				t.Helper()
-				rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
-					"name": "reviewer", "description": "v1", "content": "prompt v1",
-				})
-				if rr.Code != http.StatusOK {
-					t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
-				}
-				var prompt storePromptJSON
-				if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
-					t.Fatalf("decode prompt: %v", err)
-				}
-				return "/prompts/" + prompt.ID
-			},
-			method: http.MethodPatch,
-			body: map[string]any{
-				"content": "prompt v2",
-				"publish": true,
-				"state":   "proposal",
-			},
-		},
-		{
-			name: "skill omitted publish",
-			seed: func(t *testing.T, s *daemon.Daemon) string {
-				t.Helper()
-				rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
-					"name": "Security", "prompt": "skill v1",
-				})
-				if rr.Code != http.StatusOK {
-					t.Fatalf("POST skill: got %d, %s", rr.Code, rr.Body.String())
-				}
-				return "/skills/security"
-			},
-			method: http.MethodPatch,
-			body: map[string]any{
-				"prompt": "skill v2",
-				"state":  "proposal",
-			},
-		},
-		{
-			name: "guardrail omitted publish",
-			seed: func(t *testing.T, s *daemon.Daemon) string {
-				t.Helper()
-				rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
-					"name": "Guardrail A", "description": "v1", "content": "guardrail v1", "enabled": true, "position": 10,
-				})
-				if rr.Code != http.StatusOK {
-					t.Fatalf("POST guardrail: got %d, %s", rr.Code, rr.Body.String())
-				}
-				return "/guardrails/guardrail-a"
-			},
-			method: http.MethodPatch,
-			body: map[string]any{
-				"content": "guardrail v2",
-				"state":   "proposal",
-			},
-		},
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"name": "architect", "prompt": "architecture v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST architect skill: got %d, %s", rr.Code, rr.Body.String())
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := openCRUDTestServer(t)
-			path := tt.seed(t, s)
-			rr := doCRUDRequest(t, s, tt.method, path, tt.body)
-			if rr.Code != http.StatusBadRequest {
-				t.Fatalf("PATCH with metadata: got %d, want 400, %s", rr.Code, rr.Body.String())
-			}
-			if !strings.Contains(rr.Body.String(), "catalog version metadata") || !strings.Contains(rr.Body.String(), "set publish=false") {
-				t.Fatalf("error body = %q, want actionable publish=false validation", rr.Body.String())
-			}
-		})
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/architect", map[string]any{
+		"prompt": "architecture v2",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var skill storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&skill); err != nil {
+		t.Fatalf("decode skill: %v", err)
+	}
+	if skill.VersionID == "" || skill.Version != 2 || skill.Prompt != "architecture v2" {
+		t.Fatalf("updated skill = %+v, want current published v2", skill)
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect/versions", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET skill versions: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var skillVersions []fleet.CatalogVersion
+	if err := json.NewDecoder(rr.Body).Decode(&skillVersions); err != nil {
+		t.Fatalf("decode skill versions: %v", err)
+	}
+	if len(skillVersions) != 2 || skillVersions[0].ID != skill.VersionID || skillVersions[0].State != "published" {
+		t.Fatalf("skill versions = %+v, want current published v2 first", skillVersions)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "Guardrail A", "description": "v1", "content": "guardrail v1", "enabled": true, "position": 10,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/guardrail-a", map[string]any{
+		"content": "guardrail v2",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var guardrail map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&guardrail); err != nil {
+		t.Fatalf("decode guardrail: %v", err)
+	}
+	guardrailVersionID, _ := guardrail["version_id"].(string)
+	if guardrailVersionID == "" || guardrail["version"] != float64(2) || guardrail["content"] != "guardrail v2" {
+		t.Fatalf("updated guardrail = %+v, want current published v2", guardrail)
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/guardrails/guardrail-a/versions", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET guardrail versions: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var guardrailVersions []fleet.CatalogVersion
+	if err := json.NewDecoder(rr.Body).Decode(&guardrailVersions); err != nil {
+		t.Fatalf("decode guardrail versions: %v", err)
+	}
+	if len(guardrailVersions) != 2 || guardrailVersions[0].ID != guardrailVersionID || guardrailVersions[0].State != "published" {
+		t.Fatalf("guardrail versions = %+v, want current published v2 first", guardrailVersions)
 	}
 }
 

@@ -1,8 +1,9 @@
 # Catalog Versioning
 
 Prompts, skills, and guardrails have stable catalog identities and immutable
-version rows. Normal edits publish a new current version by default, while
-draft edits can be saved without affecting future agent runs.
+published version rows. A normal edit creates a new published current version
+immediately, so agents that track that catalog asset use the new content on
+their next run.
 
 ## References
 
@@ -25,15 +26,16 @@ workspaces:
 
 Tracking references resolve to the asset's current published version at prompt
 composition time. To return to older content, use the rollback action to copy
-that historical version into the editor and publish it as a new current version.
+that historical version into the editor and save it as a new current published
+version.
 
 Every run stores the exact prompt, skill, and guardrail version ids that were
 resolved for that run. The composed prompt is still stored on the trace as
 before.
 
-## Drafts And Publishing
+## Editing
 
-The REST edit endpoints publish by default:
+The REST edit endpoints publish immediately:
 
 ```http
 PATCH /prompts/{id}
@@ -41,53 +43,21 @@ PATCH /skills/{id}
 PATCH /guardrails/{id}
 ```
 
-Send `"publish": false` to save a draft version instead. Drafts do not update
-the live catalog asset and do not affect agents tracking the current version.
-For now, each catalog asset can have only one open `draft` or `proposal`
-version at a time. Publish or otherwise resolve the existing open version
-before saving another draft for the same prompt, skill, or guardrail.
+Example:
 
 ```json
 {
-  "content": "Updated prompt body",
-  "publish": false
+  "content": "Updated prompt body"
 }
 ```
 
-Direct API clients can create attributed inert proposal versions through the
-same edit endpoints by setting `publish: false`, `state: "proposal"`, and
-source metadata. The self-improvement workflow does not create catalog version
-rows during analysis; it stores inert proposal bundle items and creates catalog
-versions only when a human publishes the bundle.
+The MCP `update_prompt`, `update_skill`, and `update_guardrail` tools follow
+the same rule. There is no catalog draft state and no explicit publish endpoint
+for individual catalog versions.
 
-```json
-{
-  "content": "Updated prompt body",
-  "publish": false,
-  "state": "proposal",
-  "source_type": "feedback_recommendation",
-  "source_ref": "rec_123",
-  "author": "agents-assistant",
-  "changelog": "Proposed from repeated review feedback"
-}
-```
-
-Supported source types are `manual`, `feedback_recommendation`, and
-`audit_recommendation` for API-created versions. Migration-created seed
-versions use `migration`. Proposal versions are inert until a user explicitly
-publishes them.
-
-Publish a draft explicitly:
-
-```http
-POST /prompts/{id}/versions/{version_id}/publish
-POST /skills/{id}/versions/{version_id}/publish
-POST /guardrails/{id}/versions/{version_id}/publish
-```
-
-Publishing is guarded against stale drafts. If another version was published
-after a draft was created, refresh from the current version before publishing
-the older draft.
+The self-improvement workflow keeps proposed changes in proposal bundle tables
+until a human finalizes the bundle. Finalizing a bundle atomically creates the
+new published catalog versions for accepted publishable items.
 
 ## Reviewing Rollout Impact
 
@@ -122,9 +92,9 @@ version:
 ]
 ```
 
-Use this before publishing shared catalog changes. A tracking reference to the
-current version means the next publish will affect that agent or workspace on
-its next run.
+Use this before saving shared catalog changes. A tracking reference to the
+current version means the next edit will affect that agent or workspace on its
+next run.
 
 ## Import And Export
 

@@ -8,7 +8,6 @@ describe('<CatalogVersionsPanel />', () => {
   })
 
   it('shows reference warnings for live tracking refs', async () => {
-    const onChanged = vi.fn()
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/prompts/prompt-a/versions') {
@@ -39,16 +38,15 @@ describe('<CatalogVersionsPanel />', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CatalogVersionsPanel type="prompt" assetID="prompt-a" currentVersionID="v2" onChanged={onChanged} />)
+    render(<CatalogVersionsPanel type="prompt" assetID="prompt-a" currentVersionID="v2" />)
 
     await screen.findByText('v1')
     expect(screen.getByText('+inserted')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('v1'))
 
-	    expect(await screen.findByText('Publishing changes can affect 2 live references.')).toBeInTheDocument()
+	    expect(await screen.findByText('Changes to this catalog item can affect 2 live references.')).toBeInTheDocument()
 	    expect(screen.queryByRole('button', { name: /Upgrade/ })).not.toBeInTheDocument()
-	    expect(onChanged).not.toHaveBeenCalled()
 	  })
 
   it('surfaces reference loading failures while keeping successful references', async () => {
@@ -80,32 +78,6 @@ describe('<CatalogVersionsPanel />', () => {
 
     expect(await screen.findByText('Error: load references: 500')).toBeInTheDocument()
     expect(await screen.findByText('default/tracker · tracking')).toBeInTheDocument()
-  })
-
-  it('reports open catalog drafts to parent forms', async () => {
-    const onOpenDraftChange = vi.fn()
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url === '/prompts/prompt-a/versions') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([
-            { id: 'draft-v2', version: 2, state: 'draft', content: 'draft body', base_version_id: 'v1' },
-            { id: 'v1', version: 1, state: 'published', content: 'body v1' },
-          ]),
-        } as Response)
-      }
-      if (url.startsWith('/prompts/prompt-a/versions/')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
-      }
-      return Promise.resolve({ ok: false, status: 404 } as Response)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(<CatalogVersionsPanel type="prompt" assetID="prompt-a" currentVersionID="v1" onOpenDraftChange={onOpenDraftChange} />)
-
-    expect(await screen.findByText('This catalog item already has an open draft. Publish or resolve it before saving another draft.')).toBeInTheDocument()
-    expect(onOpenDraftChange).toHaveBeenCalledWith(true)
   })
 
   it('renders first guardrail versions with settings in the diff', async () => {

@@ -65,12 +65,12 @@ covered by an existing catalog asset. That link-existing decision does not
 attach the selected asset to any agent; it only records that the proposed new
 asset should not be created. Rejecting a proposal stores an optional
 proposal-level decision reason; rejecting the only item in a bundle also
-terminally rejects the proposal. A catalog asset can have only one open
-self-improvement draft at a time: pending bundles that already target a prompt,
-skill, guardrail, or create-new ref block additional drafts for the same
-catalog item until the first bundle is published, rejected, linked, or
+terminally rejects the proposal. A catalog asset can have only one pending
+self-improvement bundle item at a time: pending bundles that already target a
+prompt, skill, guardrail, or create-new ref block additional staged changes for
+the same catalog item until the first bundle is published, rejected, linked, or
 discarded. `Publish Bundle` is atomic for accepted publishable items: stale
-base versions, duplicate new refs, invalid items, open-draft conflicts, or
+base versions, duplicate new refs, invalid items, pending-item conflicts, or
 write failures roll back the whole publish transaction. Link-existing and
 rejected decisions are preserved as review evidence without creating catalog
 versions.

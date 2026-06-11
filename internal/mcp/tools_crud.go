@@ -216,12 +216,6 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "prompt"); ok {
 			patch.Prompt = v
 		}
-		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
-			patch.Publish = v
-		} else if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		applyCatalogVersionMetadataArgs(args, &patch.State, &patch.SourceType, &patch.SourceRef, &patch.Author, &patch.Changelog)
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
@@ -250,24 +244,6 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 			"status": "deleted",
 			"name":   canonical,
 		})
-	}
-}
-
-func applyCatalogVersionMetadataArgs(args map[string]any, state, sourceType, sourceRef, author, changelog **string) {
-	if v, ok := stringPtrArg(args, "state"); ok {
-		*state = v
-	}
-	if v, ok := stringPtrArg(args, "source_type"); ok {
-		*sourceType = v
-	}
-	if v, ok := stringPtrArg(args, "source_ref"); ok {
-		*sourceRef = v
-	}
-	if v, ok := stringPtrArg(args, "author"); ok {
-		*author = v
-	}
-	if v, ok := stringPtrArg(args, "changelog"); ok {
-		*changelog = v
 	}
 }
 
@@ -437,12 +413,6 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "content"); ok {
 			patch.Content = v
 		}
-		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
-			patch.Publish = v
-		} else if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		applyCatalogVersionMetadataArgs(args, &patch.State, &patch.SourceType, &patch.SourceRef, &patch.Author, &patch.Changelog)
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}

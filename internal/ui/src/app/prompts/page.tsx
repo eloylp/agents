@@ -48,8 +48,6 @@ export default function PromptsPage() {
   const [filterRepos, setFilterRepos] = useState<Repo[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [publish, setPublish] = useState(true)
-  const [hasOpenDraft, setHasOpenDraft] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -100,7 +98,7 @@ export default function PromptsPage() {
           workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
           repo: selectedScope === 'repo' ? selected.repo : '',
         }
-      : { description: selected.description, content: selected.content, publish }
+      : { description: selected.description, content: selected.content }
     try {
       const res = await fetch(url, {
         method: isNew ? 'POST' : 'PATCH',
@@ -202,7 +200,7 @@ export default function PromptsPage() {
             </select>
           )}
           <button
-            onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setPublish(true); setHasOpenDraft(false); setError(''); setModal('create') }}
+            onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setError(''); setModal('create') }}
             style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + New prompt
@@ -227,7 +225,7 @@ export default function PromptsPage() {
               {p.content || '-'}
             </pre>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-              <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setPublish(true); setHasOpenDraft(false); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
+              <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
               <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
             </div>
           </Card>
@@ -301,47 +299,19 @@ export default function PromptsPage() {
                 type="prompt"
                 assetID={selected.id || selected.name}
                 currentVersionID={selected.version_id}
-                onChanged={load}
-                onOpenDraftChange={setHasOpenDraft}
                 onRestoreVersion={version => {
                   setSelected(p => ({
                     ...p,
                     description: version.description ?? '',
                     content: version.content ?? '',
                   }))
-                  setPublish(true)
                 }}
               />
-            )}
-            {modal === 'edit' && (
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
-                <input
-                  type="checkbox"
-                  checked={publish}
-                  disabled={hasOpenDraft && publish}
-                  onChange={e => {
-                    if (!e.target.checked && hasOpenDraft) return
-                    setPublish(e.target.checked)
-                  }}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>Publish</strong>
-                  <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
-                    Agents tracking this prompt will use the new published version on their next run. If unchecked, the edit is saved as a draft.
-                    {hasOpenDraft && (
-                      <span style={{ display: 'block', color: 'var(--text-danger)', marginTop: 2 }}>
-                        An open draft already exists, so saving another draft is disabled.
-                      </span>
-                    )}
-                  </span>
-                </span>
-              </label>
             )}
             {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)' }}>Cancel</button>
-              <button onClick={save} disabled={saving || (!publish && hasOpenDraft) || !selected.name.trim() || !selected.content.trim() || (selectedScope !== 'global' && !selected.workspace_id) || (selectedScope === 'repo' && !selected.repo)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', fontWeight: 600 }}>{saving ? 'Saving...' : 'Save'}</button>
+              <button onClick={save} disabled={saving || !selected.name.trim() || !selected.content.trim() || (selectedScope !== 'global' && !selected.workspace_id) || (selectedScope === 'repo' && !selected.repo)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', fontWeight: 600 }}>{saving ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
         </Modal>

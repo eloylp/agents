@@ -233,7 +233,7 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	if err := validateNoDuplicateBundleDraftItems(items); err != nil {
+	if err := validateNoDuplicatePendingBundleItems(items); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	snapshotHash, err := recommendationSnapshotHash(rec)
@@ -255,7 +255,7 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 			if err := validateBundleItemForCreate(tx, rec.WorkspaceID, item); err != nil {
 				return err
 			}
-			if err := validateNoOpenBundleItemDraft(tx, "", item); err != nil {
+			if err := validateNoPendingBundleItemConflict(tx, "", item); err != nil {
 				return err
 			}
 			item, err = hydrateBundleItemMetadata(tx, item)
@@ -381,7 +381,7 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 	after := item
 	after.ProposedRef, after.ProposedName, after.ProposedScope = ref, name, scope
 	after.ProposedBody, after.ProposedDescription, after.ProposedEnabled, after.ProposedPosition = body, description, enabled, position
-	if proposalBundleItemDraftEqual(item, after) {
+	if proposalBundleItemPatchEqual(item, after) {
 		bundle, err = getSelfImprovementProposalBundleFromStore(st, bundle.ID)
 		return bundle, false, err
 	}
@@ -399,7 +399,7 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 			}); err != nil {
 				return err
 			}
-			if err := validateNoOpenBundleItemDraft(tx, bundle.ID, SelfImprovementBundleItemInput{
+			if err := validateNoPendingBundleItemConflict(tx, bundle.ID, SelfImprovementBundleItemInput{
 				Operation:     item.Operation,
 				AssetType:     item.AssetType,
 				ProposedRef:   ref,
@@ -408,7 +408,7 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 				return err
 			}
 		}
-		if err := store.UpdateSelfImprovementProposalBundleItemDraftRow(tx, bundle.ID, proposalBundleItemRowFromItem(after)); err != nil {
+		if err := store.UpdateSelfImprovementProposalBundleItemRow(tx, bundle.ID, proposalBundleItemRowFromItem(after)); err != nil {
 			return err
 		}
 		return insertBundleItemEvent(tx, bundle.ID, item.ID, "edited", actor, "", bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after))
@@ -419,7 +419,7 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 	return bundle, true, err
 }
 
-func proposalBundleItemDraftEqual(a, b SelfImprovementBundleItem) bool {
+func proposalBundleItemPatchEqual(a, b SelfImprovementBundleItem) bool {
 	return a.ProposedRef == b.ProposedRef &&
 		a.ProposedName == b.ProposedName &&
 		a.ProposedScope == b.ProposedScope &&
@@ -472,7 +472,7 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 			default:
 				return &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
 			}
-			if err := validateNoOpenBundleItemDraft(tx, bundle.ID, SelfImprovementBundleItemInput{
+			if err := validateNoPendingBundleItemConflict(tx, bundle.ID, SelfImprovementBundleItemInput{
 				Operation:     item.Operation,
 				AssetType:     item.AssetType,
 				AssetID:       item.AssetID,
@@ -591,26 +591,26 @@ func validateBundleItemForCreate(q querier, workspaceID string, item SelfImprove
 	}
 }
 
-func validateNoDuplicateBundleDraftItems(items []SelfImprovementBundleItemInput) error {
+func validateNoDuplicatePendingBundleItems(items []SelfImprovementBundleItemInput) error {
 	seen := map[string]struct{}{}
 	for _, item := range items {
-		key := bundleDraftKey(item)
+		key := bundlePendingItemKey(item)
 		if key == "" {
 			continue
 		}
 		if _, ok := seen[key]; ok {
-			return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle contains more than one draft for %s", bundleDraftLabel(item))}
+			return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle contains more than one pending item for %s", bundlePendingItemLabel(item))}
 		}
 		seen[key] = struct{}{}
 	}
 	return nil
 }
 
-func validateNoOpenBundleItemDraft(q querier, excludeBundleID string, item SelfImprovementBundleItemInput) error {
-	if bundleDraftKey(item) == "" {
+func validateNoPendingBundleItemConflict(q querier, excludeBundleID string, item SelfImprovementBundleItemInput) error {
+	if bundlePendingItemKey(item) == "" {
 		return nil
 	}
-	existing, err := store.FindOpenSelfImprovementBundleItemDraft(q, excludeBundleID, store.SelfImprovementBundleItemInputRow{
+	existing, err := store.FindPendingSelfImprovementBundleItem(q, excludeBundleID, store.SelfImprovementBundleItemInputRow{
 		Operation:     item.Operation,
 		AssetType:     item.AssetType,
 		AssetID:       item.AssetID,
@@ -618,7 +618,7 @@ func validateNoOpenBundleItemDraft(q querier, excludeBundleID string, item SelfI
 		ProposedScope: item.ProposedScope,
 	})
 	if err == nil {
-		return &store.ErrConflict{Msg: fmt.Sprintf("%s already has an open proposal draft in bundle %s", bundleDraftLabel(item), existing.BundleID)}
+		return &store.ErrConflict{Msg: fmt.Sprintf("%s already has a pending proposal item in bundle %s", bundlePendingItemLabel(item), existing.BundleID)}
 	}
 	var nf *store.ErrNotFound
 	if errors.As(err, &nf) {
@@ -627,7 +627,7 @@ func validateNoOpenBundleItemDraft(q querier, excludeBundleID string, item SelfI
 	return err
 }
 
-func bundleDraftKey(item SelfImprovementBundleItemInput) string {
+func bundlePendingItemKey(item SelfImprovementBundleItemInput) string {
 	switch strings.TrimSpace(item.Operation) {
 	case ProposalBundleOperationUpdateExisting:
 		if strings.TrimSpace(item.AssetType) == "" || strings.TrimSpace(item.AssetID) == "" {
@@ -644,7 +644,7 @@ func bundleDraftKey(item SelfImprovementBundleItemInput) string {
 	}
 }
 
-func bundleDraftLabel(item SelfImprovementBundleItemInput) string {
+func bundlePendingItemLabel(item SelfImprovementBundleItemInput) string {
 	switch strings.TrimSpace(item.Operation) {
 	case ProposalBundleOperationUpdateExisting:
 		return strings.TrimSpace(item.AssetType) + "/" + strings.TrimSpace(item.AssetID)
@@ -784,7 +784,7 @@ func getBundleAndItem(st *store.Store, bundleID, itemID string) (SelfImprovement
 
 func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, workspaceID, recommendationID string) (string, error) {
 	meta := fleet.CatalogVersionMetadata{
-		State:      "draft",
+		State:      "published",
 		SourceType: "feedback_recommendation",
 		SourceRef:  recommendationID,
 		Author:     "agents-assistant",
@@ -811,7 +811,6 @@ func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, worksp
 }
 
 func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, meta fleet.CatalogVersionMetadata) (string, error) {
-	meta.State = "proposal"
 	var version fleet.CatalogVersion
 	var err error
 	switch item.AssetType {
@@ -820,9 +819,9 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 		if err != nil {
 			return "", err
 		}
-		version, err = store.CreatePromptDraftTx(tx, prompt.ID, prompt.Description, item.ProposedBody, meta)
+		version, err = store.CreatePublishedPromptVersionTx(tx, prompt.ID, prompt.Description, item.ProposedBody, meta)
 	case "skill":
-		version, err = store.CreateSkillDraftTx(tx, item.AssetID, item.ProposedBody, meta)
+		version, err = store.CreatePublishedSkillVersionTx(tx, item.AssetID, item.ProposedBody, meta)
 	case "guardrail":
 		guardrail, err := store.ReadSelfImprovementGuardrail(tx, item.AssetID)
 		if err != nil {
@@ -832,22 +831,14 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 		guardrail.Content = item.ProposedBody
 		guardrail.Enabled = item.ProposedEnabled
 		guardrail.Position = normalizedBundlePosition(item.ProposedPosition)
-		version, err = store.CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
+		version, err = store.CreatePublishedGuardrailVersionTx(tx, guardrail.ID, guardrail, meta)
 	default:
 		return "", &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
 	}
 	if err != nil {
 		return "", err
 	}
-	switch item.AssetType {
-	case "prompt":
-		_, err = store.PublishPromptVersionTx(tx, version.ID)
-	case "skill":
-		_, _, err = store.PublishSkillVersionTx(tx, version.ID)
-	case "guardrail":
-		_, err = store.PublishGuardrailVersionTx(tx, version.ID)
-	}
-	return version.ID, err
+	return version.ID, nil
 }
 
 func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspaceID string, meta fleet.CatalogVersionMetadata) (string, error) {

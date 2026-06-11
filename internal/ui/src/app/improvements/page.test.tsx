@@ -136,7 +136,7 @@ describe('<ImprovementsPage />', () => {
     expect(within(diff).getByText('+new body')).toBeInTheDocument()
   })
 
-  it('blocks finalizing a bundle when another pending draft targets the same catalog item', async () => {
+  it('blocks finalizing a bundle when another pending staged change targets the same catalog item', async () => {
     const recommendations = ['rec-a', 'rec-b'].map((id, index) => ({
       id,
       feedback_event_id: 20 + index,
@@ -145,8 +145,8 @@ describe('<ImprovementsPage />', () => {
       confidence: 'high',
       risk: 'low',
       finding: `Update go-api ${index}`,
-      normalized_lesson: 'Keep one draft.',
-      rationale: 'The same skill should not have two open drafts.',
+      normalized_lesson: 'Keep one staged change.',
+      rationale: 'The same skill should not have two pending staged changes.',
       attribution_confidence: 'exact',
       target_asset_type: 'skill',
       target_asset_id: 'go-api',
@@ -190,7 +190,7 @@ describe('<ImprovementsPage />', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0])
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('go-api · go api boundaries')).toBeInTheDocument()
-    expect(within(dialog).getByText(/another pending bundle already has a draft for this catalog item: bundle-rec-a/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/another pending bundle already has a staged change for this catalog item: bundle-rec-a/i)).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: 'Finalize Bundle' })).not.toBeInTheDocument()
   })
 
@@ -313,7 +313,7 @@ describe('<ImprovementsPage />', () => {
     fireEvent.click(guard.getByLabelText('Enabled'))
     fireEvent.change(guard.getByLabelText('Bundle item guardrail position for item-guard'), { target: { value: '7' } })
     fireEvent.change(guard.getByDisplayValue('guard v2'), { target: { value: 'guard edited' } })
-    fireEvent.click(guard.getByRole('button', { name: 'Save Draft' }))
+    fireEvent.click(guard.getByRole('button', { name: 'Save Changes' }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/improvements/proposal-bundles/bundle-1/items/item-guard',
@@ -340,7 +340,7 @@ describe('<ImprovementsPage />', () => {
     fireEvent.change(skill.getByLabelText('Bundle item scope for item-skill'), { target: { value: 'global' } })
     expect(skill.getByLabelText('Bundle item scope for item-skill')).toHaveDisplayValue('Global')
     fireEvent.change(skill.getByDisplayValue('skill body'), { target: { value: 'skill edited' } })
-    fireEvent.click(skill.getByRole('button', { name: 'Save Draft' }))
+    fireEvent.click(skill.getByRole('button', { name: 'Save Changes' }))
 
     fireEvent.click(skill.getByRole('button', { name: 'Reject' }))
     const rejectDialog = screen.getAllByRole('dialog').at(-1)
@@ -730,7 +730,7 @@ describe('<ImprovementsPage />', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Inspect' }))
 
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/This bundle cannot be finalized because the source analysis changed, one of its target versions changed, or another pending bundle already has a draft/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/This bundle cannot be finalized because the source analysis changed, one of its target versions changed, or another pending bundle already has a staged change/i)).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: 'Finalize Bundle' })).not.toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Discard Bundle' })).toBeInTheDocument()
   })

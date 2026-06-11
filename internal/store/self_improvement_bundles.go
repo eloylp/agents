@@ -113,7 +113,7 @@ func InsertSelfImprovementProposalBundleItemRow(tx *Tx, item SelfImprovementBund
 	return nil
 }
 
-func FindOpenSelfImprovementBundleItemDraft(q querier, excludeBundleID string, item SelfImprovementBundleItemInputRow) (SelfImprovementBundleItemRow, error) {
+func FindPendingSelfImprovementBundleItem(q querier, excludeBundleID string, item SelfImprovementBundleItemInputRow) (SelfImprovementBundleItemRow, error) {
 	where := `
 		FROM self_improvement_proposal_bundle_items i
 		JOIN self_improvement_proposal_bundles b ON b.id = i.bundle_id
@@ -149,16 +149,16 @@ func FindOpenSelfImprovementBundleItemDraft(q querier, excludeBundleID string, i
 		&out.Rationale, &out.Decision, &out.DecisionReason, &out.PublishedVersionID, &out.CreatedAt, &out.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementBundleItemRow{}, &ErrNotFound{Msg: "no open self-improvement draft found"}
+		return SelfImprovementBundleItemRow{}, &ErrNotFound{Msg: "no pending self-improvement bundle item found"}
 	}
 	if err != nil {
-		return SelfImprovementBundleItemRow{}, fmt.Errorf("store: find open self-improvement draft: %w", err)
+		return SelfImprovementBundleItemRow{}, fmt.Errorf("store: find pending self-improvement bundle item: %w", err)
 	}
 	out.ProposedEnabled = enabled != 0
 	return out, nil
 }
 
-func UpdateSelfImprovementProposalBundleItemDraftRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
+func UpdateSelfImprovementProposalBundleItemRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
 	if _, err := tx.Exec(`
 		UPDATE self_improvement_proposal_bundle_items
 		SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,

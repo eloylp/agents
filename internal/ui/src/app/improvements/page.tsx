@@ -378,7 +378,7 @@ function bundleItemBaseLabel(item: ProposalBundleItem) {
   return item.base_version_id || 'Unresolved'
 }
 
-function bundleItemDraftConflictKey(item: ProposalBundleItem, draft?: BundleItemDraft) {
+function bundleItemPendingConflictKey(item: ProposalBundleItem, draft?: BundleItemDraft) {
   if (item.operation === 'update_existing') {
     const assetID = normalizedDraftText(item.asset_id)
     if (!item.asset_type || !assetID) return ''
@@ -393,18 +393,18 @@ function bundleItemDraftConflictKey(item: ProposalBundleItem, draft?: BundleItem
   return ''
 }
 
-function isOpenDraftItem(item: ProposalBundleItem) {
-  return item.decision === 'accepted'
+function isPendingBundleEditItem(item: ProposalBundleItem) {
+	return item.decision === 'accepted'
 }
 
-function openDraftConflict(item: ProposalBundleItem, bundleID: string, bundles: Record<string, ProposalBundle>, draft?: BundleItemDraft) {
-  const key = bundleItemDraftConflictKey(item, draft)
+function pendingBundleEditConflict(item: ProposalBundleItem, bundleID: string, bundles: Record<string, ProposalBundle>, draft?: BundleItemDraft) {
+  const key = bundleItemPendingConflictKey(item, draft)
   if (!key) return null
   for (const candidate of Object.values(bundles)) {
     if (!candidate.id || candidate.id === bundleID || candidate.status !== 'pending') continue
     for (const candidateItem of candidate.items ?? []) {
-      if (!isOpenDraftItem(candidateItem)) continue
-      if (bundleItemDraftConflictKey(candidateItem) === key) {
+      if (!isPendingBundleEditItem(candidateItem)) continue
+      if (bundleItemPendingConflictKey(candidateItem) === key) {
         return { bundleID: candidate.id, item: candidateItem }
       }
     }
@@ -732,7 +732,7 @@ export default function ImprovementsPage() {
       return
     }
     const detail = await res.text()
-    setActionMessage(detail.trim() || `Could not save draft: HTTP ${res.status}`)
+    setActionMessage(detail.trim() || `Could not save changes: HTTP ${res.status}`)
   }
 
   const openRejectBundleItem = (bundleID: string, item: ProposalBundleItem) => {
@@ -1061,7 +1061,7 @@ export default function ImprovementsPage() {
                 const bundleBlocked = bundlePending && (
                   Boolean(bundle.recommendation_changed) ||
                   bundleItems.some(item => item.stale && item.decision === 'accepted') ||
-                  bundleItems.some(item => isOpenDraftItem(item) && Boolean(openDraftConflict(item, bundle.id!, bundles)))
+                  bundleItems.some(item => isPendingBundleEditItem(item) && Boolean(pendingBundleEditConflict(item, bundle.id!, bundles)))
                 )
                 return (
                   <section style={{ display: 'grid', gap: 10, background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 10 }}>
@@ -1076,14 +1076,14 @@ export default function ImprovementsPage() {
                     </div>
                     {bundleBlocked && (
                       <div style={{ border: '1px solid var(--border)', background: 'var(--bg-card)', borderRadius: 6, padding: '0.65rem 0.75rem', color: 'var(--text)', fontSize: '0.82rem' }}>
-                        This bundle cannot be finalized because the source analysis changed, one of its target versions changed, or another pending bundle already has a draft for the same catalog item. Re-analyze or resolve the other draft before publishing catalog changes.
+                        This bundle cannot be finalized because the source analysis changed, one of its target versions changed, or another pending bundle already has a staged change for the same catalog item. Re-analyze or resolve the other staged change before publishing catalog changes.
                       </div>
                     )}
                     {bundleItems.map(item => {
                       const draft = bundleItemDraft(item, itemDrafts)
                       const updateDraft = (next: Partial<BundleItemDraft>) => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), ...next } }))
                       const itemDiff = diffLines(versionBody(item.asset_type, item.base_version), bundleItemDraftBody(item, draft))
-                      const draftConflict = bundle.id ? openDraftConflict(item, bundle.id, bundles, draft) : null
+                      const draftConflict = bundle.id ? pendingBundleEditConflict(item, bundle.id, bundles, draft) : null
                       const saveDraftEnabled = bundleItemDraftChanged(item, draft) && !draftConflict
                       const scopeOptions = bundleScopeOptions(reviewingProposal)
                       const scopeValue = resolvedBundleScopeValue(draft.proposed_scope, reviewingProposal)
@@ -1192,7 +1192,7 @@ export default function ImprovementsPage() {
                           )}
                           {draftConflict && (
                             <div style={{ border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', borderRadius: 6, padding: '0.55rem 0.65rem', color: 'var(--text-danger)', fontSize: '0.8rem', lineHeight: 1.45 }}>
-                              Another pending bundle already has a draft for this catalog item: {draftConflict.bundleID}.
+                              Another pending bundle already has a staged change for this catalog item: {draftConflict.bundleID}.
                             </div>
                           )}
                           {bundlePending && (
@@ -1202,7 +1202,7 @@ export default function ImprovementsPage() {
                                 onClick={() => editBundleItem(bundle.id!, item)}
                                 style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, opacity: saveDraftEnabled ? 1 : 0.55 }}
                               >
-	                                Save Draft
+                                Save Changes
                               </button>
                               <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), proposed_body: item.analyst_proposed_body } }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
                               <button onClick={() => openRejectBundleItem(bundle.id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>

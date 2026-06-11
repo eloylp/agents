@@ -53,20 +53,13 @@ type GuardrailPatch struct {
 	Content     *string `json:"content,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Position    *int    `json:"position,omitempty"`
-	Publish     *bool   `json:"publish,omitempty"`
-	State       *string `json:"state,omitempty"`
-	SourceType  *string `json:"source_type,omitempty"`
-	SourceRef   *string `json:"source_ref,omitempty"`
-	Author      *string `json:"author,omitempty"`
-	Changelog   *string `json:"changelog,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_guardrail tool to reject
 // empty payloads before hitting the store.
 func (p GuardrailPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil || p.Publish != nil ||
-		p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
+	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil
 }
 
 func (p GuardrailPatch) apply(g *fleet.Guardrail) {
@@ -82,14 +75,6 @@ func (p GuardrailPatch) apply(g *fleet.Guardrail) {
 	if p.Position != nil {
 		g.Position = *p.Position
 	}
-}
-
-func (p GuardrailPatch) versionMetadata() fleet.CatalogVersionMetadata {
-	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
-}
-
-func (p GuardrailPatch) hasVersionMetadata() bool {
-	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 // ── Guardrail handlers ───────────────────────────────────────────────────────
@@ -176,21 +161,6 @@ func (h *Handler) handleGuardrailDelete(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) handleGuardrailVersionPublish(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
-	versionID := mux.Vars(r)["version_id"]
-	if err := h.ensureGuardrailVersionBelongsToRef(name, versionID); err != nil {
-		h.writeErr(w, err, "guardrail version publish")
-		return
-	}
-	g, err := h.service.PublishGuardrailVersion(versionID)
-	if err != nil {
-		h.writeErr(w, err, "guardrail version publish")
-		return
-	}
-	writeJSON(w, http.StatusOK, guardrailToJSON(g))
-}
-
 func (h *Handler) ensureGuardrailVersionBelongsToRef(ref, versionID string) error {
 	versions, err := h.store.ListGuardrailVersions(ref)
 	if err != nil {
@@ -268,27 +238,11 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	if err != nil {
 		return fleet.Guardrail{}, err
 	}
-	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return fleet.Guardrail{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
-	}
 	patch.apply(&existing)
-	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreateGuardrailDraft(normalized, existing, patch.versionMetadata())
-		if err != nil {
-			return fleet.Guardrail{}, err
-		}
-		existing.VersionID = version.ID
-		existing.Version = version.Version
-		return existing, nil
-	}
 	if err := h.service.UpsertGuardrail(existing); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	return h.store.GetGuardrail(normalized)
-}
-
-func (h *Handler) PublishGuardrailVersion(versionID string) (fleet.Guardrail, error) {
-	return h.service.PublishGuardrailVersion(versionID)
 }
 
 // DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound

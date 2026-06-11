@@ -40,8 +40,8 @@ type CatalogVersion struct {
 	PublishedAt   string `json:"published_at,omitempty" yaml:"published_at,omitempty"`
 }
 
-// CatalogVersionMetadata carries audit metadata for a newly created draft or
-// proposal version. Empty fields keep the default manual draft behavior.
+// CatalogVersionMetadata carries audit metadata for a newly created published
+// catalog version.
 type CatalogVersionMetadata struct {
 	State      string `json:"state,omitempty" yaml:"state,omitempty"`
 	SourceType string `json:"source_type,omitempty" yaml:"source_type,omitempty"`
