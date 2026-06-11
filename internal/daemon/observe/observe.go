@@ -96,16 +96,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/improvements/recommendations/{id}", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendation))).Methods(http.MethodGet)
 	r.Handle("/improvements/recommendations/{id}/status", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementRecommendationStatus))).Methods(http.MethodPost, http.MethodPatch)
 	r.Handle("/improvements/recommendations/{id}/clarification", withTimeout(http.HandlerFunc(h.HandleClarifyImprovementRecommendation))).Methods(http.MethodPost, http.MethodPatch)
-	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposal))).Methods(http.MethodPost)
-	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleImprovementProposal))).Methods(http.MethodGet)
-	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposalBundle))).Methods(http.MethodPost)
 	r.Handle("/improvements/recommendations/{id}/proposal-bundle", withTimeout(http.HandlerFunc(h.HandleImprovementProposalBundle))).Methods(http.MethodGet)
-	r.Handle("/improvements/memory", withTimeout(http.HandlerFunc(h.HandleImprovementMemory))).Methods(http.MethodGet)
-	r.Handle("/improvements/memory", withTimeout(http.HandlerFunc(h.HandleCreateImprovementMemory))).Methods(http.MethodPost)
-	r.Handle("/improvements/memory/{id}", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementMemory))).Methods(http.MethodPatch)
-	r.Handle("/improvements/memory/{id}/approve", withTimeout(http.HandlerFunc(h.HandleApproveImprovementMemory))).Methods(http.MethodPost)
-	r.Handle("/improvements/memory/{id}/reject", withTimeout(http.HandlerFunc(h.HandleRejectImprovementMemory))).Methods(http.MethodPost)
-	r.Handle("/improvements/memory/{id}/archive", withTimeout(http.HandlerFunc(h.HandleArchiveImprovementMemory))).Methods(http.MethodPost)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementProposalBundleItem))).Methods(http.MethodPatch)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/reject", withTimeout(http.HandlerFunc(h.HandleRejectImprovementProposalBundleItem))).Methods(http.MethodPost)
 	r.Handle("/improvements/proposal-bundles/{id}/items/{item_id}/link-existing", withTimeout(http.HandlerFunc(h.HandleLinkImprovementProposalBundleItem))).Methods(http.MethodPost)
@@ -238,13 +229,60 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 		h.writeStoreError(w, err)
 		return
 	}
-	if h.engine == nil {
-		http.Error(w, "self-improvement analyzer is not configured", http.StatusServiceUnavailable)
+	if h.channels == nil {
+		http.Error(w, "self-improvement queue is not configured", http.StatusServiceUnavailable)
 		return
 	}
-	rec, err := h.engine.AnalyzeSelfImprovementFeedback(r.Context(), feedback)
+	var rec selfimprovement.SelfImprovementRecommendation
+	previousStatus := ""
+	row, err := h.store.GetSelfImprovementRecommendationByFeedback(feedback.WorkspaceID, feedback.ID)
 	if err != nil {
-		h.writeStoreError(w, err)
+		var notFound *store.ErrNotFound
+		if !errors.As(err, &notFound) {
+			h.writeStoreError(w, err)
+			return
+		}
+		rec = selfimprovement.SelfImprovementRecommendation{
+			WorkspaceID:     feedback.WorkspaceID,
+			FeedbackEventID: feedback.ID,
+			Feedback:        &feedback,
+		}
+	} else {
+		rec, err = h.improve.GetRecommendation(row.ID)
+		if err != nil {
+			h.writeStoreError(w, err)
+			return
+		}
+		rec.Feedback = &feedback
+		if rec.Status == selfimprovement.RecommendationStatusRejected {
+			http.Error(w, fmt.Sprintf("recommendation %q is already rejected and cannot be re-analyzed", rec.ID), http.StatusBadRequest)
+			return
+		}
+		if rec.Status == selfimprovement.RecommendationStatusAnalyzing || rec.Status == selfimprovement.RecommendationStatusClarifying {
+			http.Error(w, fmt.Sprintf("recommendation %q is already %s", rec.ID, rec.Status), http.StatusBadRequest)
+			return
+		}
+		previousStatus = rec.Status
+		if err := h.store.Transact(func(tx *store.Tx) error {
+			return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, selfimprovement.RecommendationStatusAnalyzing)
+		}); err != nil {
+			h.writeStoreError(w, err)
+			return
+		}
+		rec.Status = selfimprovement.RecommendationStatusAnalyzing
+	}
+	if _, err := h.channels.PushEvent(r.Context(), analysisImprovementEvent(rec)); err != nil {
+		if rec.ID != "" {
+			status := previousStatus
+			if status == "" {
+				status = selfimprovement.RecommendationStatusRecommended
+			}
+			_ = h.store.Transact(func(tx *store.Tx) error {
+				return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, status)
+			})
+		}
+		h.logger.Error().Err(err).Int64("feedback_event_id", feedback.ID).Str("recommendation_id", rec.ID).Msg("enqueue self-improvement analysis")
+		http.Error(w, "enqueue analysis failed", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -254,12 +292,13 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 func (h *Handler) HandleUpdateImprovementRecommendationStatus(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Status string `json:"status"`
+		Reason string `json:"reason"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 		return
 	}
-	rec, err := h.improve.UpdateRecommendationStatus(mux.Vars(r)["id"], req.Status)
+	rec, err := h.improve.UpdateRecommendationStatus(mux.Vars(r)["id"], req.Status, req.Reason)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
@@ -277,17 +316,23 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 		return
 	}
+	if h.channels == nil {
+		http.Error(w, "self-improvement queue is not configured", http.StatusServiceUnavailable)
+		return
+	}
 	author := req.Author
 	if author == "" {
 		author = "dashboard"
 	}
-	rec, err := h.improve.UpsertClarification(mux.Vars(r)["id"], author, req.Body)
+	id := mux.Vars(r)["id"]
+	before, err := h.improve.GetRecommendation(id)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
 	}
-	if h.channels == nil {
-		http.Error(w, "self-improvement queue is not configured", http.StatusServiceUnavailable)
+	rec, err := h.improve.UpsertClarification(id, author, req.Body)
+	if err != nil {
+		h.writeStoreError(w, err)
 		return
 	}
 	if rec.Feedback == nil {
@@ -295,45 +340,15 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 		return
 	}
 	if _, err := h.channels.PushEvent(r.Context(), clarificationImprovementEvent(rec)); err != nil {
+		_ = h.store.Transact(func(tx *store.Tx) error {
+			return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, before.Status)
+		})
 		h.logger.Error().Err(err).Str("recommendation_id", rec.ID).Msg("enqueue clarification analysis")
 		http.Error(w, "enqueue analysis failed", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rec)
-}
-
-func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposal, err := h.improve.CreateProposal(mux.Vars(r)["id"])
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(proposal)
-}
-
-func (h *Handler) HandleImprovementProposal(w http.ResponseWriter, r *http.Request) {
-	proposals, err := h.improve.ListProposals(mux.Vars(r)["id"])
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	if proposals == nil {
-		proposals = []selfimprovement.SelfImprovementProposal{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(proposals)
-}
-
-func (h *Handler) HandleCreateImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
-	bundle, err := h.improve.CreateProposalBundle(mux.Vars(r)["id"])
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(bundle)
 }
 
 func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http.Request) {
@@ -350,99 +365,6 @@ func (h *Handler) HandleImprovementProposalBundle(w http.ResponseWriter, r *http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(bundle)
-}
-
-func (h *Handler) HandleImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.improve.ListMemory("", r.URL.Query().Get("status"), 200)
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
-}
-
-func (h *Handler) HandleCreateImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Key          string `json:"key"`
-		Value        string `json:"value"`
-		Status       string `json:"status"`
-		EvidenceType string `json:"evidence_type"`
-		EvidenceID   string `json:"evidence_id"`
-		EvidenceURL  string `json:"evidence_url"`
-		Confidence   string `json:"confidence"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
-		return
-	}
-	row, err := h.improve.CreateMemory(selfimprovement.AssistantMemoryInput{
-		Key:          req.Key,
-		Value:        req.Value,
-		Status:       req.Status,
-		EvidenceType: req.EvidenceType,
-		EvidenceID:   req.EvidenceID,
-		EvidenceURL:  req.EvidenceURL,
-		Confidence:   req.Confidence,
-		ProposedBy:   "dashboard",
-	})
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(row)
-}
-
-func (h *Handler) HandleUpdateImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	var req selfimprovement.AssistantMemoryUpdate
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
-		return
-	}
-	row, err := h.improve.UpdateMemory(mux.Vars(r)["id"], req)
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(row)
-}
-
-func (h *Handler) HandleApproveImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	row, err := h.improve.ApproveMemory(mux.Vars(r)["id"])
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(row)
-}
-
-func (h *Handler) HandleRejectImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	if r.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
-	}
-	row, err := h.improve.RejectMemory(mux.Vars(r)["id"], req.Reason)
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(row)
-}
-
-func (h *Handler) HandleArchiveImprovementMemory(w http.ResponseWriter, r *http.Request) {
-	row, err := h.improve.ArchiveMemory(mux.Vars(r)["id"])
-	if err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(row)
 }
 
 func (h *Handler) HandleUpdateImprovementProposalBundleItem(w http.ResponseWriter, r *http.Request) {
@@ -519,6 +441,14 @@ func (h *Handler) HandleDiscardImprovementProposalBundle(w http.ResponseWriter, 
 }
 
 func clarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
+	return improvementAnalysisEvent(rec, true)
+}
+
+func analysisImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
+	return improvementAnalysisEvent(rec, false)
+}
+
+func improvementAnalysisEvent(rec selfimprovement.SelfImprovementRecommendation, clarification bool) workflow.Event {
 	feedback := rec.Feedback
 	repo := ""
 	number := 0
@@ -538,7 +468,7 @@ func clarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommenda
 		Payload: map[string]any{
 			"feedback_event_id": rec.FeedbackEventID,
 			"recommendation_id": rec.ID,
-			"clarification":     true,
+			"clarification":     clarification,
 		},
 	}
 }

@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
 const (
 	RecommendationStatusRecommended    = "recommended"
 	RecommendationStatusNeedsUserInput = "needs_user_input"
-	RecommendationStatusAccepted       = "accepted"
+	RecommendationStatusAnalyzing      = "analyzing"
+	RecommendationStatusClarifying     = "clarifying"
 	RecommendationStatusRejected       = "rejected"
 	RecommendationStatusFailed         = "failed"
 )
@@ -41,12 +41,12 @@ type SelfImprovementRecommendation struct {
 	AnalyzerPromptVersionID string                         `json:"analyzer_prompt_version_id,omitempty"`
 	StructuredOutput        map[string]any                 `json:"structured_output,omitempty"`
 	Error                   string                         `json:"error,omitempty"`
+	DecisionReason          string                         `json:"decision_reason,omitempty"`
 	CreatedAt               string                         `json:"created_at"`
 	UpdatedAt               string                         `json:"updated_at"`
 	Feedback                *store.SelfImprovementFeedback `json:"feedback,omitempty"`
 	Clarification           *SelfImprovementClarification  `json:"clarification,omitempty"`
 	ProposalBundle          *SelfImprovementProposalBundle `json:"proposal_bundle,omitempty"`
-	MemoryInfluences        []AssistantMemory              `json:"memory_influences,omitempty"`
 }
 
 type SelfImprovementClarification struct {
@@ -80,15 +80,6 @@ type SelfImprovementRecommendationInput struct {
 	AnalyzerPromptVersionID string
 	StructuredOutput        map[string]any
 	Error                   string
-}
-
-type SelfImprovementProposal struct {
-	RecommendationID string                `json:"recommendation_id"`
-	TargetAssetType  string                `json:"target_asset_type"`
-	TargetAssetID    string                `json:"target_asset_id"`
-	BaseVersionID    string                `json:"base_version_id,omitempty"`
-	BaseVersion      *fleet.CatalogVersion `json:"base_version,omitempty"`
-	Version          fleet.CatalogVersion  `json:"version"`
 }
 
 func RecommendationFromFeedback(feedback store.SelfImprovementFeedback) SelfImprovementRecommendationInput {
@@ -182,11 +173,6 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	if in.StructuredOutput == nil {
 		in.StructuredOutput = map[string]any{}
 	}
-	if influenceIDs := memoryInfluenceIDsFromStructured(in.StructuredOutput); len(influenceIDs) > 0 {
-		if influences, err := s.ListActiveMemory(in.WorkspaceID, 50); err == nil && len(influences) > 0 {
-			in.StructuredOutput["memory_influences"] = memoryInfluenceSummaries(influences, influenceIDs)
-		}
-	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		if err := store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in)); err != nil {
 			return err
@@ -196,11 +182,33 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 		return SelfImprovementRecommendation{}, err
 	}
 	row, err := s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID)
-	return recommendationFromRow(row), err
+	if err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	rec := recommendationFromRow(row)
+	if rec.Status == RecommendationStatusRecommended {
+		if _, err := createSelfImprovementProposalBundle(s.store, rec.ID); err != nil {
+			var validation *store.ErrValidation
+			var conflict *store.ErrConflict
+			var notFound *store.ErrNotFound
+			if errors.As(err, &validation) || errors.As(err, &conflict) || errors.As(err, &notFound) {
+				if markErr := s.store.Transact(func(tx *store.Tx) error {
+					return store.UpdateSelfImprovementRecommendationStatusErrorRow(tx, rec.ID, RecommendationStatusNeedsUserInput, "Could not create editable proposal bundle: "+err.Error())
+				}); markErr != nil {
+					return SelfImprovementRecommendation{}, markErr
+				}
+				return s.GetRecommendation(rec.ID)
+			}
+			return SelfImprovementRecommendation{}, err
+		}
+		return s.GetRecommendation(rec.ID)
+	}
+	return rec, nil
 }
 
-func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
+func (s *Service) UpdateRecommendationStatus(id, status, reason string) (SelfImprovementRecommendation, error) {
 	status = strings.TrimSpace(status)
+	reason = strings.TrimSpace(reason)
 	if !validHumanRecommendationStatus(status) {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported recommendation decision %q", status)}
 	}
@@ -214,16 +222,45 @@ func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovement
 		}
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be changed", id, current.Status)}
 	}
+	if current.Status == RecommendationStatusAnalyzing || current.Status == RecommendationStatusClarifying {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is currently %s and cannot be changed", id, current.Status)}
+	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
-		return store.UpdateSelfImprovementRecommendationStatusRow(tx, id, status)
+		if err := store.UpdateSelfImprovementRecommendationDecisionRow(tx, id, status, reason); err != nil {
+			return err
+		}
+		if status != RecommendationStatusRejected {
+			return nil
+		}
+		bundle, err := getSelfImprovementProposalBundle(tx, id)
+		if err != nil {
+			var nf *store.ErrNotFound
+			if errors.As(err, &nf) {
+				return nil
+			}
+			return err
+		}
+		if bundle.Status != ProposalBundleStatusPending {
+			return nil
+		}
+		if err := store.UpdateSelfImprovementProposalBundleStatusRow(tx, bundle.ID, ProposalBundleStatusDiscarded); err != nil {
+			return err
+		}
+		if err := store.DiscardPendingSelfImprovementProposalBundleItemRows(tx, bundle.ID, ProposalBundleDecisionDiscarded); err != nil {
+			return err
+		}
+		for _, item := range bundle.Items {
+			before := bundleItemAuditSnapshot(item)
+			after := item
+			if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
+				after.Decision = ProposalBundleDecisionDiscarded
+			}
+			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", "dashboard", reason, before, bundleItemAuditSnapshot(after)); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	rec, err := s.GetRecommendation(id)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if err := s.proposeMemoryFromRecommendationDecision(rec); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
 	return s.GetRecommendation(id)
@@ -245,11 +282,14 @@ func (s *Service) UpsertClarification(recommendationID, author, body string) (Se
 	if terminalRecommendationStatus(rec.Status) {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s and cannot be clarified", recommendationID, rec.Status)}
 	}
+	if rec.Status != RecommendationStatusNeedsUserInput && rec.Status != RecommendationStatusFailed {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is %s and cannot be clarified", recommendationID, rec.Status)}
+	}
 	if err := s.store.Transact(func(tx *store.Tx) error {
 		if err := store.UpsertSelfImprovementClarificationRow(tx, recommendationID, author, body); err != nil {
 			return err
 		}
-		return store.UpdateSelfImprovementRecommendationStatusRow(tx, recommendationID, RecommendationStatusNeedsUserInput)
+		return store.UpdateSelfImprovementRecommendationStatusRow(tx, recommendationID, RecommendationStatusClarifying)
 	}); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
@@ -323,13 +363,13 @@ func recommendationFromRow(row store.SelfImprovementRecommendationRow) SelfImpro
 		AnalyzerPromptVersionID: row.AnalyzerPromptVersionID,
 		StructuredOutput:        row.StructuredOutput,
 		Error:                   row.Error,
+		DecisionReason:          row.DecisionReason,
 		CreatedAt:               row.CreatedAt,
 		UpdatedAt:               row.UpdatedAt,
 		Feedback:                row.Feedback,
 		Clarification:           clarification,
 		ProposalBundle:          bundle,
 	}
-	rec.MemoryInfluences = memoryInfluencesFromStructured(row.StructuredOutput)
 	return rec
 }
 
@@ -381,17 +421,6 @@ func recommendationRowFromRecommendation(rec SelfImprovementRecommendation) stor
 	}
 }
 
-func proposalFromRow(row store.SelfImprovementProposalRow) SelfImprovementProposal {
-	return SelfImprovementProposal{
-		RecommendationID: row.RecommendationID,
-		TargetAssetType:  row.TargetAssetType,
-		TargetAssetID:    row.TargetAssetID,
-		BaseVersionID:    row.BaseVersionID,
-		BaseVersion:      row.BaseVersion,
-		Version:          row.Version,
-	}
-}
-
 func defaultString(value, fallback string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -415,7 +444,7 @@ func recommendationTarget(feedback store.SelfImprovementFeedback) (assetType, as
 
 func validRecommendationStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAccepted, RecommendationStatusRejected, RecommendationStatusFailed:
+	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAnalyzing, RecommendationStatusClarifying, RecommendationStatusRejected, RecommendationStatusFailed:
 		return true
 	default:
 		return false
@@ -424,7 +453,7 @@ func validRecommendationStatus(status string) bool {
 
 func validHumanRecommendationStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case RecommendationStatusAccepted, RecommendationStatusRejected:
+	case RecommendationStatusRejected:
 		return true
 	default:
 		return false
@@ -433,217 +462,11 @@ func validHumanRecommendationStatus(status string) bool {
 
 func terminalRecommendationStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case RecommendationStatusAccepted, RecommendationStatusRejected:
+	case RecommendationStatusRejected:
 		return true
 	default:
 		return false
 	}
-}
-
-func (s *Service) proposeMemoryFromRecommendationDecision(rec SelfImprovementRecommendation) error {
-	evidenceID := rec.ID
-	evidenceURL := ""
-	if rec.Feedback != nil {
-		evidenceURL = rec.Feedback.SourceURL
-	}
-	switch rec.Status {
-	case RecommendationStatusAccepted:
-		if strings.TrimSpace(rec.SuggestedRolloutScope) == "" {
-			return nil
-		}
-		return s.proposeMemoryFromDecision(
-			rec.WorkspaceID,
-			"accepted_recommendation",
-			evidenceID,
-			evidenceURL,
-			"preferred_self_improvement_rollout_scope",
-			fmt.Sprintf("Prefer %s rollout scope when similar self-improvement recommendations are accepted.", rec.SuggestedRolloutScope),
-		)
-	case RecommendationStatusRejected:
-		return s.proposeMemoryFromDecision(
-			rec.WorkspaceID,
-			"rejected_recommendation",
-			evidenceID,
-			evidenceURL,
-			"rejected_recommendation_pattern",
-			fmt.Sprintf("Treat recommendations like %q cautiously unless future feedback supplies stronger evidence.", rec.Type),
-		)
-	default:
-		return nil
-	}
-}
-
-func (s *Service) proposeMemoryFromProposalBundleDecision(bundle SelfImprovementProposalBundle, itemID, evidenceType string) error {
-	workspace := bundle.WorkspaceID
-	evidenceID := bundle.ID
-	evidenceURL := ""
-	recType := "self-improvement"
-	if bundle.Recommendation != nil {
-		workspace = bundle.Recommendation.WorkspaceID
-		recType = bundle.Recommendation.Type
-		if bundle.Recommendation.Feedback != nil {
-			evidenceURL = bundle.Recommendation.Feedback.SourceURL
-		}
-	}
-	item, hasItem := bundleItemByID(bundle.Items, itemID)
-	if hasItem {
-		evidenceID = item.ID
-	}
-	switch evidenceType {
-	case "edited_proposal_bundle_item":
-		if !hasItem {
-			return nil
-		}
-		return s.proposeMemoryFromDecision(
-			workspace,
-			evidenceType,
-			evidenceID,
-			evidenceURL,
-			fmt.Sprintf("edited_%s_%s_proposal_bundle_item", item.Operation, item.AssetType),
-			fmt.Sprintf("Expect maintainers to edit %s %s proposal-bundle items before approval when similar recommendations appear.", item.Operation, item.AssetType),
-		)
-	case "rejected_proposal_bundle_item":
-		if !hasItem {
-			return nil
-		}
-		return s.proposeMemoryFromDecision(
-			workspace,
-			evidenceType,
-			evidenceID,
-			evidenceURL,
-			fmt.Sprintf("rejected_%s_%s_proposal_bundle_item", item.Operation, item.AssetType),
-			fmt.Sprintf("Treat %s %s proposal-bundle items cautiously when similar evidence appears.", item.Operation, item.AssetType),
-		)
-	case "linked_existing_proposal_bundle_item":
-		if !hasItem {
-			return nil
-		}
-		return s.proposeMemoryFromDecision(
-			workspace,
-			evidenceType,
-			evidenceID,
-			evidenceURL,
-			fmt.Sprintf("linked_existing_%s_proposal_bundle_item", item.AssetType),
-			fmt.Sprintf("Prefer linking an existing %s asset over creating a new one when maintainers identify overlap.", item.AssetType),
-		)
-	case "published_proposal_bundle":
-		return s.proposeMemoryFromDecision(
-			workspace,
-			evidenceType,
-			evidenceID,
-			evidenceURL,
-			"published_proposal_bundle_pattern",
-			fmt.Sprintf("Proposal bundles for %q recommendations can be appropriate when item decisions survive maintainer review.", recType),
-		)
-	case "discarded_proposal_bundle":
-		return s.proposeMemoryFromDecision(
-			workspace,
-			evidenceType,
-			evidenceID,
-			evidenceURL,
-			"discarded_proposal_bundle_pattern",
-			fmt.Sprintf("Treat proposal bundles for %q recommendations cautiously when maintainers discard the bundle.", recType),
-		)
-	default:
-		return nil
-	}
-}
-
-func bundleItemByID(items []SelfImprovementBundleItem, id string) (SelfImprovementBundleItem, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return SelfImprovementBundleItem{}, false
-	}
-	for _, item := range items {
-		if item.ID == id {
-			return item, true
-		}
-	}
-	return SelfImprovementBundleItem{}, false
-}
-
-func memoryInfluenceIDsFromStructured(structured map[string]any) map[string]struct{} {
-	raw, ok := structured["memory_influence_ids"]
-	if !ok {
-		return nil
-	}
-	if ids, ok := raw.([]string); ok {
-		out := make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				out[id] = struct{}{}
-			}
-		}
-		return out
-	}
-	items, ok := raw.([]any)
-	if !ok {
-		return nil
-	}
-	out := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		id, ok := item.(string)
-		if !ok {
-			continue
-		}
-		id = strings.TrimSpace(id)
-		if id != "" {
-			out[id] = struct{}{}
-		}
-	}
-	return out
-}
-
-func memoryInfluenceSummaries(memories []AssistantMemory, allowedIDs map[string]struct{}) []map[string]string {
-	out := make([]map[string]string, 0, len(memories))
-	for _, memory := range memories {
-		if memory.Status != MemoryStatusActive {
-			continue
-		}
-		if _, ok := allowedIDs[memory.ID]; !ok {
-			continue
-		}
-		out = append(out, map[string]string{
-			"id":    memory.ID,
-			"key":   memory.Key,
-			"value": memory.Value,
-		})
-	}
-	return out
-}
-
-func memoryInfluencesFromStructured(structured map[string]any) []AssistantMemory {
-	raw, ok := structured["memory_influences"]
-	if !ok {
-		return nil
-	}
-	items, ok := raw.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]AssistantMemory, 0, len(items))
-	for _, item := range items {
-		fields, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		memory := AssistantMemory{
-			ID:     stringField(fields, "id"),
-			Key:    stringField(fields, "key"),
-			Value:  stringField(fields, "value"),
-			Status: MemoryStatusActive,
-		}
-		if memory.ID != "" || memory.Key != "" || memory.Value != "" {
-			out = append(out, memory)
-		}
-	}
-	return out
-}
-
-func stringField(fields map[string]any, key string) string {
-	value, _ := fields[key].(string)
-	return value
 }
 
 func firstFeedbackLine(body string) string {

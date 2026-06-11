@@ -10,7 +10,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestSelfImprovementAnalystPromptV3BecomesCurrentOnFreshStore(t *testing.T) {
+func TestSelfImprovementAnalystPromptV6BecomesCurrentOnFreshStore(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -24,25 +24,87 @@ func TestSelfImprovementAnalystPromptV3BecomesCurrentOnFreshStore(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read seeded prompt: %v", err)
 	}
-	if prompt.VersionID != "promptver_self_improvement_analyst_v3" {
-		t.Fatalf("version_id = %q, want v3", prompt.VersionID)
+	if prompt.VersionID != "promptver_self_improvement_analyst_v6" {
+		t.Fatalf("version_id = %q, want v6", prompt.VersionID)
 	}
 	for _, want := range []string{
 		"Supplied context:",
 		"Maintainer-directed feedback:",
 		"Catalog design heuristics:",
-		"knowledge cluster",
+		"intelligence cluster",
 		"ambiguity debt",
 		"Bundle recommendations:",
 		"catalog_patch_bundle",
+		"Implementation-guidance examples:",
+		"prefer short code examples over abstract natural language",
+		"Editable proposal contract:",
+		"Every status=recommended catalog-changing result must be directly reviewable",
+		"proposed_body must be the full replacement body",
 	} {
 		if !strings.Contains(prompt.Content, want) {
 			t.Fatalf("prompt content missing %q", want)
 		}
 	}
+	if strings.Contains(prompt.Content, "knowledge cluster") {
+		t.Fatal("prompt content still contains knowledge cluster")
+	}
 }
 
-func TestSelfImprovementAnalystPromptV3MigrationPreservesCustomizedCurrentVersion(t *testing.T) {
+func TestAcceptedRecommendationCleanupMigration(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := New(db)
+	t.Cleanup(func() { st.Close() })
+
+	feedback, err := st.UpsertSelfImprovementFeedback(SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  47,
+		SourceURL:        "https://github.com/owner/repo/issues/1#issuecomment-47",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      1,
+		RawBody:          "old accepted recommendation",
+		Tag:              FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_recommendations (
+			id, workspace_id, feedback_event_id, type, status, confidence, risk,
+			finding, normalized_lesson, rationale, evidence_feedback_ids,
+			evidence_source_urls, attribution_confidence, structured_output
+		) VALUES (?, ?, ?, 'catalog_patch', 'accepted', 'medium', 'low',
+			'finding', 'lesson', 'rationale', ?, 'https://github.com/owner/repo/issues/1#issuecomment-47',
+			'exact', '{}'
+		)
+	`, "rec_old_accepted", fleet.DefaultWorkspaceID, feedback.ID, feedback.ID); err != nil {
+		t.Fatalf("seed accepted recommendation: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = '047_remove_accepted_recommendation_status.sql'`); err != nil {
+		t.Fatalf("unmark cleanup migration: %v", err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("rerun cleanup migration: %v", err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM self_improvement_recommendations WHERE id = 'rec_old_accepted'`).Scan(&status); err != nil {
+		t.Fatalf("read recommendation status: %v", err)
+	}
+	if status != "recommended" {
+		t.Fatalf("status = %q, want recommended", status)
+	}
+}
+
+func TestSelfImprovementAnalystPromptV5MigrationPreservesCustomizedCurrentVersion(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -71,7 +133,7 @@ func TestSelfImprovementAnalystPromptV3MigrationPreservesCustomizedCurrentVersio
 		t.Fatalf("commit custom version: %v", err)
 	}
 
-	migration, err := os.ReadFile(filepath.Join("migrations", "042_self_improvement_analyst_prompt_v3_bundles.sql"))
+	migration, err := os.ReadFile(filepath.Join("migrations", "045_self_improvement_analyst_prompt_v5_intelligence_language.sql"))
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}

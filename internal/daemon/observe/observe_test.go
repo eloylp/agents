@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -403,6 +404,84 @@ func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for queued clarification analysis")
+	}
+}
+
+func TestHandleAnalyzeImprovementFeedbackQueuesExistingRecommendation(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t, nil)
+	feedback, err := fx.store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "default",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  456,
+		SourceURL:        "https://github.com/owner/repo/issues/8#issuecomment-456",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      8,
+		RawBody:          "Refresh stale proposal /agents improve",
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	if err := store.UpsertSelfImprovementRecommendationRow(fx.store.DB(), store.SelfImprovementRecommendationInputRow{
+		WorkspaceID:             feedback.WorkspaceID,
+		FeedbackEventID:         feedback.ID,
+		Type:                    "catalog_patch_bundle",
+		Status:                  selfimprovement.RecommendationStatusRecommended,
+		Confidence:              "high",
+		Risk:                    "low",
+		Finding:                 "Refresh stale proposal",
+		NormalizedLesson:        "Re-analyze stale targets.",
+		Rationale:               "The target version moved.",
+		EvidenceFeedbackIDs:     []int64{feedback.ID},
+		EvidenceSourceURLs:      []string{feedback.SourceURL},
+		AttributionConfidence:   "exact",
+		AnalyzerPromptRef:       "prompt_self-improvement-analyst",
+		AnalyzerPromptVersionID: "promptver-self-improvement",
+		StructuredOutput:        map[string]any{"type": "catalog_patch_bundle"},
+	}); err != nil {
+		t.Fatalf("insert recommendation: %v", err)
+	}
+	recRow, err := fx.store.GetSelfImprovementRecommendationByFeedback(feedback.WorkspaceID, feedback.ID)
+	if err != nil {
+		t.Fatalf("get recommendation: %v", err)
+	}
+	channels := workflow.NewDataChannels(1, fx.store)
+	h := New(fx.events, fx.store, nil, nil, nil, channels, nil, zerolog.Nop())
+	router := newRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/improvements/feedback/"+strconv.FormatInt(feedback.ID, 10)+"/analyze", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var got selfimprovement.SelfImprovementRecommendation
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.ID != recRow.ID || got.Status != selfimprovement.RecommendationStatusAnalyzing {
+		t.Fatalf("recommendation = (%q, %q), want (%q, analyzing)", got.ID, got.Status, recRow.ID)
+	}
+	stored, err := fx.store.GetSelfImprovementRecommendation(recRow.ID)
+	if err != nil {
+		t.Fatalf("get stored recommendation: %v", err)
+	}
+	if stored.Status != selfimprovement.RecommendationStatusAnalyzing {
+		t.Fatalf("stored status = %q, want analyzing", stored.Status)
+	}
+	select {
+	case qe := <-channels.EventChan():
+		if qe.Event.Kind != "agents.improvement" || qe.Event.Payload["recommendation_id"] != recRow.ID || qe.Event.Payload["feedback_event_id"] != feedback.ID {
+			t.Fatalf("queued event = %+v, want agents.improvement for recommendation", qe.Event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued re-analysis")
 	}
 }
 

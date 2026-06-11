@@ -113,6 +113,51 @@ func InsertSelfImprovementProposalBundleItemRow(tx *Tx, item SelfImprovementBund
 	return nil
 }
 
+func FindOpenSelfImprovementBundleItemDraft(q querier, excludeBundleID string, item SelfImprovementBundleItemInputRow) (SelfImprovementBundleItemRow, error) {
+	where := `
+		FROM self_improvement_proposal_bundle_items i
+		JOIN self_improvement_proposal_bundles b ON b.id = i.bundle_id
+		WHERE b.status = 'pending'
+		  AND i.decision IN ('pending', 'accepted')
+		  AND i.asset_type = ?
+		  AND b.id <> ?`
+	args := []any{strings.TrimSpace(item.AssetType), strings.TrimSpace(excludeBundleID)}
+	switch strings.TrimSpace(item.Operation) {
+	case "update_existing":
+		where += ` AND i.operation = 'update_existing' AND i.asset_id = ?`
+		args = append(args, strings.TrimSpace(item.AssetID))
+	case "create_new":
+		where += ` AND i.operation = 'create_new' AND lower(i.proposed_scope) = lower(?) AND lower(i.proposed_ref) = lower(?)`
+		args = append(args, strings.TrimSpace(item.ProposedScope), strings.TrimSpace(item.ProposedRef))
+	default:
+		return SelfImprovementBundleItemRow{}, &ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
+	}
+	row := q.QueryRow(`
+		SELECT i.id, i.bundle_id, i.operation, i.asset_type, i.asset_id, i.base_version_id,
+		       i.proposed_ref, i.proposed_name, i.proposed_scope, i.proposed_body, i.proposed_description,
+		       i.proposed_enabled, i.proposed_position, i.analyst_proposed_body, i.duplicate_risk,
+		       i.rationale, i.decision, i.decision_reason, i.published_version_id, i.created_at, i.updated_at
+		`+where+`
+		ORDER BY i.updated_at DESC, i.id DESC
+		LIMIT 1`, args...)
+	var out SelfImprovementBundleItemRow
+	var enabled int
+	err := row.Scan(
+		&out.ID, &out.BundleID, &out.Operation, &out.AssetType, &out.AssetID, &out.BaseVersionID,
+		&out.ProposedRef, &out.ProposedName, &out.ProposedScope, &out.ProposedBody, &out.ProposedDescription,
+		&enabled, &out.ProposedPosition, &out.AnalystProposedBody, &out.DuplicateRisk,
+		&out.Rationale, &out.Decision, &out.DecisionReason, &out.PublishedVersionID, &out.CreatedAt, &out.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SelfImprovementBundleItemRow{}, &ErrNotFound{Msg: "no open self-improvement draft found"}
+	}
+	if err != nil {
+		return SelfImprovementBundleItemRow{}, fmt.Errorf("store: find open self-improvement draft: %w", err)
+	}
+	out.ProposedEnabled = enabled != 0
+	return out, nil
+}
+
 func UpdateSelfImprovementProposalBundleItemDraftRow(tx *Tx, bundleID string, item SelfImprovementBundleItemRow) error {
 	if _, err := tx.Exec(`
 		UPDATE self_improvement_proposal_bundle_items

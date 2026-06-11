@@ -22,6 +22,7 @@ type querier interface {
 const (
 	ProposalBundleStatusPending   = "pending"
 	ProposalBundleStatusPublished = "published"
+	ProposalBundleStatusResolved  = "resolved"
 	ProposalBundleStatusDiscarded = "discarded"
 
 	ProposalBundleOperationUpdateExisting = "update_existing"
@@ -218,8 +219,8 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 		return SelfImprovementProposalBundle{}, err
 	}
 	rec := recommendationFromRow(recRow)
-	if rec.Status != RecommendationStatusAccepted {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
+	if rec.Status != RecommendationStatusRecommended {
+		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be proposal-ready before creating a proposal bundle"}
 	}
 	if existing, err := getSelfImprovementProposalBundleFromStore(st, rec.ID); err == nil {
 		return existing, nil
@@ -231,6 +232,9 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 	}
 	items, err := recommendationBundleItems(rec)
 	if err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
+	if err := validateNoDuplicateBundleDraftItems(items); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	snapshotHash, err := recommendationSnapshotHash(rec)
@@ -250,6 +254,9 @@ func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprov
 		}
 		for _, item := range items {
 			if err := validateBundleItemForCreate(tx, rec.WorkspaceID, item); err != nil {
+				return err
+			}
+			if err := validateNoOpenBundleItemDraft(tx, "", item); err != nil {
 				return err
 			}
 			item, err = hydrateBundleItemMetadata(tx, item)
@@ -393,6 +400,14 @@ func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID,
 			}); err != nil {
 				return err
 			}
+			if err := validateNoOpenBundleItemDraft(tx, bundle.ID, SelfImprovementBundleItemInput{
+				Operation:     item.Operation,
+				AssetType:     item.AssetType,
+				ProposedRef:   ref,
+				ProposedScope: scope,
+			}); err != nil {
+				return err
+			}
 		}
 		if err := store.UpdateSelfImprovementProposalBundleItemDraftRow(tx, bundle.ID, proposalBundleItemRowFromItem(after)); err != nil {
 			return err
@@ -437,22 +452,32 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 		if bundle.Status != ProposalBundleStatusPending {
 			return &store.ErrValidation{Msg: "only pending proposal bundles can be published"}
 		}
+		publishedVersions := 0
 		for _, item := range bundle.Items {
 			before := bundleItemAuditSnapshot(item)
 			switch item.Decision {
 			case ProposalBundleDecisionRejected:
-				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle resolved", before, before); err != nil {
 					return err
 				}
 				continue
 			case ProposalBundleDecisionLinkedExisting:
-				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle resolved", before, before); err != nil {
 					return err
 				}
 				continue
 			case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
 			default:
 				return &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
+			}
+			if err := validateNoOpenBundleItemDraft(tx, bundle.ID, SelfImprovementBundleItemInput{
+				Operation:     item.Operation,
+				AssetType:     item.AssetType,
+				AssetID:       item.AssetID,
+				ProposedRef:   item.ProposedRef,
+				ProposedScope: item.ProposedScope,
+			}); err != nil {
+				return err
 			}
 			versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
 			if err != nil {
@@ -467,8 +492,13 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "published", actor, "", before, bundleItemAuditSnapshot(after)); err != nil {
 				return err
 			}
+			publishedVersions++
 		}
-		if err := store.UpdateSelfImprovementProposalBundleStatusRow(tx, bundle.ID, ProposalBundleStatusPublished); err != nil {
+		status := ProposalBundleStatusResolved
+		if publishedVersions > 0 {
+			status = ProposalBundleStatusPublished
+		}
+		if err := store.UpdateSelfImprovementProposalBundleStatusRow(tx, bundle.ID, status); err != nil {
 			return err
 		}
 		publishedID = bundle.ID
@@ -556,6 +586,70 @@ func validateBundleItemForCreate(q querier, workspaceID string, item SelfImprove
 		return validateBundleCreateNew(q, workspaceID, item)
 	default:
 		return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle operation %q is unsupported", item.Operation)}
+	}
+}
+
+func validateNoDuplicateBundleDraftItems(items []SelfImprovementBundleItemInput) error {
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		key := bundleDraftKey(item)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			return &store.ErrValidation{Msg: fmt.Sprintf("proposal bundle contains more than one draft for %s", bundleDraftLabel(item))}
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateNoOpenBundleItemDraft(q querier, excludeBundleID string, item SelfImprovementBundleItemInput) error {
+	if bundleDraftKey(item) == "" {
+		return nil
+	}
+	existing, err := store.FindOpenSelfImprovementBundleItemDraft(q, excludeBundleID, store.SelfImprovementBundleItemInputRow{
+		Operation:     item.Operation,
+		AssetType:     item.AssetType,
+		AssetID:       item.AssetID,
+		ProposedRef:   item.ProposedRef,
+		ProposedScope: item.ProposedScope,
+	})
+	if err == nil {
+		return &store.ErrConflict{Msg: fmt.Sprintf("%s already has an open proposal draft in bundle %s", bundleDraftLabel(item), existing.BundleID)}
+	}
+	var nf *store.ErrNotFound
+	if errors.As(err, &nf) {
+		return nil
+	}
+	return err
+}
+
+func bundleDraftKey(item SelfImprovementBundleItemInput) string {
+	switch strings.TrimSpace(item.Operation) {
+	case ProposalBundleOperationUpdateExisting:
+		if strings.TrimSpace(item.AssetType) == "" || strings.TrimSpace(item.AssetID) == "" {
+			return ""
+		}
+		return strings.TrimSpace(item.AssetType) + "\x00" + strings.TrimSpace(item.AssetID)
+	case ProposalBundleOperationCreateNew:
+		if strings.TrimSpace(item.AssetType) == "" || strings.TrimSpace(item.ProposedScope) == "" || strings.TrimSpace(item.ProposedRef) == "" {
+			return ""
+		}
+		return strings.TrimSpace(item.AssetType) + "\x00" + strings.ToLower(strings.TrimSpace(item.ProposedScope)) + "\x00" + strings.ToLower(strings.TrimSpace(item.ProposedRef))
+	default:
+		return ""
+	}
+}
+
+func bundleDraftLabel(item SelfImprovementBundleItemInput) string {
+	switch strings.TrimSpace(item.Operation) {
+	case ProposalBundleOperationUpdateExisting:
+		return strings.TrimSpace(item.AssetType) + "/" + strings.TrimSpace(item.AssetID)
+	case ProposalBundleOperationCreateNew:
+		return strings.TrimSpace(item.AssetType) + "/" + strings.TrimSpace(item.ProposedScope) + "/" + strings.TrimSpace(item.ProposedRef)
+	default:
+		return "catalog item"
 	}
 }
 
@@ -654,7 +748,16 @@ func decideSelfImprovementProposalBundleItem(st *store.Store, bundleID, itemID, 
 		if err := store.UpdateSelfImprovementProposalBundleItemDecisionRow(tx, bundle.ID, proposalBundleItemRowFromItem(after)); err != nil {
 			return err
 		}
-		return insertBundleItemEvent(tx, bundle.ID, item.ID, eventType, actor, strings.TrimSpace(reason), bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after))
+		if err := insertBundleItemEvent(tx, bundle.ID, item.ID, eventType, actor, strings.TrimSpace(reason), bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after)); err != nil {
+			return err
+		}
+		if decision == ProposalBundleDecisionRejected && len(bundle.Items) == 1 {
+			if err := store.UpdateSelfImprovementProposalBundleStatusRow(tx, bundle.ID, ProposalBundleStatusDiscarded); err != nil {
+				return err
+			}
+			return store.UpdateSelfImprovementRecommendationDecisionRow(tx, bundle.RecommendationID, RecommendationStatusRejected, reason)
+		}
+		return nil
 	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
