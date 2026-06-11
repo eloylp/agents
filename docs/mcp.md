@@ -29,7 +29,7 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 ## Available tools
 
-Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable public prompt refs as `id`, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported. Agents track the latest published catalog versions by default. Use `prompt_version_id` for an exact prompt pin and `skills: ["skill@2"]` for exact skill pins; MCP agent results include `prompt_version_id` and `skill_version_ids`.
+Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable public prompt refs as `id`, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported. Agents track the latest published catalog versions. To return to older catalog content, publish a rollback as a new current version.
 
 For agent lifecycle changes, use `create_agent` when adding a new agent or intentionally importing an upserted full definition. Use `update_agent` when changing an existing agent's backend, model, prompt reference, skills, dispatch permissions, PR permission, memory setting, scope, or description. `update_agent` patches only the supplied fields, preserves the stable agent ID, and returns a not-found error when the target agent does not exist.
 
@@ -92,15 +92,18 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | Tool | Description |
 |---|---|
 | `list_events` | Recent events with optional `since` filter. |
-| `list_improvement_feedback` | Stored `/agents improve` feedback evidence from the global inbox, optionally narrowed by workspace/status. |
-| `list_improvement_recommendations` | Review-only self-improvement recommendations, optionally filtered by status. |
-| `get_improvement_recommendation` | Fetch one recommendation with linked feedback evidence. |
-| `analyze_improvement_feedback` | Manually create or refresh the recommendation for one feedback event. |
-| `update_improvement_recommendation_status` | Accept or reject a recommendation as a terminal decision without publishing catalog changes. |
-| `clarify_improvement_recommendation` | Replace the editable maintainer clarification for a recommendation and enqueue a fresh self-improvement analysis run. |
-| `create_improvement_proposal` | Create an inert catalog proposal version from an accepted recommendation. |
-| `get_improvement_proposal` | Fetch proposal versions linked to one recommendation. |
-| `list_improvement_recommendations_with_proposals` | List recommendations that already have linked proposal versions. |
+| `list_improvement_feedback` | Stored `/agents improve` feedback evidence from the global improvement log, optionally narrowed by workspace/status. |
+| `list_improvement_recommendations` | Review-only self-improvement proposal candidates, optionally filtered by status. |
+| `get_improvement_recommendation` | Fetch one proposal candidate with linked feedback evidence. |
+| `analyze_improvement_feedback` | Queue a fresh `agents.improvement` analysis run for one feedback event. |
+| `update_improvement_recommendation_status` | Reject a proposal candidate as a terminal decision without publishing catalog changes; accepts an optional decision reason. |
+| `clarify_improvement_recommendation` | Replace the editable maintainer clarification for a proposal candidate and enqueue a fresh self-improvement analysis run. Also retries failed clarification runs. |
+| `get_improvement_proposal_bundle` | Fetch the editable bundle attached to a ready proposal candidate. |
+| `edit_improvement_proposal_bundle_item` | Edit one pending bundle item before publishing. |
+| `reject_improvement_proposal_bundle_item` | Reject one pending bundle item with a reason. |
+| `link_improvement_proposal_bundle_item` | Resolve one create-new item as already covered by an existing catalog asset, without attaching that asset to agents. |
+| `publish_improvement_proposal_bundle` | Atomically publish accepted bundle items into catalog versions. |
+| `discard_improvement_proposal_bundle` | Discard a pending proposal bundle. |
 | `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint, not an MCP tool, since it can be many KB. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
