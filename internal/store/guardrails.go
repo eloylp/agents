@@ -38,7 +38,7 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
 		FROM workspace_guardrails wg
 		JOIN guardrails g ON g.id = wg.guardrail_name
-		LEFT JOIN guardrail_versions gv ON gv.id = COALESCE(wg.guardrail_version_id, g.current_version_id)
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
 		WHERE wg.workspace_id = ? AND wg.enabled = 1
 		ORDER BY wg.position ASC, g.ref ASC`
 	return scanGuardrails(db, q, workspaceID)
@@ -82,6 +82,33 @@ func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	if err != nil {
 		return fleet.Guardrail{}, fmt.Errorf("store: get guardrail %q: %w", name, err)
 	}
+	return g, nil
+}
+
+func ReadGuardrailVersion(db *sql.DB, versionID string) (fleet.Guardrail, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return fleet.Guardrail{}, &ErrValidation{Msg: "guardrail version id is required"}
+	}
+	var g fleet.Guardrail
+	var builtin, enabled int
+	row := db.QueryRow(`
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, gv.description, gv.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, gv.enabled, gv.position,
+		       gv.id, gv.version_number
+		FROM guardrail_versions gv
+		JOIN guardrails g ON g.id = gv.guardrail_id
+		WHERE gv.id = ? AND gv.state = 'published'`, versionID)
+	err := row.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &g.DefaultContent,
+		&builtin, &enabled, &g.Position, &g.VersionID, &g.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Guardrail{}, &ErrNotFound{Msg: fmt.Sprintf("guardrail version %q not found", versionID)}
+	}
+	if err != nil {
+		return fleet.Guardrail{}, fmt.Errorf("store: read guardrail version %s: %w", versionID, err)
+	}
+	g.IsBuiltin = builtin != 0
+	g.Enabled = enabled != 0
 	return g, nil
 }
 

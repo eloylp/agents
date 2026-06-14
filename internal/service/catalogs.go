@@ -17,27 +17,6 @@ func (s *Service) UpsertSkill(name string, sk fleet.Skill) error {
 	})
 }
 
-func (s *Service) CreateSkillDraft(ref string, sk fleet.Skill, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
-	var version fleet.CatalogVersion
-	err := s.withTx("create skill draft", func(tx *sql.Tx) error {
-		var err error
-		version, err = store.CreateSkillDraftTx(tx, ref, sk.Prompt, meta)
-		return err
-	})
-	return version, err
-}
-
-func (s *Service) PublishSkillVersion(versionID string) (string, fleet.Skill, error) {
-	var ref string
-	var skill fleet.Skill
-	err := s.withTx("publish skill version", func(tx *sql.Tx) error {
-		var err error
-		ref, skill, err = store.PublishSkillVersionTx(tx, versionID)
-		return err
-	})
-	return ref, skill, err
-}
-
 func (s *Service) DeleteSkill(name string) error {
 	return s.withDeleteTx("delete skill", func(tx *sql.Tx) error {
 		return store.DeleteSkillTx(tx, name)
@@ -52,26 +31,6 @@ func (s *Service) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 		return err
 	})
 	return saved, err
-}
-
-func (s *Service) CreatePromptDraft(ref string, p fleet.Prompt, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
-	var version fleet.CatalogVersion
-	err := s.withTx("create prompt draft", func(tx *sql.Tx) error {
-		var err error
-		version, err = store.CreatePromptDraftTx(tx, ref, p.Description, p.Content, meta)
-		return err
-	})
-	return version, err
-}
-
-func (s *Service) PublishPromptVersion(versionID string) (fleet.Prompt, error) {
-	var prompt fleet.Prompt
-	err := s.withTx("publish prompt version", func(tx *sql.Tx) error {
-		var err error
-		prompt, err = store.PublishPromptVersionTx(tx, versionID)
-		return err
-	})
-	return prompt, err
 }
 
 func (s *Service) DeletePrompt(ref string) error {
@@ -102,26 +61,6 @@ func (s *Service) UpsertGuardrail(g fleet.Guardrail) error {
 	return s.withTx("upsert guardrail", func(tx *sql.Tx) error {
 		return store.UpsertGuardrailTx(tx, g)
 	})
-}
-
-func (s *Service) CreateGuardrailDraft(ref string, g fleet.Guardrail, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
-	var version fleet.CatalogVersion
-	err := s.withTx("create guardrail draft", func(tx *sql.Tx) error {
-		var err error
-		version, err = store.CreateGuardrailDraftTx(tx, ref, g, meta)
-		return err
-	})
-	return version, err
-}
-
-func (s *Service) PublishGuardrailVersion(versionID string) (fleet.Guardrail, error) {
-	var guardrail fleet.Guardrail
-	err := s.withTx("publish guardrail version", func(tx *sql.Tx) error {
-		var err error
-		guardrail, err = store.PublishGuardrailVersionTx(tx, versionID)
-		return err
-	})
-	return guardrail, err
 }
 
 func (s *Service) DeleteGuardrail(name string) error {

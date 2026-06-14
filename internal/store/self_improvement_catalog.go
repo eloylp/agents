@@ -172,5 +172,5 @@ func ReadSelfImprovementGuardrail(q querier, ref string) (fleet.Guardrail, error
 }
 
 func ReadSelfImprovementCatalogVersion(q querier, targetType, versionID string) (fleet.CatalogVersion, error) {
-	return readSelfImprovementProposalBaseVersion(q, targetType, versionID)
+	return readSelfImprovementCatalogVersion(q, targetType, versionID)
 }

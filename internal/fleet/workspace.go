@@ -31,9 +31,8 @@ type Workspace struct {
 // WorkspaceGuardrailRef is a workspace-local reference to a global or
 // workspace-scoped guardrail catalog entry.
 type WorkspaceGuardrailRef struct {
-	WorkspaceID        string `yaml:"-" json:"workspace_id,omitempty"`
-	GuardrailName      string `yaml:"guardrail_name" json:"guardrail_name"`
-	GuardrailVersionID string `yaml:"guardrail_version_id,omitempty" json:"guardrail_version_id,omitempty"`
-	Position           int    `yaml:"position" json:"position"`
-	Enabled            bool   `yaml:"enabled" json:"enabled"`
+	WorkspaceID   string `yaml:"-" json:"workspace_id,omitempty"`
+	GuardrailName string `yaml:"guardrail_name" json:"guardrail_name"`
+	Position      int    `yaml:"position" json:"position"`
+	Enabled       bool   `yaml:"enabled" json:"enabled"`
 }

@@ -73,7 +73,7 @@ export default function LiveTraceModal({ span, onClose }: { span: LiveTraceSpan;
   return (
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         width: 'min(900px, 92vw)', maxHeight: '90vh',

@@ -106,16 +106,6 @@ func (e *Engine) runAgentResult(ctx context.Context, ev Event, agent fleet.Agent
 	if err != nil {
 		return ai.Response{}, fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
 	}
-	if strings.TrimSpace(agent.PromptVersionID) != "" {
-		pinned, err := e.store.ReadPromptVersion(agent.PromptVersionID)
-		if err != nil {
-			return ai.Response{}, fmt.Errorf("agent %q: resolve prompt version: %w", agent.Name, err)
-		}
-		if pinned.ID != resolvedPrompt.ID {
-			return ai.Response{}, fmt.Errorf("agent %q: prompt_version_id %q does not belong to prompt %q", agent.Name, agent.PromptVersionID, resolvedPrompt.ID)
-		}
-		resolvedPrompt = pinned
-	}
 	if strings.TrimSpace(resolvedPrompt.Content) == "" {
 		return ai.Response{}, fmt.Errorf("agent %q: resolve prompt: prompt %q is empty", agent.Name, resolvedPrompt.Name)
 	}
@@ -391,24 +381,7 @@ func runAgentRequest(ctx context.Context, runner ai.Runner, req ai.Request) (ai.
 }
 
 func (e *Engine) resolveAgentSkills(skills map[string]fleet.Skill, agent fleet.Agent) (map[string]fleet.Skill, error) {
-	if len(agent.SkillVersionIDs) == 0 {
-		return skills, nil
-	}
-	resolved := make(map[string]fleet.Skill, len(skills))
-	for k, v := range skills {
-		resolved[k] = v
-	}
-	for ref, versionID := range agent.SkillVersionIDs {
-		skill, err := e.store.ReadSkillVersion(versionID)
-		if err != nil {
-			return nil, fmt.Errorf("agent %q: resolve skill %s version: %w", agent.Name, ref, err)
-		}
-		if skill.ID != ref {
-			return nil, fmt.Errorf("agent %q: skill_version_id %q does not belong to skill %q", agent.Name, versionID, ref)
-		}
-		resolved[ref] = skill
-	}
-	return resolved, nil
+	return skills, nil
 }
 
 func catalogSkillVersionIDs(skills map[string]fleet.Skill, refs []string) []string {

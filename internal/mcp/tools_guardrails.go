@@ -113,12 +113,6 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 			pos := int(n)
 			patch.Position = &pos
 		}
-		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
-			patch.Publish = v
-		} else if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		applyCatalogVersionMetadataArgs(args, &patch.State, &patch.SourceType, &patch.SourceRef, &patch.Author, &patch.Changelog)
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}

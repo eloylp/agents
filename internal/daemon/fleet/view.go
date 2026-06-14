@@ -37,24 +37,22 @@ type agentBindingJSON struct {
 // snapshot view exposes runtime status and binding schedules that the CRUD
 // representation does not.
 type apiAgentJSON struct {
-	ID              string             `json:"id"`
-	WorkspaceID     string             `json:"workspace_id"`
-	Name            string             `json:"name"`
-	Backend         string             `json:"backend"`
-	Model           string             `json:"model,omitempty"`
-	Skills          []string           `json:"skills,omitempty"`
-	SkillVersionIDs map[string]string  `json:"skill_version_ids,omitempty"`
-	PromptRef       string             `json:"prompt_ref,omitempty"`
-	PromptVersionID string             `json:"prompt_version_id,omitempty"`
-	ScopeType       string             `json:"scope_type,omitempty"`
-	ScopeRepo       string             `json:"scope_repo,omitempty"`
-	Description     string             `json:"description,omitempty"`
-	AllowDispatch   bool               `json:"allow_dispatch"`
-	CanDispatch     []string           `json:"can_dispatch,omitempty"`
-	AllowPRs        bool               `json:"allow_prs"`
-	AllowMemory     bool               `json:"allow_memory"`
-	CurrentStatus   string             `json:"current_status"` // "running" | "idle"
-	Bindings        []agentBindingJSON `json:"bindings,omitempty"`
+	ID            string             `json:"id"`
+	WorkspaceID   string             `json:"workspace_id"`
+	Name          string             `json:"name"`
+	Backend       string             `json:"backend"`
+	Model         string             `json:"model,omitempty"`
+	Skills        []string           `json:"skills,omitempty"`
+	PromptRef     string             `json:"prompt_ref,omitempty"`
+	ScopeType     string             `json:"scope_type,omitempty"`
+	ScopeRepo     string             `json:"scope_repo,omitempty"`
+	Description   string             `json:"description,omitempty"`
+	AllowDispatch bool               `json:"allow_dispatch"`
+	CanDispatch   []string           `json:"can_dispatch,omitempty"`
+	AllowPRs      bool               `json:"allow_prs"`
+	AllowMemory   bool               `json:"allow_memory"`
+	CurrentStatus string             `json:"current_status"` // "running" | "idle"
+	Bindings      []agentBindingJSON `json:"bindings,omitempty"`
 }
 
 // HandleAgentsView serves GET /agents, a fleet snapshot combining agent
@@ -93,23 +91,21 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 			currentStatus = "running"
 		}
 		entry := apiAgentJSON{
-			ID:              a.ID,
-			WorkspaceID:     fleetcfg.NormalizeWorkspaceID(a.WorkspaceID),
-			Name:            a.Name,
-			Backend:         a.Backend,
-			Model:           a.Model,
-			Skills:          a.Skills,
-			SkillVersionIDs: a.SkillVersionIDs,
-			PromptRef:       a.PromptRef,
-			PromptVersionID: a.PromptVersionID,
-			ScopeType:       a.ScopeType,
-			ScopeRepo:       a.ScopeRepo,
-			Description:     a.Description,
-			AllowDispatch:   a.AllowDispatch,
-			CanDispatch:     a.CanDispatch,
-			AllowPRs:        a.AllowPRs,
-			AllowMemory:     a.IsAllowMemory(),
-			CurrentStatus:   currentStatus,
+			ID:            a.ID,
+			WorkspaceID:   fleetcfg.NormalizeWorkspaceID(a.WorkspaceID),
+			Name:          a.Name,
+			Backend:       a.Backend,
+			Model:         a.Model,
+			Skills:        a.Skills,
+			PromptRef:     a.PromptRef,
+			ScopeType:     a.ScopeType,
+			ScopeRepo:     a.ScopeRepo,
+			Description:   a.Description,
+			AllowDispatch: a.AllowDispatch,
+			CanDispatch:   a.CanDispatch,
+			AllowPRs:      a.AllowPRs,
+			AllowMemory:   a.IsAllowMemory(),
+			CurrentStatus: currentStatus,
 		}
 
 		// Collect bindings from all repos that reference this agent,

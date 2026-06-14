@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import CatalogVersionsPanel from './CatalogVersionsPanel'
 
@@ -7,9 +7,8 @@ describe('<CatalogVersionsPanel />', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows reference warnings and rolls exact pins forward', async () => {
-    const onChanged = vi.fn()
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+  it('shows reference warnings for live tracking refs', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/prompts/prompt-a/versions') {
         return Promise.resolve({
@@ -26,46 +25,29 @@ describe('<CatalogVersionsPanel />', () => {
           json: () => Promise.resolve([{ kind: 'agent', workspace_id: 'default', name: 'tracker', tracking: true }]),
         } as Response)
       }
-      if (url === '/prompts/prompt-a/versions/v1/references') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([
-            { kind: 'agent', workspace_id: 'default', name: 'pinned-a', tracking: false },
-            { kind: 'agent', workspace_id: 'team-a', name: 'pinned-b', tracking: false },
-          ]),
-        } as Response)
-      }
-      if (url === '/prompts/prompt-a/versions/v1/rollout') {
-        expect(init?.method).toBe('POST')
-        expect(init?.body).toBe(JSON.stringify({ to_version_id: 'v2' }))
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ updated: 2 }) } as Response)
-      }
-      return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('not found') } as Response)
+	      if (url === '/prompts/prompt-a/versions/v1/references') {
+	        return Promise.resolve({
+	          ok: true,
+	          json: () => Promise.resolve([
+	            { kind: 'agent', workspace_id: 'default', name: 'tracker-a', tracking: true },
+	            { kind: 'agent', workspace_id: 'team-a', name: 'tracker-b', tracking: true },
+	          ]),
+	        } as Response)
+	      }
+	      return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('not found') } as Response)
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CatalogVersionsPanel type="prompt" assetID="prompt-a" currentVersionID="v2" onChanged={onChanged} />)
+    render(<CatalogVersionsPanel type="prompt" assetID="prompt-a" currentVersionID="v2" />)
 
     await screen.findByText('v1')
     expect(screen.getByText('+inserted')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('v1'))
 
-    expect(await screen.findByText('Publishing or rolling out changes can affect 2 live references.')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade 2 exact pins to v2' }))
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/prompts/prompt-a/versions/v1/rollout',
-        expect.objectContaining({
-          body: JSON.stringify({ to_version_id: 'v2' }),
-          method: 'POST',
-        }),
-      )
-      expect(onChanged).toHaveBeenCalled()
-    })
-  })
+	    expect(await screen.findByText('Changes to this catalog item can affect 2 live references.')).toBeInTheDocument()
+	    expect(screen.queryByRole('button', { name: /Upgrade/ })).not.toBeInTheDocument()
+	  })
 
   it('surfaces reference loading failures while keeping successful references', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {

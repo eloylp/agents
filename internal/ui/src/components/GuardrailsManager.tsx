@@ -18,7 +18,6 @@ interface Guardrail {
   is_builtin: boolean
   enabled: boolean
   position: number
-  publish?: boolean
   version_id?: string
   version?: number
 }
@@ -26,7 +25,6 @@ interface Guardrail {
 interface WorkspaceGuardrailRef {
   workspace_id?: string
   guardrail_name: string
-  guardrail_version_id?: string
   position: number
   enabled: boolean
 }
@@ -63,12 +61,10 @@ function GuardrailForm({
   error: string
 }) {
   const [form, setForm] = useState<Guardrail>(initial)
-  const [publish, setPublish] = useState(true)
   const set = <K extends keyof Guardrail>(k: K, v: Guardrail[K]) => setForm(f => ({ ...f, [k]: v }))
 
   useEffect(() => {
     setForm(initial)
-    setPublish(true)
   }, [initial])
 
   const showReset = !isNew && form.is_builtin && !!onReset
@@ -130,7 +126,6 @@ function GuardrailForm({
           type="guardrail"
           assetID={form.id || form.name}
           currentVersionID={form.version_id}
-          onChanged={onVersionsChanged}
           onRestoreVersion={version => {
             setForm(f => ({
               ...f,
@@ -139,25 +134,9 @@ function GuardrailForm({
               enabled: version.enabled ?? true,
               position: version.position ?? 0,
             }))
-            setPublish(true)
+            onVersionsChanged()
           }}
         />
-      )}
-      {!isNew && (
-        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
-          <input
-            type="checkbox"
-            checked={publish}
-            onChange={e => setPublish(e.target.checked)}
-            style={{ marginTop: 2 }}
-          />
-          <span>
-            <strong>Publish</strong>
-            <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
-              Workspaces tracking this guardrail will use the new published version on their next run. If unchecked, the edit is saved as a draft.
-            </span>
-          </span>
-        </label>
       )}
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -188,7 +167,7 @@ function GuardrailForm({
             Cancel
           </button>
           <button
-            onClick={() => onSave({ ...form, publish })}
+            onClick={() => onSave(form)}
             disabled={saving || !form.name.trim() || !form.content.trim()}
             style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
@@ -275,7 +254,6 @@ export default function GuardrailsManager() {
     try {
       const body = nextRefs.map((ref, index) => ({
         guardrail_name: ref.guardrail_name,
-        guardrail_version_id: ref.guardrail_version_id || '',
         position: index,
         enabled: ref.enabled,
       }))
@@ -336,7 +314,7 @@ export default function GuardrailsManager() {
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
         ? { name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
-        : { description: g.description, content: g.content, enabled: g.enabled, position: g.position, publish: g.publish ?? true }
+        : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
       if (!isNew && selected.enabled && !g.enabled) {

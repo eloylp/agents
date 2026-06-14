@@ -23,6 +23,7 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
+import { formatDateTime } from '@/lib/datetime'
 import BadgePicker from '@/components/BadgePicker'
 import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
@@ -79,11 +80,9 @@ interface AgentInfo {
   prompt_id?: string
   prompt_ref?: string
   prompt_scope?: string
-  prompt_version_id?: string
   scope_type?: string
   scope_repo?: string
   skills?: string[]
-  skill_version_ids?: Record<string, string>
   bindings?: Array<{ repo: string }>
 }
 
@@ -214,7 +213,7 @@ function bindingFromDraft(agent: string, draft: BindingDraft): Binding {
 
 function fmtTime(s?: string) {
   if (!s) return '-'
-  return new Date(s).toLocaleString()
+  return formatDateTime(s)
 }
 
 const handleStyle = {
@@ -809,11 +808,9 @@ export default function GraphPage() {
       backend: agent?.backend ?? '',
       model: agent?.model ?? '',
       skills: agent?.skills ?? [],
-      skill_version_ids: agent?.skill_version_ids ?? {},
       prompt_id: agent?.prompt_id ?? '',
       prompt_ref: agent?.prompt_ref ?? '',
       prompt_scope: agent?.prompt_scope ?? '',
-      prompt_version_id: agent?.prompt_version_id ?? '',
       scope_type: agent?.scope_type ?? 'workspace',
       scope_repo: agent?.scope_repo ?? '',
       allow_prs: agent?.allow_prs ?? false,

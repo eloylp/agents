@@ -39,21 +39,20 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(config.InlineAgentPromptUnsupported), nil
 		}
 		a := fleet.Agent{
-			WorkspaceID:     req.GetString("workspace", fleet.DefaultWorkspaceID),
-			Name:            name,
-			Backend:         req.GetString("backend", ""),
-			Model:           req.GetString("model", ""),
-			PromptID:        req.GetString("prompt_id", ""),
-			PromptRef:       req.GetString("prompt_ref", ""),
-			PromptScope:     req.GetString("prompt_scope", ""),
-			PromptVersionID: req.GetString("prompt_version_id", ""),
-			ScopeType:       req.GetString("scope_type", ""),
-			ScopeRepo:       req.GetString("scope_repo", ""),
-			Description:     req.GetString("description", ""),
-			Skills:          skills,
-			CanDispatch:     canDispatch,
-			AllowPRs:        req.GetBool("allow_prs", false),
-			AllowDispatch:   req.GetBool("allow_dispatch", false),
+			WorkspaceID:   req.GetString("workspace", fleet.DefaultWorkspaceID),
+			Name:          name,
+			Backend:       req.GetString("backend", ""),
+			Model:         req.GetString("model", ""),
+			PromptID:      req.GetString("prompt_id", ""),
+			PromptRef:     req.GetString("prompt_ref", ""),
+			PromptScope:   req.GetString("prompt_scope", ""),
+			ScopeType:     req.GetString("scope_type", ""),
+			ScopeRepo:     req.GetString("scope_repo", ""),
+			Description:   req.GetString("description", ""),
+			Skills:        skills,
+			CanDispatch:   canDispatch,
+			AllowPRs:      req.GetBool("allow_prs", false),
+			AllowDispatch: req.GetBool("allow_dispatch", false),
 		}
 		// allow_memory: keep AllowMemory nil when the caller omits the field so
 		// Agent.IsAllowMemory() returns the documented default of true.
@@ -101,9 +100,6 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		if v, ok := stringPtrArg(args, "prompt_id"); ok {
 			patch.PromptID = v
-		}
-		if v, ok := stringPtrArg(args, "prompt_version_id"); ok {
-			patch.PromptVersionID = v
 		}
 		if v, ok := stringPtrArg(args, "scope_type"); ok {
 			patch.ScopeType = v
@@ -220,12 +216,6 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "prompt"); ok {
 			patch.Prompt = v
 		}
-		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
-			patch.Publish = v
-		} else if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		applyCatalogVersionMetadataArgs(args, &patch.State, &patch.SourceType, &patch.SourceRef, &patch.Author, &patch.Changelog)
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
@@ -254,24 +244,6 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 			"status": "deleted",
 			"name":   canonical,
 		})
-	}
-}
-
-func applyCatalogVersionMetadataArgs(args map[string]any, state, sourceType, sourceRef, author, changelog **string) {
-	if v, ok := stringPtrArg(args, "state"); ok {
-		*state = v
-	}
-	if v, ok := stringPtrArg(args, "source_type"); ok {
-		*sourceType = v
-	}
-	if v, ok := stringPtrArg(args, "source_ref"); ok {
-		*sourceRef = v
-	}
-	if v, ok := stringPtrArg(args, "author"); ok {
-		*author = v
-	}
-	if v, ok := stringPtrArg(args, "changelog"); ok {
-		*changelog = v
 	}
 }
 
@@ -366,9 +338,6 @@ func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 				return mcpgo.NewToolResultErrorf("guardrails[%d].guardrail_name is required", i), nil
 			}
 			ref := fleet.WorkspaceGuardrailRef{GuardrailName: name, Position: i}
-			if v, ok := m["guardrail_version_id"].(string); ok {
-				ref.GuardrailVersionID = strings.TrimSpace(v)
-			}
 			if v, ok := m["position"]; ok && v != nil {
 				switch n := v.(type) {
 				case float64:
@@ -444,12 +413,6 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "content"); ok {
 			patch.Content = v
 		}
-		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
-			patch.Publish = v
-		} else if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		applyCatalogVersionMetadataArgs(args, &patch.State, &patch.SourceType, &patch.SourceRef, &patch.Author, &patch.Changelog)
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}

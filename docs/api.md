@@ -1,6 +1,6 @@
 # HTTP API reference
 
-This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md). Catalog versioning, draft publishing, and rollout reference lookup are covered in [catalog-versioning.md](catalog-versioning.md).
+This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md). Catalog versioning and live reference lookup are covered in [catalog-versioning.md](catalog-versioning.md).
 
 Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls only from direct daemon-host clients; runner containers are remote peers and need daemon auth if they call the proxy.
 
@@ -50,13 +50,17 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/improvements/feedback` | Stored `/agents improve` feedback events. Global by default; query params: optional `workspace`, optional `status` (`new`, `ignored`, etc.). |
-| `GET` | `/improvements/recommendations` | Review-only self-improvement recommendations. Global by default; query params: optional `workspace`, optional recommendation `status`. |
-| `GET` | `/improvements/recommendations/{id}` | One recommendation with linked feedback evidence. |
-| `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the recommendation for one feedback event. |
-| `POST` | `/improvements/recommendations/{id}/status` | Accept or reject a recommendation. Accepted/rejected decisions are terminal. |
-| `POST` | `/improvements/recommendations/{id}/clarification` | Replace the recommendation's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Body: `{ "body": "...", "author": "optional" }`. |
-| `GET` | `/improvements/recommendations/{id}/proposal` | Catalog proposal versions linked to a recommendation. |
-| `POST` | `/improvements/recommendations/{id}/proposal` | Create an inert catalog proposal version from an accepted recommendation. Does not publish or affect runtime composition. |
+| `GET` | `/improvements/recommendations` | Review-only proposal candidates. Global by default; query params: optional `workspace`, optional proposal candidate `status`. |
+| `GET` | `/improvements/recommendations/{id}` | One proposal candidate with linked feedback evidence. |
+| `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the proposal candidate for one feedback event. |
+| `POST` | `/improvements/recommendations/{id}/status` | Reject a proposal candidate. Rejected decisions are terminal. Body: `{ "status": "rejected", "reason": "optional" }`. |
+| `POST/PATCH` | `/improvements/recommendations/{id}/clarification` | Replace the proposal candidate's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Also retries failed clarification runs with the stored/latest clarification body. Body: `{ "body": "...", "author": "optional" }`. |
+| `GET` | `/improvements/recommendations/{id}/proposal-bundle` | Editable proposal bundle attached to a ready proposal candidate. Returns `{}` when no bundle exists. |
+| `PATCH` | `/improvements/proposal-bundles/{id}/items/{item_id}` | Edit one pending proposal bundle item before publishing. |
+| `POST` | `/improvements/proposal-bundles/{id}/items/{item_id}/reject` | Reject one pending bundle item and preserve an optional reason. If it is the only item, the proposal is terminally rejected. |
+| `POST` | `/improvements/proposal-bundles/{id}/items/{item_id}/link-existing` | Resolve a create-new item as already covered by an existing catalog asset without attaching that asset to agents. Body: `{ "asset_id": "...", "reason": "optional" }`. |
+| `POST` | `/improvements/proposal-bundles/{id}/publish` | Atomically publish accepted bundle items into catalog versions. |
+| `POST` | `/improvements/proposal-bundles/{id}/discard` | Discard a pending proposal bundle. |
 | `GET` | `/config` | Current fleet config snapshot |
 
 ## Self-Improvement Feedback
@@ -65,7 +69,7 @@ GitHub `issue_comment`, `pull_request_review`, and `pull_request_review_comment`
 
 Feedback events preserve the raw comment, source URL, repo/issue/PR/file context, delivery ids, author authorization, and any run attribution resolved from public hidden metadata or repo/PR/SHA/time context.
 
-Authorized new feedback creates one durable recommendation linked back to the feedback event and source URL. Recommendations preserve attribution confidence and expose review status transitions. Accepted recommendations with concrete prompt, skill, or guardrail targets can create `state=proposal` catalog versions with `source_type=feedback_recommendation`, but proposals remain inert until a human publishes them through the catalog versioning path. Non-convertible recommendations remain design records and do not mutate prompts, skills, guardrails, agents, or dispatch wiring.
+Authorized new feedback creates one visible `analyzing` proposal candidate linked back to the feedback event and source URL before the analyst run starts. Proposal candidates preserve attribution confidence and review status. Ready proposals with concrete prompt, skill, or guardrail targets automatically carry an inert proposal bundle; bundle items are staged rows, not catalog version rows, until a human publishes the bundle. Non-convertible proposals remain design records and do not mutate prompts, skills, guardrails, agents, or dispatch wiring. Failed analysis is not a terminal human decision: clients can retry via the analyze endpoint, or via the clarification endpoint when retrying a failed clarified recommendation. Published, resolved, discarded, and rejected proposals are terminal across REST and MCP.
 
 Configure trusted authors at startup with `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST=maintainer-login,agents-bot`.
 
@@ -111,7 +115,7 @@ These routes are always mounted and backed by the SQLite database.
 
 Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Prompt and skill catalog rows expose `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility. Guardrail catalog rows expose only `workspace_id`: empty means global, set means workspace-scoped.
 
-Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agents track the latest published prompt and skill versions by default. Set `prompt_version_id` to pin a prompt exactly, and use `skills: ["skill@2"]` to pin a skill to a published immutable version. Agent responses include `prompt_version_id` and `skill_version_ids` so REST clients can distinguish exact pins from tracking references.
+Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agents track the latest published prompt and skill versions. To return to older catalog content, publish a rollback as a new current version.
 
 | Method | Path | Description |
 |---|---|---|

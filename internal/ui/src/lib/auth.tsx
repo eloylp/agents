@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { formatDateTime } from '@/lib/datetime'
 
 const openAuthModalEvent = 'agents-auth-token-request'
 
@@ -325,10 +326,7 @@ function AuthRedirectScreen({ loading }: { loading: boolean }) {
 }
 
 function formatDate(value: string) {
-  if (!value) return 'unknown'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatDateTime(value) || 'unknown'
 }
 
 const sectionStyle: React.CSSProperties = {

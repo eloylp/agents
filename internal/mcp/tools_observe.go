@@ -3,6 +3,7 @@ package mcp
 import (
 	"cmp"
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -112,12 +113,32 @@ func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get improvement feedback", err), nil
 		}
-		if deps.Engine == nil {
-			return mcpgo.NewToolResultError("self-improvement analyzer is not configured"), nil
+		if deps.Channels == nil {
+			return mcpgo.NewToolResultError("self-improvement queue is not configured"), nil
 		}
-		rec, err := deps.Engine.AnalyzeSelfImprovementFeedback(ctx, feedback)
+		row, err := deps.Store.GetSelfImprovementRecommendationByFeedback(feedback.WorkspaceID, feedback.ID)
 		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("analyze improvement feedback", err), nil
+			var notFound *store.ErrNotFound
+			if !errors.As(err, &notFound) {
+				return mcpgo.NewToolResultErrorFromErr("get existing improvement recommendation", err), nil
+			}
+		}
+		rec, previousStatus, err := deps.Improvements.BeginAnalysis(feedback)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("begin improvement analysis", err), nil
+		}
+		if row.ID != "" {
+			rec.Feedback = &feedback
+		}
+		if _, err := deps.Channels.PushEvent(ctx, mcpImprovementAnalysisEvent(rec, false)); err != nil {
+			if previousStatus != "" {
+				_ = deps.Store.Transact(func(tx *store.Tx) error {
+					return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, previousStatus)
+				})
+			} else {
+				_ = deps.Store.MarkSelfImprovementFeedbackFailed(feedback.ID, "enqueue analysis failed")
+			}
+			return mcpgo.NewToolResultErrorFromErr("enqueue improvement analysis", err), nil
 		}
 		return jsonResult(rec)
 	}
@@ -133,7 +154,8 @@ func toolUpdateImprovementRecommendationStatus(deps Deps) server.ToolHandlerFunc
 		if !ok {
 			return mcpgo.NewToolResultError("status is required"), nil
 		}
-		rec, err := deps.Improvements.UpdateRecommendationStatus(id, status)
+		reason, _ := trimmedString(req, "reason")
+		rec, err := deps.Improvements.UpdateRecommendationStatus(id, status, reason)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update improvement recommendation status", err), nil
 		}
@@ -155,21 +177,28 @@ func toolClarifyImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
 		if author == "" {
 			author = "mcp"
 		}
+		if deps.Channels == nil {
+			return mcpgo.NewToolResultError("self-improvement queue is not configured"), nil
+		}
+		before, err := deps.Improvements.GetRecommendation(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement recommendation", err), nil
+		}
 		rec, err := deps.Improvements.UpsertClarification(id, author, body)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("clarify improvement recommendation", err), nil
 		}
-		if deps.Channels == nil {
-			return mcpgo.NewToolResultError("self-improvement queue is not configured"), nil
-		}
-		if _, err := deps.Channels.PushEvent(ctx, mcpClarificationImprovementEvent(rec)); err != nil {
+		if _, err := deps.Channels.PushEvent(ctx, mcpImprovementAnalysisEvent(rec, true)); err != nil {
+			_ = deps.Store.Transact(func(tx *store.Tx) error {
+				return store.UpdateSelfImprovementRecommendationStatusRow(tx, rec.ID, before.Status)
+			})
 			return mcpgo.NewToolResultErrorFromErr("enqueue improvement analysis", err), nil
 		}
 		return jsonResult(rec)
 	}
 }
 
-func mcpClarificationImprovementEvent(rec selfimprovement.SelfImprovementRecommendation) workflow.Event {
+func mcpImprovementAnalysisEvent(rec selfimprovement.SelfImprovementRecommendation, clarification bool) workflow.Event {
 	feedback := rec.Feedback
 	repo := ""
 	number := 0
@@ -189,7 +218,7 @@ func mcpClarificationImprovementEvent(rec selfimprovement.SelfImprovementRecomme
 		Payload: map[string]any{
 			"feedback_event_id": rec.FeedbackEventID,
 			"recommendation_id": rec.ID,
-			"clarification":     true,
+			"clarification":     clarification,
 		},
 	}
 }
@@ -201,62 +230,6 @@ func mcpFirstNonZero(values ...int) int {
 		}
 	}
 	return 0
-}
-
-func toolCreateImprovementProposal(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "recommendation_id")
-		if !ok {
-			return mcpgo.NewToolResultError("recommendation_id is required"), nil
-		}
-		proposal, err := deps.Improvements.CreateProposal(id)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("create improvement proposal", err), nil
-		}
-		return jsonResult(proposal)
-	}
-}
-
-func toolGetImprovementProposal(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "recommendation_id")
-		if !ok {
-			return mcpgo.NewToolResultError("recommendation_id is required"), nil
-		}
-		proposals, err := deps.Improvements.ListProposals(id)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("get improvement proposal", err), nil
-		}
-		return jsonResult(nilSafe(proposals))
-	}
-}
-
-func toolListImprovementRecommendationsWithProposals(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, ok := trimmedStringOptional(req, "workspace")
-		if !ok {
-			workspace = store.SelfImprovementAllWorkspaces
-		}
-		rows, err := deps.Improvements.ListRecommendationsWithProposals(workspace, 100)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with proposals", err), nil
-		}
-		return jsonResult(nilSafe(rows))
-	}
-}
-
-func toolCreateImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "recommendation_id")
-		if !ok {
-			return mcpgo.NewToolResultError("recommendation_id is required"), nil
-		}
-		bundle, err := deps.Improvements.CreateProposalBundle(id)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("create improvement proposal bundle", err), nil
-		}
-		return jsonResult(bundle)
-	}
 }
 
 func toolGetImprovementProposalBundle(deps Deps) server.ToolHandlerFunc {
@@ -407,120 +380,6 @@ func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandler
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with bundles", err), nil
 		}
 		return jsonResult(nilSafe(rows))
-	}
-}
-
-func toolListImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		status, _ := trimmedStringOptional(req, "status")
-		rows, err := deps.Improvements.ListMemory("", status, 200)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("list improvement memory", err), nil
-		}
-		return jsonResult(nilSafe(rows))
-	}
-}
-
-func toolCreateImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		key, ok := trimmedString(req, "key")
-		if !ok {
-			return mcpgo.NewToolResultError("key is required"), nil
-		}
-		value, ok := trimmedString(req, "value")
-		if !ok {
-			return mcpgo.NewToolResultError("value is required"), nil
-		}
-		status, _ := trimmedStringOptional(req, "status")
-		evidenceType, _ := trimmedStringOptional(req, "evidence_type")
-		evidenceID, _ := trimmedStringOptional(req, "evidence_id")
-		evidenceURL, _ := trimmedStringOptional(req, "evidence_url")
-		confidence, _ := trimmedStringOptional(req, "confidence")
-		row, err := deps.Improvements.CreateMemory(selfimprovement.AssistantMemoryInput{
-			Key:          key,
-			Value:        value,
-			Status:       status,
-			EvidenceType: evidenceType,
-			EvidenceID:   evidenceID,
-			EvidenceURL:  evidenceURL,
-			Confidence:   confidence,
-			ProposedBy:   "mcp",
-		})
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("create improvement memory", err), nil
-		}
-		return jsonResult(row)
-	}
-}
-
-func toolUpdateImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "id")
-		if !ok {
-			return mcpgo.NewToolResultError("id is required"), nil
-		}
-		args := req.GetArguments()
-		update := selfimprovement.AssistantMemoryUpdate{}
-		if v, ok := stringPtrArg(args, "key"); ok {
-			next := strings.TrimSpace(*v)
-			update.Key = &next
-		}
-		if v, ok := stringPtrArg(args, "value"); ok {
-			next := strings.TrimSpace(*v)
-			update.Value = &next
-		}
-		if v, ok := stringPtrArg(args, "confidence"); ok {
-			next := strings.TrimSpace(*v)
-			update.Confidence = &next
-		}
-		row, err := deps.Improvements.UpdateMemory(id, update)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("update improvement memory", err), nil
-		}
-		return jsonResult(row)
-	}
-}
-
-func toolApproveImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "id")
-		if !ok {
-			return mcpgo.NewToolResultError("id is required"), nil
-		}
-		row, err := deps.Improvements.ApproveMemory(id)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("approve improvement memory", err), nil
-		}
-		return jsonResult(row)
-	}
-}
-
-func toolRejectImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "id")
-		if !ok {
-			return mcpgo.NewToolResultError("id is required"), nil
-		}
-		reason, _ := trimmedStringOptional(req, "reason")
-		row, err := deps.Improvements.RejectMemory(id, reason)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("reject improvement memory", err), nil
-		}
-		return jsonResult(row)
-	}
-}
-
-func toolArchiveImprovementMemory(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, ok := trimmedString(req, "id")
-		if !ok {
-			return mcpgo.NewToolResultError("id is required"), nil
-		}
-		row, err := deps.Improvements.ArchiveMemory(id)
-		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("archive improvement memory", err), nil
-		}
-		return jsonResult(row)
 	}
 }
 

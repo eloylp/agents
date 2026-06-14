@@ -56,12 +56,72 @@ func seedFeedback(t *testing.T, st *store.Store, workspace string, id int64) sto
 	return feedback
 }
 
+func recommendationInputForFeedback(feedback store.SelfImprovementFeedback) SelfImprovementRecommendationInput {
+	finding := firstFeedbackLine(feedback.RawBody)
+	if finding == "" {
+		finding = "Review the stored feedback evidence and decide whether a catalog change is warranted."
+	}
+	return SelfImprovementRecommendationInput{
+		WorkspaceID:           feedback.WorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "needs_more_context",
+		Status:                RecommendationStatusNeedsUserInput,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               finding,
+		NormalizedLesson:      normalizeLesson(finding),
+		Rationale:             "The recommendation is review-only and does not publish or mutate catalog assets.",
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: feedback.LinkConfidence,
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                    "needs_more_context",
+			"status":                  RecommendationStatusNeedsUserInput,
+			"confidence":              "low",
+			"risk":                    "low",
+			"finding":                 finding,
+			"normalized_lesson":       normalizeLesson(finding),
+			"rationale":               "The recommendation is review-only and does not publish or mutate catalog assets.",
+			"evidence_feedback_ids":   []int64{feedback.ID},
+			"evidence_source_urls":    []string{feedback.SourceURL},
+			"attribution_confidence":  feedback.LinkConfidence,
+			"target_asset_type":       "",
+			"target_asset_id":         "",
+			"target_base_version_id":  "",
+			"proposed_patch":          "",
+			"proposed_new_body":       "",
+			"changes":                 []map[string]any{},
+			"no_auto_apply_confirmed": true,
+		},
+	}
+}
+
 func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 	t.Parallel()
 	svc, st, _ := newServiceTest(t)
 	feedback := seedFeedback(t, st, "team-a", 683001)
 
-	rec, err := svc.RecordRecommendation(RecommendationFromFeedback(feedback))
+	queuedFeedback := seedFeedback(t, st, "team-a", 683000)
+	queued, previousStatus, err := svc.BeginAnalysis(queuedFeedback)
+	if err != nil {
+		t.Fatalf("BeginAnalysis: %v", err)
+	}
+	if previousStatus != "" || queued.Status != RecommendationStatusAnalyzing || queued.ID == "" {
+		t.Fatalf("queued recommendation = %+v previous=%q, want new analyzing row", queued, previousStatus)
+	}
+	if queued.Feedback == nil || queued.Feedback.ID != queuedFeedback.ID {
+		t.Fatalf("queued feedback = %+v, want feedback %d", queued.Feedback, queuedFeedback.ID)
+	}
+	storedQueued, err := st.GetSelfImprovementRecommendation(queued.ID)
+	if err != nil {
+		t.Fatalf("get queued recommendation: %v", err)
+	}
+	if storedQueued.Status != RecommendationStatusAnalyzing {
+		t.Fatalf("stored queued status = %q, want analyzing", storedQueued.Status)
+	}
+
+	rec, err := svc.RecordRecommendation(recommendationInputForFeedback(feedback))
 	if err != nil {
 		t.Fatalf("RecordRecommendation: %v", err)
 	}
@@ -80,130 +140,72 @@ func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertClarification: %v", err)
 	}
-	if clarified.Status != RecommendationStatusNeedsUserInput {
-		t.Fatalf("clarified status = %q, want needs_user_input", clarified.Status)
+	if clarified.Status != RecommendationStatusClarifying {
+		t.Fatalf("clarified status = %q, want clarifying", clarified.Status)
 	}
 	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this only to reviewer guidance." {
 		t.Fatalf("clarification = %+v, want stored body", clarified.Clarification)
 	}
 
-	accepted, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusAccepted)
-	if err != nil {
-		t.Fatalf("UpdateRecommendationStatus: %v", err)
-	}
-	if accepted.Status != RecommendationStatusAccepted {
-		t.Fatalf("accepted status = %q, want accepted", accepted.Status)
-	}
-	if _, err := svc.UpdateRecommendationStatus(rec.ID, "unknown"); err == nil {
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, "unknown", ""); err == nil {
 		t.Fatal("UpdateRecommendationStatus unknown status succeeded, want validation error")
 	}
-	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected); err == nil {
-		t.Fatal("UpdateRecommendationStatus changed accepted recommendation, want validation error")
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusFailed, "backend failed"); err == nil {
+		t.Fatal("UpdateRecommendationStatus failed succeeded, want validation error")
 	}
-	if _, err := svc.UpsertClarification(rec.ID, "dashboard", "Re-open this decision."); err == nil {
-		t.Fatal("UpsertClarification on terminal recommendation succeeded, want validation error")
-	}
-}
-
-func TestAssistantMemoryLifecycleAndRecommendationInfluence(t *testing.T) {
-	t.Parallel()
-	svc, st, _ := newServiceTest(t)
-	feedback := seedFeedback(t, st, "team-a", 664001)
-
-	proposed, err := svc.CreateMemory(AssistantMemoryInput{
-		WorkspaceID:  "team-a",
-		Key:          "prefer_skills",
-		Value:        "Prefer reusable skills for guidance shared by multiple agents.",
-		Status:       MemoryStatusProposed,
-		EvidenceType: "manual_user_entry",
-		Confidence:   "medium",
-	})
-	if err != nil {
-		t.Fatalf("CreateMemory proposed: %v", err)
-	}
-	if proposed.Status != MemoryStatusProposed {
-		t.Fatalf("proposed status = %q, want proposed", proposed.Status)
-	}
-	active, err := svc.ApproveMemory(proposed.ID)
-	if err != nil {
-		t.Fatalf("ApproveMemory: %v", err)
-	}
-	if active.Status != MemoryStatusActive || active.ApprovedAt == "" {
-		t.Fatalf("approved memory = %+v, want active with approved_at", active)
-	}
-	otherWorkspaceMemory, err := svc.ListActiveMemory("team-b", 20)
-	if err != nil {
-		t.Fatalf("ListActiveMemory other workspace: %v", err)
-	}
-	if len(otherWorkspaceMemory) != 1 || otherWorkspaceMemory[0].ID != active.ID {
-		t.Fatalf("other workspace memory = %+v, want global active memory %s", otherWorkspaceMemory, active.ID)
-	}
-	updatedValue := "Prefer reusable skills over longer prompts when guidance is shared."
-	updated, err := svc.UpdateMemory(active.ID, AssistantMemoryUpdate{Value: &updatedValue})
-	if err != nil {
-		t.Fatalf("UpdateMemory: %v", err)
-	}
-	if updated.Value != updatedValue {
-		t.Fatalf("updated value = %q, want %q", updated.Value, updatedValue)
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected, ""); err == nil {
+		t.Fatal("UpdateRecommendationStatus rejected while clarifying succeeded, want validation error")
 	}
 
-	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
-		Type:                  "skill_guidance",
-		Status:                RecommendationStatusRecommended,
-		Finding:               "Extract shared guidance.",
-		Rationale:             "The feedback applies to multiple agents.",
-		AttributionConfidence: "exact",
-		StructuredOutput:      map[string]any{"memory_influence_ids": []string{active.ID}},
-	})
+	rejectFeedback := seedFeedback(t, st, "team-a", 683101)
+	rejectRec, err := svc.RecordRecommendation(recommendationInputForFeedback(rejectFeedback))
 	if err != nil {
-		t.Fatalf("RecordRecommendation: %v", err)
+		t.Fatalf("RecordRecommendation reject target: %v", err)
 	}
-	if len(rec.MemoryInfluences) != 1 || rec.MemoryInfluences[0].ID != active.ID {
-		t.Fatalf("memory influences = %+v, want approved memory %s", rec.MemoryInfluences, active.ID)
-	}
-	feedbackWithoutInfluence := seedFeedback(t, st, "team-a", 664002)
-	withoutInfluence, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedbackWithoutInfluence.ID,
-		Type:                  "skill_guidance",
-		Status:                RecommendationStatusRecommended,
-		Finding:               "Extract shared guidance without stored memory.",
-		Rationale:             "The current feedback was sufficient.",
-		AttributionConfidence: "exact",
-		StructuredOutput:      map[string]any{},
-	})
+	rejected, err := svc.UpdateRecommendationStatus(rejectRec.ID, RecommendationStatusRejected, "Not useful")
 	if err != nil {
-		t.Fatalf("RecordRecommendation without influence: %v", err)
-	}
-	if len(withoutInfluence.MemoryInfluences) != 0 {
-		t.Fatalf("memory influences without ids = %+v, want none", withoutInfluence.MemoryInfluences)
-	}
-
-	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected); err != nil {
 		t.Fatalf("UpdateRecommendationStatus rejected: %v", err)
 	}
-	memories, err := svc.ListMemory("team-a", MemoryStatusProposed, 20)
+	if rejected.Status != RecommendationStatusRejected {
+		t.Fatalf("rejected status = %q, want rejected", rejected.Status)
+	}
+	if rejected.DecisionReason != "Not useful" {
+		t.Fatalf("rejected decision reason = %q, want stored reason", rejected.DecisionReason)
+	}
+	rejectedAgain, err := svc.UpdateRecommendationStatus(rejectRec.ID, RecommendationStatusRejected, "")
 	if err != nil {
-		t.Fatalf("ListMemory proposed: %v", err)
+		t.Fatalf("UpdateRecommendationStatus rejected again: %v", err)
 	}
-	if len(memories) != 1 || memories[0].EvidenceType != "rejected_recommendation" || memories[0].EvidenceID != rec.ID {
-		t.Fatalf("proposed decision memory = %+v, want rejected recommendation evidence", memories)
+	if rejectedAgain.Status != RecommendationStatusRejected {
+		t.Fatalf("rejected again status = %q, want rejected", rejectedAgain.Status)
 	}
-	rejected, err := svc.RejectMemory(memories[0].ID, "Too broad")
+	if _, err := svc.UpsertClarification(rejectRec.ID, "dashboard", "Re-open this decision."); err == nil {
+		t.Fatal("UpsertClarification on terminal recommendation succeeded, want validation error")
+	}
+
+	failedFeedback := seedFeedback(t, st, "team-a", 683201)
+	failedRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           failedFeedback.WorkspaceID,
+		FeedbackEventID:       failedFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusFailed,
+		Confidence:            "low",
+		Risk:                  "medium",
+		Finding:               "Analyzer failed",
+		NormalizedLesson:      "Retry clarification",
+		Rationale:             "The clarification run failed before producing a proposal.",
+		AttributionConfidence: "unresolved",
+		Error:                 "runner container exited with status 1",
+	})
 	if err != nil {
-		t.Fatalf("RejectMemory: %v", err)
+		t.Fatalf("RecordRecommendation failed: %v", err)
 	}
-	if rejected.Status != MemoryStatusRejected || rejected.RejectedReason != "Too broad" {
-		t.Fatalf("rejected memory = %+v, want rejected with reason", rejected)
-	}
-	archived, err := svc.ArchiveMemory(active.ID)
+	retried, err := svc.UpsertClarification(failedRec.ID, "dashboard", "Retry with the same clarification.")
 	if err != nil {
-		t.Fatalf("ArchiveMemory: %v", err)
+		t.Fatalf("UpsertClarification on failed recommendation: %v", err)
 	}
-	if archived.Status != MemoryStatusArchived || archived.ArchivedAt == "" {
-		t.Fatalf("archived memory = %+v, want archived with archived_at", archived)
+	if retried.Status != RecommendationStatusClarifying {
+		t.Fatalf("retried failed status = %q, want clarifying", retried.Status)
 	}
 }
 
@@ -222,7 +224,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                RecommendationStatusAccepted,
+		Status:                RecommendationStatusRecommended,
 		Finding:               "coordinated catalog update",
 		Rationale:             "prompt update plus a duplicate skill proposal",
 		AttributionConfidence: "exact",
@@ -237,12 +239,33 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		t.Fatalf("RecordRecommendation: %v", err)
 	}
 
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateProposalBundle: %v", err)
+	if rec.ProposalBundle == nil {
+		t.Fatalf("RecordRecommendation did not attach an automatic proposal bundle")
 	}
+	bundle := *rec.ProposalBundle
 	if bundle.Status != ProposalBundleStatusPending || len(bundle.Items) != 2 {
 		t.Fatalf("bundle = %+v, want two pending items", bundle)
+	}
+	duplicateFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683112)
+	duplicateRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       duplicateFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "duplicate catalog update",
+		Rationale:             "same prompt should already have one pending bundle item",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2 duplicate"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation duplicate: %v", err)
+	}
+	if duplicateRec.Status != RecommendationStatusNeedsUserInput || duplicateRec.ProposalBundle != nil || !strings.Contains(duplicateRec.Error, "already has a pending proposal item") {
+		t.Fatalf("duplicate recommendation = %+v, want needs_user_input conflict without bundle", duplicateRec)
 	}
 	var promptItem, skillItem SelfImprovementBundleItem
 	for _, item := range bundle.Items {
@@ -266,6 +289,12 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	if published.Status != ProposalBundleStatusPublished {
 		t.Fatalf("published status = %q, want published", published.Status)
 	}
+	if _, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusRejected, "too late"); err == nil {
+		t.Fatal("UpdateRecommendationStatus after publish succeeded, want validation error")
+	}
+	if _, err := svc.UpsertClarification(rec.ID, "dashboard", "Re-open published bundle."); err == nil {
+		t.Fatal("UpsertClarification after publish succeeded, want validation error")
+	}
 	for _, item := range published.Items {
 		if item.AssetType == "skill" && item.Decision != ProposalBundleDecisionLinkedExisting {
 			t.Fatalf("linked skill decision = %q, want linked_existing", item.Decision)
@@ -274,21 +303,43 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 			t.Fatalf("prompt published version is empty")
 		}
 	}
-	memories, err := svc.ListMemory(fleet.DefaultWorkspaceID, MemoryStatusProposed, 20)
-	if err != nil {
-		t.Fatalf("ListMemory proposed: %v", err)
-	}
-	wantEvidenceTypes := []string{"edited_proposal_bundle_item", "linked_existing_proposal_bundle_item", "published_proposal_bundle"}
-	for _, evidenceType := range wantEvidenceTypes {
-		if !hasMemoryEvidenceType(memories, evidenceType) {
-			t.Fatalf("proposed memory evidence types = %+v, want %q", memories, evidenceType)
-		}
-	}
-
 	_, err = svc.DiscardProposalBundle(bundle.ID, "system")
 	var validation *store.ErrValidation
 	if !errors.As(err, &validation) {
 		t.Fatalf("DiscardProposalBundle after publish err = %v, want validation", err)
+	}
+
+	resolveFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683152)
+	resolveRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       resolveFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "new skill duplicates existing guidance",
+		Rationale:             "existing skill should be reused",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationCreateNew, "asset_type": "skill", "proposed_ref": "existing-skill-copy", "proposed_name": "Existing skill copy", "proposed_scope": "workspace", "proposed_body": "duplicate skill"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation resolve-only: %v", err)
+	}
+	if resolveRec.ProposalBundle == nil || len(resolveRec.ProposalBundle.Items) != 1 {
+		t.Fatalf("resolve-only bundle = %+v, want one item", resolveRec.ProposalBundle)
+	}
+	resolveBundle, err := svc.LinkProposalBundleItem(resolveRec.ProposalBundle.ID, resolveRec.ProposalBundle.Items[0].ID, "existing-skill", "already covered", "system")
+	if err != nil {
+		t.Fatalf("LinkProposalBundleItem resolve-only: %v", err)
+	}
+	resolved, err := svc.PublishProposalBundle(resolveBundle.ID, "system")
+	if err != nil {
+		t.Fatalf("PublishProposalBundle resolve-only: %v", err)
+	}
+	if resolved.Status != ProposalBundleStatusResolved {
+		t.Fatalf("resolved status = %q, want resolved", resolved.Status)
 	}
 
 	discardPrompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "discard-bundle-prompt", Description: "desc", Content: "discard v1"})
@@ -300,7 +351,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       discardFeedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                RecommendationStatusAccepted,
+		Status:                RecommendationStatusRecommended,
 		Finding:               "discard catalog update",
 		Rationale:             "prompt update should not proceed",
 		AttributionConfidence: "exact",
@@ -313,35 +364,71 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordRecommendation discard: %v", err)
 	}
-	discardBundle, err := svc.CreateProposalBundle(discardRec.ID)
-	if err != nil {
-		t.Fatalf("CreateProposalBundle discard: %v", err)
+	if discardRec.ProposalBundle == nil {
+		t.Fatalf("RecordRecommendation discard did not attach an automatic proposal bundle")
 	}
+	discardBundle := *discardRec.ProposalBundle
 	if _, err := svc.DiscardProposalBundle(discardBundle.ID, "system"); err != nil {
 		t.Fatalf("DiscardProposalBundle: %v", err)
 	}
-	memories, err = svc.ListMemory(fleet.DefaultWorkspaceID, MemoryStatusProposed, 20)
-	if err != nil {
-		t.Fatalf("ListMemory proposed after discard: %v", err)
+	if _, err := svc.UpdateRecommendationStatus(discardRec.ID, RecommendationStatusRejected, "too late"); err == nil {
+		t.Fatal("UpdateRecommendationStatus after discard succeeded, want validation error")
 	}
-	if !hasMemoryEvidenceType(memories, "discarded_proposal_bundle") {
-		t.Fatalf("proposed memory evidence types after discard = %+v, want discarded_proposal_bundle", memories)
+
+	rejectPrompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "reject-single-item-prompt", Description: "desc", Content: "reject v1"})
+	if err != nil {
+		t.Fatalf("seed reject prompt: %v", err)
+	}
+	rejectFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683303)
+	rejectRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       rejectFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "single item reject",
+		Rationale:             "prompt update should be rejected",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": rejectPrompt.ID, "base_version_id": rejectPrompt.VersionID, "proposed_body": "reject v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation single-item reject: %v", err)
+	}
+	if rejectRec.ProposalBundle == nil || len(rejectRec.ProposalBundle.Items) != 1 {
+		t.Fatalf("reject proposal bundle = %+v, want one item", rejectRec.ProposalBundle)
+	}
+	rejectedBundle, err := svc.RejectProposalBundleItem(rejectRec.ProposalBundle.ID, rejectRec.ProposalBundle.Items[0].ID, "wrong target", "system")
+	if err != nil {
+		t.Fatalf("RejectProposalBundleItem: %v", err)
+	}
+	if rejectedBundle.Status != ProposalBundleStatusDiscarded {
+		t.Fatalf("rejected bundle status = %q, want discarded", rejectedBundle.Status)
+	}
+	rejectedRec, err := svc.GetRecommendation(rejectRec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation rejected: %v", err)
+	}
+	if rejectedRec.Status != RecommendationStatusRejected || rejectedRec.DecisionReason != "wrong target" {
+		t.Fatalf("rejected recommendation = %+v, want rejected with reason", rejectedRec)
 	}
 }
 
-func TestProposalBundleNoopEditDoesNotProposeMemory(t *testing.T) {
+func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "noop-bundle-prompt", Description: "desc", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "changed-source-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
-	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683203)
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683502)
 	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                RecommendationStatusAccepted,
+		Status:                RecommendationStatusRecommended,
 		Finding:               "catalog update",
 		Rationale:             "prompt update should be proposed",
 		AttributionConfidence: "exact",
@@ -354,10 +441,74 @@ func TestProposalBundleNoopEditDoesNotProposeMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordRecommendation: %v", err)
 	}
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateProposalBundle: %v", err)
+	if rec.ProposalBundle == nil {
+		t.Fatal("RecordRecommendation did not attach proposal bundle")
 	}
+	if _, err := db.Exec(`UPDATE self_improvement_recommendations SET finding='changed after bundle creation', updated_at=datetime('now', '+1 second') WHERE id=?`, rec.ID); err != nil {
+		t.Fatalf("mutate recommendation: %v", err)
+	}
+	if _, err := svc.PublishProposalBundle(rec.ProposalBundle.ID, "system"); err == nil {
+		t.Fatal("PublishProposalBundle after source recommendation changed succeeded, want validation error")
+	}
+
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "existing-guardrail", Description: "desc", Content: "body", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("seed guardrail: %v", err)
+	}
+	guardFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683503)
+	guardRec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       guardFeedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "new guardrail",
+		Rationale:             "guardrail should be created",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationCreateNew, "asset_type": "guardrail", "proposed_ref": "new-guardrail", "proposed_name": "new guardrail", "proposed_scope": "global", "proposed_body": "guardrail body"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation guardrail: %v", err)
+	}
+	if guardRec.ProposalBundle == nil || len(guardRec.ProposalBundle.Items) != 1 {
+		t.Fatalf("guardrail bundle = %+v, want one item", guardRec.ProposalBundle)
+	}
+	if _, err := svc.LinkProposalBundleItem(guardRec.ProposalBundle.ID, guardRec.ProposalBundle.Items[0].ID, "existing-guardrail", "already exists", "system"); err == nil {
+		t.Fatal("LinkProposalBundleItem guardrail succeeded, want validation error")
+	}
+}
+
+func TestProposalBundleNoopEditDoesNotRecordEditEvent(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "noop-bundle-prompt", Description: "desc", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683203)
+	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "catalog update",
+		Rationale:             "prompt update should be proposed",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation: %v", err)
+	}
+	if rec.ProposalBundle == nil {
+		t.Fatalf("RecordRecommendation did not attach an automatic proposal bundle")
+	}
+	bundle := *rec.ProposalBundle
 	if len(bundle.Items) != 1 {
 		t.Fatalf("bundle items = %d, want 1", len(bundle.Items))
 	}
@@ -366,13 +517,6 @@ func TestProposalBundleNoopEditDoesNotProposeMemory(t *testing.T) {
 		t.Fatalf("UpdateProposalBundleItem no-op: %v", err)
 	}
 
-	memories, err := svc.ListMemory(fleet.DefaultWorkspaceID, MemoryStatusProposed, 20)
-	if err != nil {
-		t.Fatalf("ListMemory proposed: %v", err)
-	}
-	if hasMemoryEvidenceType(memories, "edited_proposal_bundle_item") {
-		t.Fatalf("proposed memory evidence types = %+v, want no edited_proposal_bundle_item", memories)
-	}
 	var editEvents int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM self_improvement_proposal_bundle_item_events WHERE bundle_id=? AND item_id=? AND event_type='edited'`, bundle.ID, item.ID).Scan(&editEvents); err != nil {
 		t.Fatalf("count edit events: %v", err)
@@ -382,200 +526,43 @@ func TestProposalBundleNoopEditDoesNotProposeMemory(t *testing.T) {
 	}
 }
 
-func hasMemoryEvidenceType(memories []AssistantMemory, evidenceType string) bool {
-	for _, memory := range memories {
-		if memory.EvidenceType == evidenceType {
-			return true
-		}
-	}
-	return false
-}
-
-func TestCreateProposalFromAcceptedRecommendation(t *testing.T) {
+func TestRecommendedPatchOnlyRecommendationNeedsInputInsteadOfDeadEnd(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("seed workspace: %v", err)
-	}
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "proposal-target", Description: "target desc", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "patch-only-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
-		t.Fatalf("UpsertPrompt: %v", err)
+		t.Fatalf("seed prompt: %v", err)
 	}
-	feedback := seedFeedback(t, st, "team-a", 683003)
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683204)
+
 	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
-		Type:                  "prompt_guidance",
-		Status:                RecommendationStatusAccepted,
-		Finding:               "tighten prompt guidance",
-		NormalizedLesson:      "Keep guidance concrete.",
-		Rationale:             "Feedback asked for a concrete prompt update.",
-		TargetAssetType:       "prompt",
-		TargetAssetID:         prompt.ID,
-		TargetBaseVersionID:   prompt.VersionID,
-		ProposedNewBody:       "body v2",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		StructuredOutput:      map[string]any{"status": "recommended"},
-		AttributionConfidence: "exact",
+		WorkspaceID:             fleet.DefaultWorkspaceID,
+		FeedbackEventID:         feedback.ID,
+		Type:                    "catalog_patch",
+		Status:                  RecommendationStatusRecommended,
+		Finding:                 "patch-only catalog update",
+		Rationale:               "analyst returned prose patch without editable body",
+		AttributionConfidence:   "exact",
+		TargetAssetType:         "prompt",
+		TargetAssetID:           prompt.ID,
+		TargetBaseVersionID:     prompt.VersionID,
+		ProposedPatch:           "Append a new section.",
+		AnalyzerPromptRef:       "prompt_self-improvement-analyst",
+		AnalyzerPromptVersionID: "promptver_self_improvement_analyst_v6",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{},
+		},
 	})
 	if err != nil {
 		t.Fatalf("RecordRecommendation: %v", err)
 	}
-
-	proposal, err := svc.CreateProposal(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateProposal: %v", err)
+	if rec.Status != RecommendationStatusNeedsUserInput {
+		t.Fatalf("status = %q, want needs_user_input", rec.Status)
 	}
-	if proposal.Version.State != "proposal" || proposal.Version.SourceType != "feedback_recommendation" ||
-		proposal.Version.SourceRef != rec.ID || proposal.Version.Author != "agents-assistant" {
-		t.Fatalf("proposal metadata = %+v, want inert feedback recommendation proposal", proposal.Version)
+	if rec.ProposalBundle != nil {
+		t.Fatalf("proposal bundle = %+v, want none for patch-only output", rec.ProposalBundle)
 	}
-	if proposal.Version.BaseVersionID != prompt.VersionID {
-		t.Fatalf("proposal base = %q, want %q", proposal.Version.BaseVersionID, prompt.VersionID)
-	}
-	listed, err := svc.ListProposals(rec.ID)
-	if err != nil {
-		t.Fatalf("ListProposals: %v", err)
-	}
-	if len(listed) != 1 {
-		t.Fatalf("proposals len = %d, want 1", len(listed))
-	}
-	if listed[0].BaseVersion == nil || listed[0].BaseVersion.ID != prompt.VersionID || listed[0].BaseVersion.Content != "body v1" {
-		t.Fatalf("proposal base version = %+v, want prompt version %q with body v1", listed[0].BaseVersion, prompt.VersionID)
-	}
-	if listed[0].Version.Content != "body v2" {
-		t.Fatalf("proposal version content = %q, want body v2", listed[0].Version.Content)
-	}
-	current, err := store.ReadPrompt(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("ReadPrompt: %v", err)
-	}
-	if current.Content != "body v1" || current.VersionID != prompt.VersionID {
-		t.Fatalf("current prompt = id %q body %q, want published version unchanged", current.VersionID, current.Content)
-	}
-	second, err := svc.CreateProposal(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateProposal second call: %v", err)
-	}
-	if second.Version.ID != proposal.Version.ID {
-		t.Fatalf("second proposal id = %q, want existing %q", second.Version.ID, proposal.Version.ID)
-	}
-	linked, err := svc.ListRecommendationsWithProposals("team-a", 10)
-	if err != nil {
-		t.Fatalf("ListRecommendationsWithProposals: %v", err)
-	}
-	if len(linked) != 1 || linked[0].ID != rec.ID {
-		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
-	}
-}
-
-func TestCreateProposalRejectsUnsafeStatesAndTargets(t *testing.T) {
-	t.Parallel()
-	svc, st, db := newServiceTest(t)
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("seed workspace: %v", err)
-	}
-	feedback := seedFeedback(t, st, "team-a", 683004)
-	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
-		Type:                  "needs_more_context",
-		Status:                RecommendationStatusRecommended,
-		Finding:               "not accepted",
-		TargetAssetType:       "prompt",
-		TargetAssetID:         "prompt_missing",
-		TargetBaseVersionID:   "promptver_missing",
-		ProposedNewBody:       "body",
-		AttributionConfidence: "unresolved",
-	})
-	if err != nil {
-		t.Fatalf("RecordRecommendation: %v", err)
-	}
-	if _, err := svc.CreateProposal(rec.ID); err == nil || !strings.Contains(err.Error(), "must be accepted") {
-		t.Fatalf("CreateProposal error = %v, want accepted-state validation", err)
-	}
-	accepted, err := svc.UpdateRecommendationStatus(rec.ID, RecommendationStatusAccepted)
-	if err != nil {
-		t.Fatalf("UpdateRecommendationStatus: %v", err)
-	}
-	if _, err := svc.CreateProposal(accepted.ID); err == nil || !strings.Contains(err.Error(), "not proposal-convertible") {
-		t.Fatalf("CreateProposal error = %v, want non-convertible validation", err)
-	}
-
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "missing-base-proposal-target", Description: "target desc", Content: "body v1"})
-	if err != nil {
-		t.Fatalf("UpsertPrompt: %v", err)
-	}
-	missingBaseFeedback := seedFeedback(t, st, "team-a", 683104)
-	missingBase, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       missingBaseFeedback.ID,
-		Type:                  "prompt_guidance",
-		Status:                RecommendationStatusAccepted,
-		Finding:               "tighten prompt guidance",
-		TargetAssetType:       "prompt",
-		TargetAssetID:         prompt.ID,
-		ProposedNewBody:       "body v2",
-		AttributionConfidence: "exact",
-	})
-	if err != nil {
-		t.Fatalf("RecordRecommendation missing base: %v", err)
-	}
-	if _, err := svc.CreateProposal(missingBase.ID); err == nil || !strings.Contains(err.Error(), "base version is required") {
-		t.Fatalf("CreateProposal error = %v, want missing base version validation", err)
-	}
-}
-
-func TestCreateProposalListsGuardrailMetadata(t *testing.T) {
-	t.Parallel()
-	svc, st, db := newServiceTest(t)
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("seed workspace: %v", err)
-	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{
-		Name:        "proposal-guardrail-metadata",
-		Description: "guardrail desc",
-		Content:     "guardrail v1",
-		Enabled:     true,
-		Position:    11,
-	}); err != nil {
-		t.Fatalf("UpsertGuardrail: %v", err)
-	}
-	guardrail, err := store.GetGuardrail(db, "proposal-guardrail-metadata")
-	if err != nil {
-		t.Fatalf("GetGuardrail: %v", err)
-	}
-	feedback := seedFeedback(t, st, "team-a", 683005)
-	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
-		Type:                  "guardrail_guidance",
-		Status:                RecommendationStatusAccepted,
-		Finding:               "tighten guardrail guidance",
-		TargetAssetType:       "guardrail",
-		TargetAssetID:         guardrail.ID,
-		TargetBaseVersionID:   guardrail.VersionID,
-		ProposedNewBody:       "guardrail v2",
-		AttributionConfidence: "exact",
-	})
-	if err != nil {
-		t.Fatalf("RecordRecommendation: %v", err)
-	}
-
-	if _, err := svc.CreateProposal(rec.ID); err != nil {
-		t.Fatalf("CreateProposal: %v", err)
-	}
-	listed, err := svc.ListProposals(rec.ID)
-	if err != nil {
-		t.Fatalf("ListProposals: %v", err)
-	}
-	if len(listed) != 1 {
-		t.Fatalf("proposals len = %d, want 1", len(listed))
-	}
-	if !listed[0].Version.Enabled || listed[0].Version.Position != 11 {
-		t.Fatalf("proposal guardrail metadata = enabled %v position %d, want enabled true position 11", listed[0].Version.Enabled, listed[0].Version.Position)
-	}
-	if listed[0].BaseVersion == nil || !listed[0].BaseVersion.Enabled || listed[0].BaseVersion.Position != 11 {
-		t.Fatalf("base guardrail metadata = %+v, want enabled true position 11", listed[0].BaseVersion)
+	if rec.Error == "" {
+		t.Fatal("error is empty, want bundle creation reason")
 	}
 }
