@@ -44,6 +44,8 @@ See [`.env.sample`](../.env.sample) for a copy-pasteable list with current defau
 | `AGENTS_DISPATCH_MAX_DEPTH` | max inter-agent dispatch chain depth |
 | `AGENTS_DISPATCH_MAX_FANOUT` | max dispatches requested by one run |
 | `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | dispatch dedupe window |
+| `AGENTS_ATTRIBUTION_SIGNING_SECRET` | HMAC secret for public run-attribution metadata |
+| `AGENTS_INSTANCE_ID` | stable deployment id embedded into signed attribution metadata |
 | `AGENTS_PROXY_ENABLED` | enable built-in Anthropic to OpenAI proxy |
 | `AGENTS_PROXY_PATH` | proxy route |
 | `AGENTS_PROXY_UPSTREAM_URL` | OpenAI-compatible upstream URL |
@@ -59,6 +61,8 @@ GITHUB_WEBHOOK_SECRET=... # HMAC shared secret for /webhooks/github
 GITHUB_TOKEN=...          # GitHub MCP server and gh CLI fallback in runner containers
 AGENTS_GIT_USER_NAME=...  # configured as git user.name inside runner containers
 AGENTS_GIT_USER_EMAIL=... # configured as git user.email inside runner containers
+AGENTS_ATTRIBUTION_SIGNING_SECRET=... # optional HMAC secret for agents-run metadata
+AGENTS_INSTANCE_ID=prod-a              # stable id for this daemon deployment
 CLAUDE_CODE_OAUTH_TOKEN=...
 ANTHROPIC_API_KEY=...
 ANTHROPIC_AUTH_TOKEN=...
@@ -77,6 +81,8 @@ SSH_AUTH_SOCK=...
 AI and GitHub credentials are injected from the daemon environment into each ephemeral runner container. They are never part of `/config`, `/export`, MCP responses, or UI payloads.
 
 Self-improvement feedback ingestion has one startup-configured trust boundary. Set `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST` to the GitHub logins allowed to create actionable `/agents improve` evidence. If the list is empty, the daemon falls back to `GITHUB_ACTOR` when present; otherwise marked comments are stored as ignored audit rows instead of `new` feedback. Feedback memory here is not agent runtime memory: it stores raw, inspectable review evidence for later human-reviewed recommendation flows.
+
+`AGENTS_ATTRIBUTION_SIGNING_SECRET` signs public run-attribution metadata that agents copy into GitHub comments, PR bodies, and commit trailers. It is an integrity check, not encryption. When this secret is configured, unsigned or invalid metadata is ignored for exact attribution; authorized `/agents improve` feedback can still be processed, but without trusting unverified span or agent fields. Changing the secret intentionally means previously signed metadata will no longer verify for exact attribution. Use a stable `AGENTS_INSTANCE_ID` per deployment when multiple agent instances can operate on the same repositories.
 
 `AGENTS_GIT_USER_NAME` and `AGENTS_GIT_USER_EMAIL` are not credentials, but they use the same env-driven runner setup path. When either is set, the runner setup runs `git config --global user.name "$AGENTS_GIT_USER_NAME"` and/or `git config --global user.email "$AGENTS_GIT_USER_EMAIL"` before starting the AI CLI. Set both explicitly so generated commits use a predictable author instead of letting agents invent one.
 

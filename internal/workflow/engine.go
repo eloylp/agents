@@ -148,6 +148,7 @@ type Engine struct {
 	store         *store.Store
 	runnerBuilder func(workspaceID string, name string, b fleet.Backend) ai.Runner
 	dispatcher    *Dispatcher
+	attribution   config.AttributionConfig
 	memory        MemoryBackend
 	maxConcurrent int
 	logger        zerolog.Logger
@@ -203,6 +204,12 @@ func NewEngine(st *store.Store, processorCfg config.ProcessorConfig, queue Event
 		eng.dispatcher = NewDispatcher(processorCfg.Dispatch, st, dedup, queue, logger)
 	}
 	return eng
+}
+
+// WithAttributionConfig attaches process-owned signing settings for public
+// run attribution metadata rendered into agent prompts.
+func (e *Engine) WithAttributionConfig(cfg config.AttributionConfig) {
+	e.attribution = cfg
 }
 
 // loadWorkflowSnapshot reads the fleet entities from SQLite and returns a

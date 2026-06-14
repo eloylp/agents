@@ -26,6 +26,8 @@ const (
 	defaultEventQueueBufferSize = 256
 	defaultMaxConcurrentAgents  = 4
 
+	defaultAttributionInstanceID = "default"
+
 	defaultProxyPath           = "/v1/messages"
 	defaultProxyTimeoutSeconds = 120
 )
@@ -57,6 +59,8 @@ func (c *Config) applyDefaults() {
 	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxDepth, 3)
 	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxFanout, 4)
 	setDefaultInt(&c.Daemon.Processor.Dispatch.DedupWindowSeconds, 300)
+
+	setDefault(&c.Daemon.Attribution.InstanceID, defaultAttributionInstanceID)
 
 	// daemon proxy defaults (only applied when proxy is enabled or path is set)
 	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
@@ -119,6 +123,8 @@ func (c *Config) normalize() {
 	// Log.
 	c.Daemon.Log.Level = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Level))
 	c.Daemon.Log.Format = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Format))
+	c.Daemon.Attribution.InstanceID = strings.TrimSpace(c.Daemon.Attribution.InstanceID)
+	c.Daemon.Attribution.SigningSecret = strings.TrimSpace(c.Daemon.Attribution.SigningSecret)
 
 	for i := range c.Daemon.SelfImprovement.FeedbackAuthorAllowlist {
 		c.Daemon.SelfImprovement.FeedbackAuthorAllowlist[i] = strings.ToLower(strings.TrimSpace(c.Daemon.SelfImprovement.FeedbackAuthorAllowlist[i]))

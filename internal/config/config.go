@@ -58,9 +58,17 @@ type DaemonConfig struct {
 	Log             LogConfig                `yaml:"log"`
 	HTTP            HTTPConfig               `yaml:"http"`
 	Processor       ProcessorConfig          `yaml:"processor"`
+	Attribution     AttributionConfig        `yaml:"attribution"`
 	SelfImprovement SelfImprovementConfig    `yaml:"self_improvement"`
 	AIBackends      map[string]fleet.Backend `yaml:"-"`
 	Proxy           ProxyConfig              `yaml:"proxy"`
+}
+
+// AttributionConfig controls public run-attribution metadata emitted into
+// agent-authored GitHub comments and commit trailers.
+type AttributionConfig struct {
+	SigningSecret string `yaml:"-"`
+	InstanceID    string `yaml:"instance_id"`
 }
 
 // SelfImprovementConfig controls deterministic capture of maintainer feedback

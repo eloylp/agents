@@ -107,11 +107,16 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	channels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer, st)
 	engine := workflow.NewEngine(st, cfg.Daemon.Processor, channels, logger)
+	engine.WithAttributionConfig(cfg.Daemon.Attribution)
 
 	memBackend := st.NewMemoryBackend()
 	engine.WithMemory(memBackend)
 
 	obs := observe.NewStore(st.DB())
+	obs.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: cfg.Daemon.Attribution.SigningSecret,
+		InstanceID:    cfg.Daemon.Attribution.InstanceID,
+	})
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)

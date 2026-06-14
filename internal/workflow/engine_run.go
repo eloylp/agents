@@ -124,20 +124,21 @@ func (e *Engine) runAgentResult(ctx context.Context, ev Event, agent fleet.Agent
 	guardrailVersionIDs := catalogGuardrailVersionIDs(guardrails)
 
 	rendered, err := ai.RenderAgentPrompt(agent, promptBody, skillsForRun, guardrails, ai.PromptContext{
-		Repo:                  ev.Repo.FullName,
-		Number:                ev.Number,
-		Backend:               backend,
-		EventKind:             ev.Kind,
-		Actor:                 ev.Actor,
-		Payload:               promptPayload,
-		Roster:                roster,
-		InvokedBy:             invokedBy,
-		Reason:                reason,
-		RootEventID:           rootEventID,
-		DispatchDepth:         dispatchDepth,
-		Memory:                existingMemory,
-		HasMemory:             memoryEnabled,
-		RunAttributionComment: attribution.HiddenComment(),
+		Repo:                        ev.Repo.FullName,
+		Number:                      ev.Number,
+		Backend:                     backend,
+		EventKind:                   ev.Kind,
+		Actor:                       ev.Actor,
+		Payload:                     promptPayload,
+		Roster:                      roster,
+		InvokedBy:                   invokedBy,
+		Reason:                      reason,
+		RootEventID:                 rootEventID,
+		DispatchDepth:               dispatchDepth,
+		Memory:                      existingMemory,
+		HasMemory:                   memoryEnabled,
+		RunAttributionComment:       attribution.HiddenCommentWithSignature(e.attribution.SigningSecret, e.attribution.InstanceID),
+		RunAttributionCommitTrailer: attribution.CommitAttributionTrailer(e.attribution.SigningSecret, e.attribution.InstanceID),
 	})
 	if err != nil {
 		return ai.Response{}, fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)

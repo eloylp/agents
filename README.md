@@ -33,6 +33,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 ## Features
 
 - **Three interfaces**: [web dashboard](docs/ui.md) (graph-first workflow designer, live event/trace/memory viewer), [MCP server](docs/mcp.md) (control the fleet from Claude Code, Cursor, Cline, or any MCP client), [REST API](docs/api.md) (scriptable; the dashboard runs on top of it).
+- **[Self-improving intelligence catalog](docs/self-improvement-feedback.md)**: mark review feedback with `/agents improve`; the daemon links it to signed run attribution, runs the catalog analyst, and presents editable prompt/skill/guardrail proposal bundles for human approval.
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
 - **[Observable](docs/ui.md)**: full event chain in realtime, from webhook receipt to runner to trace with tool-loop transcript, to facilitate prompt tuning.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure.

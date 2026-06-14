@@ -28,6 +28,9 @@ const (
 	envDispatchMaxFanout          = "AGENTS_DISPATCH_MAX_FANOUT"
 	envDispatchDedupWindowSeconds = "AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS"
 
+	envAttributionSigningSecret = "AGENTS_ATTRIBUTION_SIGNING_SECRET"
+	envAttributionInstanceID    = "AGENTS_INSTANCE_ID"
+
 	envProxyEnabled                = "AGENTS_PROXY_ENABLED"
 	envProxyPath                   = "AGENTS_PROXY_PATH"
 	envProxyUpstreamURL            = "AGENTS_PROXY_UPSTREAM_URL"
@@ -86,6 +89,8 @@ func (c *Config) applyEnvOverrides() error {
 	if err := applyPositiveIntEnv(envDispatchDedupWindowSeconds, &c.Daemon.Processor.Dispatch.DedupWindowSeconds); err != nil {
 		return err
 	}
+	applyStringEnv(envAttributionSigningSecret, &c.Daemon.Attribution.SigningSecret)
+	applyStringEnv(envAttributionInstanceID, &c.Daemon.Attribution.InstanceID)
 	if err := applyBoolEnv(envProxyEnabled, &c.Daemon.Proxy.Enabled); err != nil {
 		return err
 	}
