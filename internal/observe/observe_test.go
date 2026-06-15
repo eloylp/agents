@@ -693,8 +693,8 @@ func TestResolveRunAttributionExactMetadataRequiresWorkspaceMatch(t *testing.T) 
 	if got.Snapshot != nil {
 		t.Fatalf("Snapshot = %+v, want nil", got.Snapshot)
 	}
-	if !strings.Contains(got.Diagnostic, `metadata names unknown span "span-workspace-a"`) {
-		t.Fatalf("Diagnostic = %q, want unknown span", got.Diagnostic)
+	if !strings.Contains(got.Diagnostic, `metadata workspace "workspace-a" does not match query workspace "workspace-b"`) {
+		t.Fatalf("Diagnostic = %q, want workspace mismatch", got.Diagnostic)
 	}
 }
 
@@ -719,6 +719,133 @@ func TestResolveRunAttributionExactCommitTrailer(t *testing.T) {
 	}
 }
 
+func TestResolveRunAttributionSignedMetadata(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod-a",
+	})
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	attr := workflow.RunAttribution{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		SpanID: "span-signed", AgentID: "agent-1", AgentName: "coder",
+	}
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-signed", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: attr,
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		Body: attr.HiddenCommentWithSignature("secret", "prod-a"),
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-signed" {
+		t.Fatalf("Snapshot = %+v, want span-signed", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionSignedCommitTrailer(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod-a",
+	})
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	attr := workflow.RunAttribution{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		SpanID: "span-signed-trailer", AgentID: "agent-1", AgentName: "coder",
+	}
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-signed-trailer", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: attr,
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		CommitMessage: "fix: thing\n\n" + attr.CommitAttributionTrailer("secret", "prod-a") + "\nAgents-Run: span-signed-trailer\n",
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-signed-trailer" {
+		t.Fatalf("Snapshot = %+v, want span-signed-trailer", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionRejectsInvalidSignedMetadata(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod-a",
+	})
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	attr := workflow.RunAttribution{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		SpanID: "span-invalid", AgentID: "agent-1", AgentName: "coder",
+	}
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-invalid", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: attr,
+	})
+	badComment := strings.Replace(attr.HiddenCommentWithSignature("secret", "prod-a"), `"sig":"`, `"sig":"tampered`, 1)
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		Body: badComment,
+	})
+	if got.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("Confidence = %q, want unresolved", got.Confidence)
+	}
+	if got.Snapshot != nil {
+		t.Fatalf("Snapshot = %+v, want nil", got.Snapshot)
+	}
+	if !strings.Contains(got.Diagnostic, "invalid attribution signature") {
+		t.Fatalf("Diagnostic = %q, want invalid signature", got.Diagnostic)
+	}
+}
+
+func TestResolveRunAttributionRejectsCopiedSignedMetadataContext(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod-a",
+	})
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	attr := workflow.RunAttribution{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+		SpanID: "span-copied", AgentID: "agent-1", AgentName: "coder",
+	}
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-copied", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: attr,
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 99,
+		Body: attr.HiddenCommentWithSignature("secret", "prod-a"),
+	})
+	if got.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("Confidence = %q, want unresolved", got.Confidence)
+	}
+	if got.Snapshot != nil {
+		t.Fatalf("Snapshot = %+v, want nil", got.Snapshot)
+	}
+	if !strings.Contains(got.Diagnostic, "does not match query number") {
+		t.Fatalf("Diagnostic = %q, want query number mismatch", got.Diagnostic)
+	}
+}
+
 func TestResolveRunAttributionExactUnknownSpanDiagnostics(t *testing.T) {
 	t.Parallel()
 	s := testDB(t)
@@ -731,7 +858,7 @@ func TestResolveRunAttributionExactUnknownSpanDiagnostics(t *testing.T) {
 		{
 			name:       "metadata",
 			query:      observe.AttributionQuery{WorkspaceID: "default", Body: `<!-- agents-run: {"workspace":"default","span_id":"missing-span"} -->`},
-			diagnostic: `metadata names unknown span "missing-span"`,
+			diagnostic: `hidden comment 1 names unknown span "missing-span"`,
 		},
 		{
 			name:       "commit trailer",

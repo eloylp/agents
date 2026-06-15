@@ -2,7 +2,6 @@ package observe
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -63,17 +62,8 @@ var agentsRunCommentRE = regexp.MustCompile(`(?s)<!--\s*agents-run:\s*(\{.*?\})\
 
 func (s *Store) ResolveRunAttribution(q AttributionQuery) AttributionResolution {
 	workspaceID := fleet.NormalizeWorkspaceID(q.WorkspaceID)
-	if spanID := spanIDFromBody(q.Body); spanID != "" {
-		if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
-			return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}
-		}
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("metadata names unknown span %q", spanID)}
-	}
-	if spanID := spanIDFromCommitTrailers(q.CommitMessage); spanID != "" {
-		if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
-			return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}
-		}
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("commit trailer names unknown span %q", spanID)}
+	if resolved, ok := s.resolveExactAttribution(workspaceID, q); ok {
+		return resolved
 	}
 	matches := s.inferRunAttributions(workspaceID, q)
 	switch len(matches) {
@@ -86,21 +76,128 @@ func (s *Store) ResolveRunAttribution(q AttributionQuery) AttributionResolution 
 	}
 }
 
-func spanIDFromBody(body string) string {
-	m := agentsRunCommentRE.FindStringSubmatch(body)
-	if len(m) != 2 {
-		return ""
+func (s *Store) resolveExactAttribution(workspaceID string, q AttributionQuery) (AttributionResolution, bool) {
+	metas := s.extractAttributionMetadata(q)
+	if len(metas) == 0 {
+		if s.attributionVerifier.SigningSecret == "" {
+			if spanID := spanIDFromLegacyCommitTrailers(q.CommitMessage); spanID != "" {
+				if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
+					return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}, true
+				}
+				return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("commit trailer names unknown span %q", spanID)}, true
+			}
+		}
+		return AttributionResolution{}, false
 	}
-	var meta struct {
-		SpanID string `json:"span_id"`
+	var diagnostics []string
+	var firstUnknownSpan string
+	var firstExact *AttributionSnapshot
+	for _, candidate := range metas {
+		meta := candidate.meta
+		if err := workflow.VerifyPublicRunAttribution(meta, s.attributionVerifier.SigningSecret, s.attributionVerifier.InstanceID); err != nil {
+			diagnostic := fmt.Sprintf("%s: %v", candidate.source, err)
+			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			diagnostics = append(diagnostics, diagnostic)
+			continue
+		}
+		if err := attributionMetadataMatchesQuery(meta, workspaceID, q); err != nil {
+			diagnostic := fmt.Sprintf("%s: %v", candidate.source, err)
+			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			diagnostics = append(diagnostics, diagnostic)
+			continue
+		}
+		if snap, ok := s.runAttributionBySpan(fleet.NormalizeWorkspaceID(meta.WorkspaceID), meta.SpanID); ok {
+			if firstExact == nil {
+				snapCopy := snap
+				firstExact = &snapCopy
+			}
+			continue
+		}
+		if firstUnknownSpan == "" {
+			firstUnknownSpan = fmt.Sprintf("%s names unknown span %q", candidate.source, meta.SpanID)
+		}
 	}
-	if err := json.Unmarshal([]byte(m[1]), &meta); err != nil {
-		return ""
+	if firstExact != nil {
+		return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: firstExact}, true
 	}
-	return strings.TrimSpace(meta.SpanID)
+	if firstUnknownSpan != "" {
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: firstUnknownSpan}, true
+	}
+	if len(diagnostics) > 0 {
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: "no valid signed attribution metadata: " + strings.Join(diagnostics, "; ")}, true
+	}
+	return AttributionResolution{}, false
 }
 
-func spanIDFromCommitTrailers(message string) string {
+type attributionMetadataCandidate struct {
+	source string
+	meta   workflow.PublicRunAttribution
+}
+
+func (s *Store) extractAttributionMetadata(q AttributionQuery) []attributionMetadataCandidate {
+	var out []attributionMetadataCandidate
+	for i, m := range agentsRunCommentRE.FindAllStringSubmatch(q.Body, -1) {
+		if len(m) != 2 {
+			continue
+		}
+		meta, err := workflow.DecodePublicRunAttribution([]byte(m[1]))
+		if err != nil {
+			diagnostic := fmt.Sprintf("hidden comment %d: malformed attribution metadata: %v", i+1, err)
+			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			continue
+		}
+		out = append(out, attributionMetadataCandidate{
+			source: fmt.Sprintf("hidden comment %d", i+1),
+			meta:   meta,
+		})
+	}
+	for i, value := range signedCommitAttributionTrailers(q.CommitMessage) {
+		meta, err := workflow.DecodeCommitAttributionTrailer(value)
+		if err != nil {
+			diagnostic := fmt.Sprintf("commit attribution trailer %d: malformed attribution metadata: %v", i+1, err)
+			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			continue
+		}
+		out = append(out, attributionMetadataCandidate{
+			source: fmt.Sprintf("commit attribution trailer %d", i+1),
+			meta:   meta,
+		})
+	}
+	return out
+}
+
+func attributionMetadataMatchesQuery(meta workflow.PublicRunAttribution, workspaceID string, q AttributionQuery) error {
+	metaWorkspace := fleet.NormalizeWorkspaceID(meta.WorkspaceID)
+	if metaWorkspace != workspaceID {
+		return fmt.Errorf("metadata workspace %q does not match query workspace %q", metaWorkspace, workspaceID)
+	}
+	if q.RepoOwner != "" || q.RepoName != "" {
+		queryRepo := strings.ToLower(strings.Trim(strings.TrimSpace(q.RepoOwner)+"/"+strings.TrimSpace(q.RepoName), "/"))
+		if meta.Repo != "" && meta.Repo != queryRepo {
+			return fmt.Errorf("metadata repo %q does not match query repo %q", meta.Repo, queryRepo)
+		}
+	}
+	if q.IssueOrPRNumber > 0 && meta.IssueOrPRNumber > 0 && meta.IssueOrPRNumber != q.IssueOrPRNumber {
+		return fmt.Errorf("metadata issue/PR number %d does not match query number %d", meta.IssueOrPRNumber, q.IssueOrPRNumber)
+	}
+	return nil
+}
+
+func signedCommitAttributionTrailers(message string) []string {
+	var out []string
+	for _, line := range strings.Split(message, "\n") {
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(k), "Agents-Attribution") {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	return out
+}
+
+func spanIDFromLegacyCommitTrailers(message string) string {
 	var spanID string
 	for _, line := range strings.Split(message, "\n") {
 		k, v, ok := strings.Cut(line, ":")

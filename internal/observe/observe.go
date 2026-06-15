@@ -408,13 +408,14 @@ func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan workflow.TraceSte
 // It holds the SQLite database for persistent queries, SSE hubs for live
 // streaming, and the active-run tracker for ephemeral per-process state.
 type Store struct {
-	db         *sql.DB
-	stepMu     sync.Mutex
-	EventsSSE  *SSEHub
-	TracesSSE  *SSEHub
-	MemorySSE  *SSEHub
-	ActiveRuns *ActiveRuns
-	Runs       *RunRegistry
+	db                  *sql.DB
+	stepMu              sync.Mutex
+	attributionVerifier AttributionVerifierConfig
+	EventsSSE           *SSEHub
+	TracesSSE           *SSEHub
+	MemorySSE           *SSEHub
+	ActiveRuns          *ActiveRuns
+	Runs                *RunRegistry
 }
 
 // NewStore creates a Store. The db handle is required for all read/write
@@ -431,6 +432,17 @@ func NewStore(db *sql.DB) *Store {
 		ActiveRuns: &ActiveRuns{runs: make(map[string]int)},
 		Runs:       newRunRegistry(),
 	}
+}
+
+type AttributionVerifierConfig struct {
+	SigningSecret string
+	InstanceID    string
+}
+
+func (s *Store) WithAttributionVerifier(cfg AttributionVerifierConfig) {
+	cfg.SigningSecret = strings.TrimSpace(cfg.SigningSecret)
+	cfg.InstanceID = workflow.NormalizeAttributionInstanceID(cfg.InstanceID)
+	s.attributionVerifier = cfg
 }
 
 // ─── Query methods (read from SQLite) ────────────────────────────────────────

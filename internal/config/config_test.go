@@ -93,6 +93,8 @@ func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
 	t.Setenv("AGENTS_DISPATCH_MAX_DEPTH", "28")
 	t.Setenv("AGENTS_DISPATCH_MAX_FANOUT", "29")
 	t.Setenv("AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS", "30")
+	t.Setenv("AGENTS_ATTRIBUTION_SIGNING_SECRET", "signing-secret")
+	t.Setenv("AGENTS_INSTANCE_ID", "test-instance")
 	t.Setenv("AGENTS_PROXY_ENABLED", "true")
 	t.Setenv("AGENTS_PROXY_PATH", "/proxy/messages")
 	t.Setenv("AGENTS_PROXY_UPSTREAM_URL", "http://localhost:8001/v1")
@@ -132,6 +134,9 @@ func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
 		p.Dispatch.MaxFanout != 29 ||
 		p.Dispatch.DedupWindowSeconds != 30 {
 		t.Fatalf("processor overrides = %+v", p)
+	}
+	if got := cfg.Daemon.Attribution; got.SigningSecret != "signing-secret" || got.InstanceID != "test-instance" {
+		t.Fatalf("attribution overrides = %+v", got)
 	}
 	if p := cfg.Daemon.Proxy; !p.Enabled ||
 		p.Path != "/proxy/messages" ||

@@ -125,15 +125,26 @@ func TestRenderAgentPromptIncludesRunAttributionContract(t *testing.T) {
 		HeadSHA:         "abc123",
 		Branch:          "fix/example",
 	}.HiddenComment()
-	if want := `<!-- agents-run: {"workspace":"default","span_id":"span-1","agent_id":"agent-1"} -->`; comment != want {
+	if want := `<!-- agents-run: {"workspace":"default","repo":"owner/repo","number":42,"span_id":"span-1","agent_id":"agent-1","agent_name":"coder"} -->`; comment != want {
 		t.Fatalf("HiddenComment() = %q, want %q", comment, want)
 	}
+	trailer := workflow.RunAttribution{
+		WorkspaceID: "default",
+		RepoOwner:   "owner",
+		RepoName:    "repo",
+		SpanID:      "span-1",
+		AgentName:   "coder",
+	}.CommitAttributionTrailer("", "")
 	got := renderUser(t, fleet.Agent{Name: "coder"}, "Build.", nil, ai.PromptContext{
-		Repo: "owner/repo", Number: 42, RunAttributionComment: comment,
+		Repo:                        "owner/repo",
+		Number:                      42,
+		RunAttributionComment:       comment,
+		RunAttributionCommitTrailer: trailer,
 	})
 	for _, want := range []string{
 		"Run attribution metadata: " + comment,
 		"include that exact hidden HTML comment",
+		"For commits authored for this run, add this exact commit trailer: `" + trailer + "`",
 		"Agents-Run: <span_id>",
 		"Agents-Agent: <agent_name>",
 	} {
