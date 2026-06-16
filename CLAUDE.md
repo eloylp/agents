@@ -30,7 +30,7 @@ internal/
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   logging/                  # zerolog setup
-docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
+docs/                       # Long-form docs: quickstart, configuration, events, dispatch, API, local-models, security
 ```
 
 ## Config Model

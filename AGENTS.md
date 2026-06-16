@@ -113,7 +113,7 @@ When making common classes of changes, update all of these at once:
 | Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
 | Memory contract | `internal/workflow/engine.go` (memory load/persist around runs), `internal/store/memory*.go` (SQLite path), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
-| SQLite store schema | `internal/store/migrations/`, `internal/store/open.go`, `internal/store/snapshot_*.go`, `internal/store/*s.go` concept files, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
+| SQLite store schema | `internal/store/migrations/`, `internal/store/open.go`, `internal/store/snapshot_*.go`, `internal/store/*s.go` concept files, the per-domain handlers under `internal/daemon/{fleet,repos,config,runners}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
 | Token budget schema (`token_budgets` table) | `internal/store/migrations/`, `internal/store/budgets.go`, `internal/store/facade.go`, `internal/daemon/config/budgets.go`, `internal/daemon/config/config.go` (export/import), `internal/mcp/tools_budgets.go`, docs |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml`, these four should stay in sync |
