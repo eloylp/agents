@@ -43,6 +43,15 @@ type AttributionQuery struct {
 	HeadSHA         string
 	At              time.Time
 	Window          time.Duration
+
+	// Artifact ancestry fields for artifact-chain resolution.
+	// Set these when resolving attribution for a specific GitHub artifact.
+	CommentID           int64  // github_comment_id (issue_comment)
+	ReviewID            int64  // github_review_id (pull_request_review)
+	ReviewCommentID     int64  // github_review_comment_id (pull_request_review_comment id)
+	InReplyToID         int64  // in_reply_to_id from PR review comment
+	PullRequestReviewID int64  // pull_request_review_id from PR review comment
+	FilePath            string // file path for PR review comment context
 }
 
 type AttributionResolution struct {
@@ -58,22 +67,135 @@ const (
 	AttributionUnresolved = "unresolved"
 )
 
+// Attribution mode values describe how the span was resolved.
+const (
+	AttributionModeDirect            = "direct"
+	AttributionModeArtifactComment   = "artifact_comment"
+	AttributionModeArtifactParent    = "artifact_parent_comment"
+	AttributionModeArtifactReview    = "artifact_review"
+	AttributionModeArtifactPRContext = "artifact_pr_context"
+	AttributionModeCommitTrailer     = "commit_trailer"
+	AttributionModeInferred          = "inferred"
+	AttributionModeUnresolved        = "unresolved"
+)
+
+// selfImprovementInternalAgentNames lists internal analyst agent names that
+// should not be targeted by loose time-window inference. Exact attribution via
+// signed metadata or artifact ancestry is still accepted for these agents.
+var selfImprovementInternalAgentNames = map[string]bool{
+	"internal-catalog-analyst": true,
+}
+
 var agentsRunCommentRE = regexp.MustCompile(`(?s)<!--\s*agents-run:\s*(\{.*?\})\s*-->`)
 
 func (s *Store) ResolveRunAttribution(q AttributionQuery) AttributionResolution {
 	workspaceID := fleet.NormalizeWorkspaceID(q.WorkspaceID)
+
+	// 1. Direct signed metadata in the body (hidden comment or commit trailer).
 	if resolved, ok := s.resolveExactAttribution(workspaceID, q); ok {
 		return resolved
 	}
+
+	// 2–6. Artifact-chain walk for PR review comments and related artifacts.
+	if resolved, ok := s.resolveArtifactAttribution(workspaceID, q); ok {
+		return resolved
+	}
+
+	// 7. Conservative time-window inference; skip internal analyst agent runs.
 	matches := s.inferRunAttributions(workspaceID, q)
 	switch len(matches) {
 	case 0:
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "inferred", Diagnostic: "no matching run attribution snapshot"}
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: AttributionModeUnresolved, Diagnostic: "no matching run attribution snapshot"}
 	case 1:
-		return AttributionResolution{Confidence: AttributionInferred, Mode: "inferred", Snapshot: &matches[0]}
+		return AttributionResolution{Confidence: AttributionInferred, Mode: AttributionModeInferred, Snapshot: &matches[0]}
 	default:
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "inferred", Diagnostic: fmt.Sprintf("ambiguous run attribution: %d matches", len(matches))}
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: AttributionModeUnresolved, Diagnostic: fmt.Sprintf("ambiguous run attribution: %d matches", len(matches))}
 	}
+}
+
+// resolveArtifactAttribution walks the GitHub artifact ownership chain to
+// resolve attribution without requiring the human's comment to carry metadata.
+// Returns (resolution, true) when a definitive result is reached (including
+// ambiguous or unresolved results that should short-circuit further attempts).
+func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuery) (AttributionResolution, bool) {
+	if s.db == nil {
+		return AttributionResolution{}, false
+	}
+	owner := strings.TrimSpace(q.RepoOwner)
+	name := strings.TrimSpace(q.RepoName)
+	if owner == "" || name == "" {
+		return AttributionResolution{}, false
+	}
+
+	// Step 2: For pull_request_review_comment – check if the current comment
+	// itself has a stored artifact (i.e., it carried signed metadata).
+	if q.ReviewCommentID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactComment)
+		}
+	}
+
+	// Step 3: Parent review comment lookup via in_reply_to_id.
+	if q.InReplyToID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.InReplyToID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactParent)
+		}
+	}
+
+	// Step 4: Owning review lookup via pull_request_review_id.
+	if q.PullRequestReviewID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.PullRequestReviewID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactReview)
+		}
+	}
+
+	// Step 5: ReviewID direct lookup (for pull_request_review feedback).
+	if q.ReviewID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.ReviewID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactReview)
+		}
+	}
+
+	// Step 6: issue_comment artifact lookup.
+	if q.CommentID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactComment)
+		}
+	}
+
+	// Step 7: Conservative PR/thread context lookup – only if it yields exactly
+	// one artifact candidate with matching file + commit evidence.
+	if q.IssueOrPRNumber > 0 && (strings.TrimSpace(q.FilePath) != "" || strings.TrimSpace(q.HeadSHA) != "") {
+		candidates := s.store.RunAttributionArtifactsByPRContext(workspaceID, owner, name, q.IssueOrPRNumber, q.FilePath, q.HeadSHA)
+		switch len(candidates) {
+		case 0:
+			// No artifact candidates; fall through to inference.
+		case 1:
+			return s.artifactResolution(candidates[0], AttributionModeArtifactPRContext)
+		default:
+			return AttributionResolution{
+				Confidence: AttributionUnresolved,
+				Mode:       AttributionModeArtifactPRContext,
+				Diagnostic: fmt.Sprintf("ambiguous PR artifact context: %d candidates", len(candidates)),
+			}, true
+		}
+	}
+
+	return AttributionResolution{}, false
+}
+
+// artifactResolution loads the canonical run_attributions snapshot for the
+// span referenced by artifact a and returns an AttributionResolution.
+func (s *Store) artifactResolution(a RunAttributionArtifact, mode string) (AttributionResolution, bool) {
+	snap, ok := s.runAttributionBySpan(a.WorkspaceID, a.SpanID)
+	if !ok {
+		return AttributionResolution{
+			Confidence: AttributionUnresolved,
+			Mode:       mode,
+			Diagnostic: fmt.Sprintf("artifact references unknown span %q", a.SpanID),
+		}, true
+	}
+	return AttributionResolution{Confidence: AttributionExact, Mode: mode, Snapshot: &snap}, true
 }
 
 func (s *Store) resolveExactAttribution(workspaceID string, q AttributionQuery) (AttributionResolution, bool) {
@@ -82,9 +204,9 @@ func (s *Store) resolveExactAttribution(workspaceID string, q AttributionQuery) 
 		if s.attributionVerifier.SigningSecret == "" {
 			if spanID := spanIDFromLegacyCommitTrailers(q.CommitMessage); spanID != "" {
 				if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
-					return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}, true
+					return AttributionResolution{Confidence: AttributionExact, Mode: AttributionModeCommitTrailer, Snapshot: &snap}, true
 				}
-				return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("commit trailer names unknown span %q", spanID)}, true
+				return AttributionResolution{Confidence: AttributionUnresolved, Mode: AttributionModeCommitTrailer, Diagnostic: fmt.Sprintf("commit trailer names unknown span %q", spanID)}, true
 			}
 		}
 		return AttributionResolution{}, false
@@ -118,13 +240,13 @@ func (s *Store) resolveExactAttribution(workspaceID string, q AttributionQuery) 
 		}
 	}
 	if firstExact != nil {
-		return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: firstExact}, true
+		return AttributionResolution{Confidence: AttributionExact, Mode: AttributionModeDirect, Snapshot: firstExact}, true
 	}
 	if firstUnknownSpan != "" {
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: firstUnknownSpan}, true
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: AttributionModeDirect, Diagnostic: firstUnknownSpan}, true
 	}
 	if len(diagnostics) > 0 {
-		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: "no valid signed attribution metadata: " + strings.Join(diagnostics, "; ")}, true
+		return AttributionResolution{Confidence: AttributionUnresolved, Mode: AttributionModeDirect, Diagnostic: "no valid signed attribution metadata: " + strings.Join(diagnostics, "; ")}, true
 	}
 	return AttributionResolution{}, false
 }
@@ -302,9 +424,15 @@ func (s *Store) inferRunAttributions(workspaceID string, q AttributionQuery) []A
 	var out []AttributionSnapshot
 	for rows.Next() {
 		snap, err := scanAttribution(rows)
-		if err == nil {
-			out = append(out, snap)
+		if err != nil {
+			continue
 		}
+		// Exclude internal analyst agent runs from loose inference; they are
+		// only reachable via exact signed metadata or artifact ancestry.
+		if selfImprovementInternalAgentNames[strings.TrimSpace(snap.AgentName)] {
+			continue
+		}
+		out = append(out, snap)
 	}
 	return out
 }

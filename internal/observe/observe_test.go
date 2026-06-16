@@ -872,8 +872,12 @@ func TestResolveRunAttributionExactUnknownSpanDiagnostics(t *testing.T) {
 			if got.Confidence != observe.AttributionUnresolved {
 				t.Fatalf("Confidence = %q, want %q", got.Confidence, observe.AttributionUnresolved)
 			}
-			if got.Mode != "exact" {
-				t.Fatalf("Mode = %q, want exact", got.Mode)
+			wantMode := observe.AttributionModeDirect
+			if tc.name == "commit trailer" {
+				wantMode = observe.AttributionModeCommitTrailer
+			}
+			if got.Mode != wantMode {
+				t.Fatalf("Mode = %q, want %q", got.Mode, wantMode)
 			}
 			if got.Diagnostic != tc.diagnostic {
 				t.Fatalf("Diagnostic = %q, want %q", got.Diagnostic, tc.diagnostic)

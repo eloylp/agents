@@ -190,16 +190,18 @@ type webhookPullRequest struct {
 }
 
 type webhookComment struct {
-	ID        int64     `json:"id"`
-	HTMLURL   string    `json:"html_url"`
-	Body      string    `json:"body"`
-	Path      string    `json:"path"`
-	Line      int       `json:"line"`
-	Side      string    `json:"side"`
-	DiffHunk  string    `json:"diff_hunk"`
-	CommitID  string    `json:"commit_id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                  int64     `json:"id"`
+	HTMLURL             string    `json:"html_url"`
+	Body                string    `json:"body"`
+	Path                string    `json:"path"`
+	Line                int       `json:"line"`
+	Side                string    `json:"side"`
+	DiffHunk            string    `json:"diff_hunk"`
+	CommitID            string    `json:"commit_id"`
+	InReplyToID         int64     `json:"in_reply_to_id"`
+	PullRequestReviewID int64     `json:"pull_request_review_id"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type webhookReview struct {
@@ -426,6 +428,17 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		owner, name := splitRepo(repo.Name)
+		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
+			IssueOrPRNumber:  firstNonZero(prNumber(payload.Issue), payload.Issue.Number),
+			SourceType:       "issue_comment",
+			GitHubCommentID:  payload.Comment.ID,
+			GitHubDeliveryID: deliveryID,
+			SourceURL:        payload.Comment.HTMLURL,
+			AuthorLogin:      payload.Sender.Login,
+			GitHubCreatedAt:  zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt:  zeroNil(payload.Comment.UpdatedAt),
+		}, payload.Comment.Body, "")
 		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "issue_comment",
@@ -488,6 +501,18 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		owner, name := splitRepo(repo.Name)
+		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
+			IssueOrPRNumber:  payload.PullRequest.Number,
+			SourceType:       "pull_request_review",
+			GitHubReviewID:   payload.Review.ID,
+			GitHubDeliveryID: deliveryID,
+			SourceURL:        payload.Review.HTMLURL,
+			AuthorLogin:      payload.Sender.Login,
+			CommitSHA:        payload.Review.CommitID,
+			GitHubCreatedAt:  zeroNil(payload.Review.Submitted),
+			GitHubUpdatedAt:  zeroNil(payload.Review.Submitted),
+		}, payload.Review.Body, "")
 		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "pull_request_review",
@@ -553,21 +578,24 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 	if payload.Action == "edited" {
 		for _, repo := range repos {
 			h.captureFeedback(repo, feedbackCapture{
-				DeliveryID:      deliveryID,
-				SourceType:      "pull_request_review_comment",
-				Edited:          true,
-				Body:            payload.Comment.Body,
-				SourceURL:       payload.Comment.HTMLURL,
-				AuthorLogin:     payload.Sender.Login,
-				PRNumber:        payload.PullRequest.Number,
-				CommentID:       payload.Comment.ID,
-				FilePath:        payload.Comment.Path,
-				Line:            payload.Comment.Line,
-				Side:            payload.Comment.Side,
-				DiffHunk:        payload.Comment.DiffHunk,
-				CommitSHA:       payload.Comment.CommitID,
-				GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
-				GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+				DeliveryID:          deliveryID,
+				SourceType:          "pull_request_review_comment",
+				Edited:              true,
+				Body:                payload.Comment.Body,
+				SourceURL:           payload.Comment.HTMLURL,
+				AuthorLogin:         payload.Sender.Login,
+				PRNumber:            payload.PullRequest.Number,
+				CommentID:           payload.Comment.ID,
+				ReviewCommentID:     payload.Comment.ID,
+				InReplyToID:         payload.Comment.InReplyToID,
+				PullRequestReviewID: payload.Comment.PullRequestReviewID,
+				FilePath:            payload.Comment.Path,
+				Line:                payload.Comment.Line,
+				Side:                payload.Comment.Side,
+				DiffHunk:            payload.Comment.DiffHunk,
+				CommitSHA:           payload.Comment.CommitID,
+				GitHubCreatedAt:     zeroNil(payload.Comment.CreatedAt),
+				GitHubUpdatedAt:     zeroNil(payload.Comment.UpdatedAt),
 			})
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -576,21 +604,42 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		owner, name := splitRepo(repo.Name)
+		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
+			IssueOrPRNumber:       payload.PullRequest.Number,
+			SourceType:            "pull_request_review_comment",
+			GitHubCommentID:       payload.Comment.ID,
+			GitHubReviewID:        payload.Comment.PullRequestReviewID,
+			GitHubReviewCommentID: payload.Comment.ID,
+			GitHubParentCommentID: payload.Comment.InReplyToID,
+			GitHubDeliveryID:      deliveryID,
+			SourceURL:             payload.Comment.HTMLURL,
+			AuthorLogin:           payload.Sender.Login,
+			FilePath:              payload.Comment.Path,
+			Line:                  payload.Comment.Line,
+			Side:                  payload.Comment.Side,
+			CommitSHA:             payload.Comment.CommitID,
+			GitHubCreatedAt:       zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt:       zeroNil(payload.Comment.UpdatedAt),
+		}, payload.Comment.Body, "")
 		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
-			DeliveryID:      deliveryID,
-			SourceType:      "pull_request_review_comment",
-			Body:            payload.Comment.Body,
-			SourceURL:       payload.Comment.HTMLURL,
-			AuthorLogin:     payload.Sender.Login,
-			PRNumber:        payload.PullRequest.Number,
-			CommentID:       payload.Comment.ID,
-			FilePath:        payload.Comment.Path,
-			Line:            payload.Comment.Line,
-			Side:            payload.Comment.Side,
-			DiffHunk:        payload.Comment.DiffHunk,
-			CommitSHA:       payload.Comment.CommitID,
-			GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
-			GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+			DeliveryID:          deliveryID,
+			SourceType:          "pull_request_review_comment",
+			Body:                payload.Comment.Body,
+			SourceURL:           payload.Comment.HTMLURL,
+			AuthorLogin:         payload.Sender.Login,
+			PRNumber:            payload.PullRequest.Number,
+			CommentID:           payload.Comment.ID,
+			ReviewCommentID:     payload.Comment.ID,
+			InReplyToID:         payload.Comment.InReplyToID,
+			PullRequestReviewID: payload.Comment.PullRequestReviewID,
+			FilePath:            payload.Comment.Path,
+			Line:                payload.Comment.Line,
+			Side:                payload.Comment.Side,
+			DiffHunk:            payload.Comment.DiffHunk,
+			CommitSHA:           payload.Comment.CommitID,
+			GitHubCreatedAt:     zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt:     zeroNil(payload.Comment.UpdatedAt),
 		})
 		events = append(events, workflow.Event{
 			ID:          deliveryID,
@@ -611,23 +660,26 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 }
 
 type feedbackCapture struct {
-	DeliveryID      string
-	SourceType      string
-	Edited          bool
-	Body            string
-	SourceURL       string
-	AuthorLogin     string
-	IssueNumber     int
-	PRNumber        int
-	CommentID       int64
-	ReviewID        int64
-	FilePath        string
-	Line            int
-	Side            string
-	DiffHunk        string
-	CommitSHA       string
-	GitHubCreatedAt *time.Time
-	GitHubUpdatedAt *time.Time
+	DeliveryID          string
+	SourceType          string
+	Edited              bool
+	Body                string
+	SourceURL           string
+	AuthorLogin         string
+	IssueNumber         int
+	PRNumber            int
+	CommentID           int64
+	ReviewID            int64
+	ReviewCommentID     int64 // the review comment's own ID (pull_request_review_comment)
+	InReplyToID         int64 // in_reply_to_id from PR review comment
+	PullRequestReviewID int64 // pull_request_review_id from PR review comment
+	FilePath            string
+	Line                int
+	Side                string
+	DiffHunk            string
+	CommitSHA           string
+	GitHubCreatedAt     *time.Time
+	GitHubUpdatedAt     *time.Time
 }
 
 func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) (store.SelfImprovementFeedback, bool) {
@@ -646,13 +698,19 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) (store.Se
 	res := observe.AttributionResolution{Confidence: observe.AttributionUnresolved, Diagnostic: "run attribution resolver unavailable"}
 	if h.observe != nil {
 		res = h.observe.ResolveRunAttribution(observe.AttributionQuery{
-			Body:            in.Body,
-			WorkspaceID:     repo.WorkspaceID,
-			RepoOwner:       owner,
-			RepoName:        name,
-			IssueOrPRNumber: firstNonZero(in.PRNumber, in.IssueNumber),
-			HeadSHA:         in.CommitSHA,
-			At:              feedbackAt(in.GitHubUpdatedAt, in.GitHubCreatedAt),
+			Body:                in.Body,
+			WorkspaceID:         repo.WorkspaceID,
+			RepoOwner:           owner,
+			RepoName:            name,
+			IssueOrPRNumber:     firstNonZero(in.PRNumber, in.IssueNumber),
+			HeadSHA:             in.CommitSHA,
+			At:                  feedbackAt(in.GitHubUpdatedAt, in.GitHubCreatedAt),
+			CommentID:           in.CommentID,
+			ReviewID:            in.ReviewID,
+			ReviewCommentID:     in.ReviewCommentID,
+			InReplyToID:         in.InReplyToID,
+			PullRequestReviewID: in.PullRequestReviewID,
+			FilePath:            in.FilePath,
 		})
 	}
 	input := store.SelfImprovementFeedbackInput{
@@ -723,6 +781,20 @@ func improvementEvent(deliveryID string, repo fleet.Repo, feedback store.SelfImp
 			"feedback_event_id": feedback.ID,
 		},
 	}
+}
+
+// captureArtifact stores a run attribution artifact for a GitHub comment or
+// review when it contains valid signed agent metadata. It is called for every
+// incoming comment/review regardless of /agents improve presence, so the
+// daemon can resolve ancestry for inline feedback later.
+func (h *Handler) captureArtifact(repo fleet.Repo, owner, name string, in observe.RunAttributionArtifactInput, body, commitMessage string) {
+	if h.observe == nil {
+		return
+	}
+	in.WorkspaceID = repo.WorkspaceID
+	in.RepoOwner = owner
+	in.RepoName = name
+	h.observe.CaptureArtifact(in, body, commitMessage)
 }
 
 func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {

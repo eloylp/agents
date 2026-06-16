@@ -13,7 +13,7 @@ internal/
   config/                   # Normalized runtime config types, YAML parsing, defaults, validation (uses fleet)
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
-  observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
+  observe/                  # Observability store: events, traces, dispatch graph, SSE hubs; run attribution resolution including artifact-chain walk (attribution.go, attribution_artifacts.go)
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   runtime/                  # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup (env, scripts, paths)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
@@ -82,6 +82,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 ## Architecture Notes
 
 - Event-driven for label-based workflows; cron scheduler for autonomous agents. Both paths resolve to the same agent definitions.
+- **Persistence boundary.** New SQL belongs in `internal/store`, including migrations, row types, scans, query/update primitives, and transaction behavior. Existing SQL outside `internal/store` is legacy debt, not precedent; packages such as `internal/observe` should call typed store APIs for new persistence paths.
 - **Durable event queue.** Every `PushEvent` writes the event to the SQLite `event_queue` table before signalling workers via the in-memory channel, the DB is the source of truth, the channel is just a wake-up notification. At startup the daemon replays rows whose `completed_at` is still `NULL` so events buffered at shutdown (or runs interrupted mid-prompt) get a second chance instead of vanishing. An hourly cleanup loop prunes completed rows older than 7 days. `/runners` exposes the table, JOINed with traces, for inspection, deletion, and retry.
 - **Prompts and tokens on the trace.** Every completed run gzips its composed prompt onto the `traces` row and stores the AI CLI's reported token usage (input / output / cache_read / cache_write, Anthropic shape; OpenAI/Codex emits only input/output). Surfaced on `/runners`, `/traces`, and the UI's expanded panels. The prompt body is fetched lazily via `GET /traces/{span_id}/prompt` to keep listings cheap. Logs no longer carry a prompt hash, the trace span IS the audit record. Persistence is gated by daemon auth after first-user setup.
 - **Structured concurrency.** Every long-lived goroutine implements `Run(ctx) error`. The daemon arranges them in two errgroup tiers with separate contexts: producers (HTTP listener, cron scheduler) live on a context derived from the parent, they stop emitting webhooks and cron events as soon as the parent fires; consumers (worker pool, delivery dedup eviction, dispatch dedup eviction, queue cleanup, the one-shot replay step) live on a separate background context that outlives the producer tier so the queue can drain after producers stop. Phase boundaries are logged.
