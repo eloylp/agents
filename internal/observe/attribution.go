@@ -69,14 +69,14 @@ const (
 
 // Attribution mode values describe how the span was resolved.
 const (
-	AttributionModeDirect              = "direct"
-	AttributionModeArtifactComment     = "artifact_comment"
-	AttributionModeArtifactParent      = "artifact_parent_comment"
-	AttributionModeArtifactReview      = "artifact_review"
-	AttributionModeArtifactPRContext   = "artifact_pr_context"
-	AttributionModeCommitTrailer       = "commit_trailer"
-	AttributionModeInferred            = "inferred"
-	AttributionModeUnresolved          = "unresolved"
+	AttributionModeDirect            = "direct"
+	AttributionModeArtifactComment   = "artifact_comment"
+	AttributionModeArtifactParent    = "artifact_parent_comment"
+	AttributionModeArtifactReview    = "artifact_review"
+	AttributionModeArtifactPRContext = "artifact_pr_context"
+	AttributionModeCommitTrailer     = "commit_trailer"
+	AttributionModeInferred          = "inferred"
+	AttributionModeUnresolved        = "unresolved"
 )
 
 // selfImprovementInternalAgentNames lists internal analyst agent names that
@@ -149,21 +149,21 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 		}
 	}
 
-	// Also check the ReviewID directly (for pull_request_review feedback).
+	// Step 5: ReviewID direct lookup (for pull_request_review feedback).
 	if q.ReviewID > 0 {
 		if a, ok := s.runAttributionArtifactByReviewID(workspaceID, owner, name, q.ReviewID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactReview)
 		}
 	}
 
-	// Step 5: issue_comment artifact lookup.
+	// Step 6: issue_comment artifact lookup.
 	if q.CommentID > 0 {
 		if a, ok := s.runAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
 	}
 
-	// Step 6: Conservative PR/thread context lookup – only if it yields exactly
+	// Step 7: Conservative PR/thread context lookup – only if it yields exactly
 	// one artifact candidate with matching file + commit evidence.
 	if q.IssueOrPRNumber > 0 && (strings.TrimSpace(q.FilePath) != "" || strings.TrimSpace(q.HeadSHA) != "") {
 		candidates := s.runAttributionArtifactsByPRContext(workspaceID, owner, name, q.IssueOrPRNumber, q.FilePath, q.HeadSHA)

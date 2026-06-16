@@ -430,17 +430,14 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 	for _, repo := range repos {
 		owner, name := splitRepo(repo.Name)
 		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
-			WorkspaceID:     repo.WorkspaceID,
-			RepoOwner:       owner,
-			RepoName:        name,
-			IssueOrPRNumber: firstNonZero(prNumber(payload.Issue), payload.Issue.Number),
-			SourceType:      "issue_comment",
-			GitHubCommentID: payload.Comment.ID,
+			IssueOrPRNumber:  firstNonZero(prNumber(payload.Issue), payload.Issue.Number),
+			SourceType:       "issue_comment",
+			GitHubCommentID:  payload.Comment.ID,
 			GitHubDeliveryID: deliveryID,
-			SourceURL:       payload.Comment.HTMLURL,
-			AuthorLogin:     payload.Sender.Login,
-			GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
-			GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+			SourceURL:        payload.Comment.HTMLURL,
+			AuthorLogin:      payload.Sender.Login,
+			GitHubCreatedAt:  zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt:  zeroNil(payload.Comment.UpdatedAt),
 		}, payload.Comment.Body, "")
 		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
@@ -506,18 +503,15 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 	for _, repo := range repos {
 		owner, name := splitRepo(repo.Name)
 		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
-			WorkspaceID:     repo.WorkspaceID,
-			RepoOwner:       owner,
-			RepoName:        name,
-			IssueOrPRNumber: payload.PullRequest.Number,
-			SourceType:      "pull_request_review",
-			GitHubReviewID:  payload.Review.ID,
+			IssueOrPRNumber:  payload.PullRequest.Number,
+			SourceType:       "pull_request_review",
+			GitHubReviewID:   payload.Review.ID,
 			GitHubDeliveryID: deliveryID,
-			SourceURL:       payload.Review.HTMLURL,
-			AuthorLogin:     payload.Sender.Login,
-			CommitSHA:       payload.Review.CommitID,
-			GitHubCreatedAt: zeroNil(payload.Review.Submitted),
-			GitHubUpdatedAt: zeroNil(payload.Review.Submitted),
+			SourceURL:        payload.Review.HTMLURL,
+			AuthorLogin:      payload.Sender.Login,
+			CommitSHA:        payload.Review.CommitID,
+			GitHubCreatedAt:  zeroNil(payload.Review.Submitted),
+			GitHubUpdatedAt:  zeroNil(payload.Review.Submitted),
 		}, payload.Review.Body, "")
 		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
@@ -612,9 +606,6 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 	for _, repo := range repos {
 		owner, name := splitRepo(repo.Name)
 		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
-			WorkspaceID:           repo.WorkspaceID,
-			RepoOwner:             owner,
-			RepoName:              name,
 			IssueOrPRNumber:       payload.PullRequest.Number,
 			SourceType:            "pull_request_review_comment",
 			GitHubCommentID:       payload.Comment.ID,

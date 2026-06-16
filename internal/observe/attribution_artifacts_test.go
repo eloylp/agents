@@ -36,7 +36,7 @@ func TestCaptureArtifactStoredAndResolvedByReviewCommentID(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-rv", "default", "owner/repo", "coder", 55, at)
@@ -97,7 +97,7 @@ func TestCaptureArtifactResolvedViaInReplyToID(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-parent", "default", "owner/repo", "pr-reviewer", 77, at)
@@ -157,7 +157,7 @@ func TestCaptureArtifactResolvedViaReviewID(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-review", "default", "owner/repo", "pr-reviewer", 88, at)
@@ -213,7 +213,7 @@ func TestCaptureArtifactRejectsWrongRepoMetadata(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-other", "default", "other/repo", "coder", 10, at)
@@ -264,7 +264,7 @@ func TestCaptureArtifactRejectsInvalidSignature(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-sig", "default", "owner/repo", "coder", 20, at)
@@ -279,7 +279,7 @@ func TestCaptureArtifactRejectsInvalidSignature(t *testing.T) {
 	}
 	validComment := attr.HiddenCommentWithSignature("secret", "prod")
 	// Tamper the signature.
-	tampered := validComment[:len(validComment)-5] + "XXXXX" + validComment[len(validComment)-5+5:]
+	tampered := validComment[:len(validComment)-5] + "XXXXX"
 
 	s.CaptureArtifact(observe.RunAttributionArtifactInput{
 		WorkspaceID:           "default",
@@ -310,16 +310,16 @@ func TestArtifactAmbiguousPRContextReturnUnresolved(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-a1", "default", "owner/repo", "coder", 30, at)
 	seedSpan(t, s, "span-a2", "default", "owner/repo", "pr-reviewer", 30, at)
 
 	for _, tc := range []struct {
-		span    string
-		rcID    int64
-		agent   string
+		span  string
+		rcID  int64
+		agent string
 	}{
 		{"span-a1", 801, "coder"},
 		{"span-a2", 802, "pr-reviewer"},
@@ -425,7 +425,7 @@ func TestFeedbackStoredWithUnresolvedWhenNoOwnership(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 
 	// No spans seeded, no artifacts. Query should return unresolved gracefully.
@@ -451,7 +451,7 @@ func TestDirectSignedMetadataStillResolvesExact(t *testing.T) {
 	s := testDB(t)
 	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: "secret",
-		InstanceID:   "prod",
+		InstanceID:    "prod",
 	})
 	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	seedSpan(t, s, "span-direct", "default", "owner/repo", "coder", 11, at)
