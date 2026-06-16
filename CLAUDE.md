@@ -13,7 +13,7 @@ internal/
   config/                   # Normalized runtime config types, YAML parsing, defaults, validation (uses fleet)
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
-  observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
+  observe/                  # Observability store: events, traces, dispatch graph, SSE hubs; run attribution resolution including artifact-chain walk (attribution.go, attribution_artifacts.go)
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   runtime/                  # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup (env, scripts, paths)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection

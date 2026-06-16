@@ -65,23 +65,38 @@ trusted actor can be determined, marked comments are stored with
 
 ## Attribution
 
+You can write `/agents improve` in a normal inline PR review comment — no need
+to paste attribution metadata. The daemon walks GitHub artifact ownership to
+resolve attribution automatically:
+
+1. Direct signed metadata in the `/agents improve` body.
+2. Artifact lookup for the comment itself (if the agent posted on that line).
+3. Parent comment via `in_reply_to_id` — resolves when you reply to an agent
+   inline comment.
+4. Owning PR review via `pull_request_review_id` — resolves when the agent
+   submitted the review body with signed metadata.
+5. Conservative PR/file/commit context lookup — only when a single artifact
+   candidate matches.
+6. Time-window inference as a last resort, with internal analyst runs excluded.
+
 Exact attribution comes from the public `agents-run` hidden metadata or
 `Agents-Attribution` commit trailers that agents copy from the daemon-rendered
 runtime prompt. When `AGENTS_ATTRIBUTION_SIGNING_SECRET` is configured, exact
 attribution requires a valid daemon-signed metadata block. Unsigned, malformed,
 foreign-instance, wrong-repo/wrong-PR, or invalid-signature metadata is logged
-and ignored for exact attribution.
+and ignored for exact attribution. The daemon stores a reverse index
+(`run_attribution_artifacts`) of every signed GitHub artifact it observes, so
+it can resolve ancestry across comment threads even when the human comment does
+not carry metadata.
 
 Authorized feedback is still stored when attribution is inferred or unresolved,
 but the analyst does not receive untrusted span, agent, prompt, skill, or
-guardrail fields as exact attribution. If exact attribution is unavailable, the
-resolver may infer from repo, PR/issue number, commit SHA, and time window.
-Inferred and unresolved feedback are still valuable evidence, but the analyst
-must be more cautious and ask for clarification when the target catalog asset is
-unclear.
+guardrail fields as exact attribution. Inferred and unresolved feedback are
+still valuable evidence, but the analyst must be more cautious and ask for
+clarification when the target catalog asset is unclear.
 
 See [run-attribution.md](run-attribution.md) for the metadata format, signing
-behavior, and secret-rotation implications.
+behavior, artifact ancestry resolution, and secret-rotation implications.
 
 ## Analysis
 
