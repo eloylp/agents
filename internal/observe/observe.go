@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/fleet"
+	storepkg "github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -409,6 +410,7 @@ func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan workflow.TraceSte
 // streaming, and the active-run tracker for ephemeral per-process state.
 type Store struct {
 	db                  *sql.DB
+	store               *storepkg.Store
 	stepMu              sync.Mutex
 	attributionVerifier AttributionVerifierConfig
 	EventsSSE           *SSEHub
@@ -426,6 +428,7 @@ func NewStore(db *sql.DB) *Store {
 	}
 	return &Store{
 		db:         db,
+		store:      storepkg.New(db),
 		EventsSSE:  NewSSEHub(64),
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),

@@ -130,35 +130,35 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 	// Step 2: For pull_request_review_comment – check if the current comment
 	// itself has a stored artifact (i.e., it carried signed metadata).
 	if q.ReviewCommentID > 0 {
-		if a, ok := s.runAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
+		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
 	}
 
 	// Step 3: Parent review comment lookup via in_reply_to_id.
 	if q.InReplyToID > 0 {
-		if a, ok := s.runAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.InReplyToID); ok {
+		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.InReplyToID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactParent)
 		}
 	}
 
 	// Step 4: Owning review lookup via pull_request_review_id.
 	if q.PullRequestReviewID > 0 {
-		if a, ok := s.runAttributionArtifactByReviewID(workspaceID, owner, name, q.PullRequestReviewID); ok {
+		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.PullRequestReviewID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactReview)
 		}
 	}
 
 	// Step 5: ReviewID direct lookup (for pull_request_review feedback).
 	if q.ReviewID > 0 {
-		if a, ok := s.runAttributionArtifactByReviewID(workspaceID, owner, name, q.ReviewID); ok {
+		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.ReviewID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactReview)
 		}
 	}
 
 	// Step 6: issue_comment artifact lookup.
 	if q.CommentID > 0 {
-		if a, ok := s.runAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
+		if a, ok := s.store.RunAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
 	}
@@ -166,7 +166,7 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 	// Step 7: Conservative PR/thread context lookup – only if it yields exactly
 	// one artifact candidate with matching file + commit evidence.
 	if q.IssueOrPRNumber > 0 && (strings.TrimSpace(q.FilePath) != "" || strings.TrimSpace(q.HeadSHA) != "") {
-		candidates := s.runAttributionArtifactsByPRContext(workspaceID, owner, name, q.IssueOrPRNumber, q.FilePath, q.HeadSHA)
+		candidates := s.store.RunAttributionArtifactsByPRContext(workspaceID, owner, name, q.IssueOrPRNumber, q.FilePath, q.HeadSHA)
 		switch len(candidates) {
 		case 0:
 			// No artifact candidates; fall through to inference.

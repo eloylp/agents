@@ -98,6 +98,7 @@ These constraints are load-bearing. Read them before changing the listed areas.
 - **Model pinning safety.** Config may contain pinned models that become unavailable after discovery. These agents are treated as orphaned in diagnostics/UI and fail fast at runtime until remapped or cleared.
 - **Dispatch validation is belt-and-braces.** `can_dispatch` is validated at config load time (targets must exist, no self-reference, targets require `description`). Runtime validation in `internal/workflow/dispatch.go` enforces the same invariants again so config-only checks can't be bypassed by agent-generated dispatch requests.
 - **Webhook HMAC verification runs before any parsing.** Don't read the body before verifying the signature.
+- **New SQL belongs in `internal/store`.** The store package owns migrations, row types, scans, query/update primitives, and transaction behavior for new persistence work. SQL that already exists outside `internal/store` is legacy debt, not a pattern to extend; callers in packages like `internal/observe` should use typed store APIs for new tables and queries.
 
 ## Editing checklist
 
