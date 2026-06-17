@@ -29,6 +29,9 @@ type SelfImprovementFeedback struct {
 	SourceType                string     `json:"source_type"`
 	GitHubCommentID           int64      `json:"github_comment_id,omitempty"`
 	GitHubReviewID            int64      `json:"github_review_id,omitempty"`
+	GitHubReviewCommentID     int64      `json:"github_review_comment_id,omitempty"`
+	GitHubParentCommentID     int64      `json:"github_parent_comment_id,omitempty"`
+	GitHubPullRequestReviewID int64      `json:"github_pull_request_review_id,omitempty"`
 	GitHubDeliveryID          string     `json:"github_delivery_id,omitempty"`
 	SourceURL                 string     `json:"source_url"`
 	AuthorLogin               string     `json:"author_login"`
@@ -64,6 +67,9 @@ type SelfImprovementFeedbackInput struct {
 	SourceType                string
 	GitHubCommentID           int64
 	GitHubReviewID            int64
+	GitHubReviewCommentID     int64
+	GitHubParentCommentID     int64
+	GitHubPullRequestReviewID int64
 	GitHubDeliveryID          string
 	SourceURL                 string
 	AuthorLogin               string
@@ -203,13 +209,17 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	_, err := db.Exec(
 		`INSERT INTO self_improvement_feedback (
 			workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+			github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 			github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 			raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 			github_updated_at, linked_span_id, linked_event_id, linked_agent_id, linked_agent_name,
 			linked_prompt_version_id, linked_skill_version_ids, linked_guardrail_version_ids,
 			link_confidence, link_diagnostics, status
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(workspace_id, source_type, github_comment_id, github_review_id, tag) DO UPDATE SET
+			github_review_comment_id=excluded.github_review_comment_id,
+			github_parent_comment_id=excluded.github_parent_comment_id,
+			github_pull_request_review_id=excluded.github_pull_request_review_id,
 			github_delivery_id=excluded.github_delivery_id,
 			source_url=excluded.source_url,
 			author_login=excluded.author_login,
@@ -238,7 +248,8 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 				ELSE self_improvement_feedback.status
 			END`,
 		workspaceID, strings.TrimSpace(in.RepoOwner), strings.TrimSpace(in.RepoName), strings.TrimSpace(in.SourceType),
-		in.GitHubCommentID, in.GitHubReviewID, strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL),
+		in.GitHubCommentID, in.GitHubReviewID, in.GitHubReviewCommentID, in.GitHubParentCommentID,
+		in.GitHubPullRequestReviewID, strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL),
 		strings.TrimSpace(in.AuthorLogin), boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, tag,
 		strings.TrimSpace(in.FilePath), in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA),
 		in.GitHubCreatedAt, in.GitHubUpdatedAt, strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
@@ -251,6 +262,7 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	}
 	row := db.QueryRow(
 		`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+			github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 			github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 			raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 			github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -271,6 +283,9 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	}
 	res, err := db.Exec(
 		`UPDATE self_improvement_feedback SET
+			github_review_comment_id=?,
+			github_parent_comment_id=?,
+			github_pull_request_review_id=?,
 			github_delivery_id=?,
 			source_url=?,
 			author_login=?,
@@ -286,6 +301,7 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 			github_updated_at=?,
 			status=?
 		WHERE workspace_id=? AND source_type=? AND github_comment_id=? AND github_review_id=? AND tag=?`,
+		in.GitHubReviewCommentID, in.GitHubParentCommentID, in.GitHubPullRequestReviewID,
 		strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin),
 		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, strings.TrimSpace(in.FilePath),
 		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubUpdatedAt,
@@ -316,6 +332,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 	case allWorkspaces && status == "":
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -328,6 +345,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 	case allWorkspaces:
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -341,6 +359,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 	case status == "":
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -354,6 +373,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 	default:
 		rows, err = db.Query(
 			`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+				github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 				github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 				raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 				github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -383,6 +403,7 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, error) {
 	row := db.QueryRow(
 		`SELECT id, workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+			github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
 			github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
 			raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
 			github_updated_at, ingested_at, linked_span_id, linked_event_id, linked_agent_id,
@@ -674,6 +695,7 @@ func scanSelfImprovementFeedback(row selfImprovementScanner) (SelfImprovementFee
 	var skillIDs, guardrailIDs string
 	if err := row.Scan(
 		&ev.ID, &ev.WorkspaceID, &ev.RepoOwner, &ev.RepoName, &ev.SourceType, &ev.GitHubCommentID, &ev.GitHubReviewID,
+		&ev.GitHubReviewCommentID, &ev.GitHubParentCommentID, &ev.GitHubPullRequestReviewID,
 		&ev.GitHubDeliveryID, &ev.SourceURL, &ev.AuthorLogin, &authorized, &ev.IssueNumber, &ev.PRNumber,
 		&ev.RawBody, &ev.Tag, &ev.FilePath, &ev.Line, &ev.Side, &ev.DiffHunk, &ev.CommitSHA, &ev.GitHubCreatedAt,
 		&ev.GitHubUpdatedAt, &ev.IngestedAt, &ev.LinkedSpanID, &ev.LinkedEventID, &ev.LinkedAgentID,
@@ -695,6 +717,7 @@ func recommendationSelectSQL() string {
 		r.proposed_patch, r.proposed_new_body, r.analyzer_prompt_ref,
 		r.analyzer_prompt_version_id, r.structured_output, r.error, r.decision_reason, r.created_at, r.updated_at,
 		f.id, f.workspace_id, f.repo_owner, f.repo_name, f.source_type, f.github_comment_id, f.github_review_id,
+		f.github_review_comment_id, f.github_parent_comment_id, f.github_pull_request_review_id,
 		f.github_delivery_id, f.source_url, f.author_login, f.author_authorized, f.issue_number, f.pr_number,
 		f.raw_body, f.tag, f.file_path, f.line, f.side, f.diff_hunk, f.commit_sha, f.github_created_at,
 		f.github_updated_at, f.ingested_at, f.linked_span_id, f.linked_event_id, f.linked_agent_id,
@@ -721,7 +744,9 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&rec.ProposedPatch, &rec.ProposedNewBody, &rec.AnalyzerPromptRef,
 		&rec.AnalyzerPromptVersionID, &structured, &rec.Error, &rec.DecisionReason, &rec.CreatedAt, &rec.UpdatedAt,
 		&feedback.ID, &feedback.WorkspaceID, &feedback.RepoOwner, &feedback.RepoName, &feedback.SourceType,
-		&feedback.GitHubCommentID, &feedback.GitHubReviewID, &feedback.GitHubDeliveryID, &feedback.SourceURL,
+		&feedback.GitHubCommentID, &feedback.GitHubReviewID, &feedback.GitHubReviewCommentID,
+		&feedback.GitHubParentCommentID, &feedback.GitHubPullRequestReviewID,
+		&feedback.GitHubDeliveryID, &feedback.SourceURL,
 		&feedback.AuthorLogin, &authorized, &feedback.IssueNumber, &feedback.PRNumber, &feedback.RawBody,
 		&feedback.Tag, &feedback.FilePath, &feedback.Line, &feedback.Side, &feedback.DiffHunk,
 		&feedback.CommitSHA, &feedback.GitHubCreatedAt, &feedback.GitHubUpdatedAt, &feedback.IngestedAt,

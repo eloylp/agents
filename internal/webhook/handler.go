@@ -213,6 +213,13 @@ type webhookReview struct {
 	Submitted time.Time `json:"submitted_at"`
 }
 
+type webhookCommit struct {
+	ID        string    `json:"id"`
+	Message   string    `json:"message"`
+	URL       string    `json:"url"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // ─── event-type handlers ──────────────────────────────────────────────────────
 
 // handleIssuesEvent handles X-GitHub-Event: issues.
@@ -714,30 +721,33 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) (store.Se
 		})
 	}
 	input := store.SelfImprovementFeedbackInput{
-		WorkspaceID:      repo.WorkspaceID,
-		RepoOwner:        owner,
-		RepoName:         name,
-		SourceType:       in.SourceType,
-		GitHubCommentID:  in.CommentID,
-		GitHubReviewID:   in.ReviewID,
-		GitHubDeliveryID: in.DeliveryID,
-		SourceURL:        in.SourceURL,
-		AuthorLogin:      in.AuthorLogin,
-		AuthorAuthorized: authorized,
-		IssueNumber:      in.IssueNumber,
-		PRNumber:         in.PRNumber,
-		RawBody:          in.Body,
-		Tag:              store.FeedbackTag,
-		FilePath:         in.FilePath,
-		Line:             in.Line,
-		Side:             in.Side,
-		DiffHunk:         in.DiffHunk,
-		CommitSHA:        in.CommitSHA,
-		GitHubCreatedAt:  in.GitHubCreatedAt,
-		GitHubUpdatedAt:  in.GitHubUpdatedAt,
-		LinkConfidence:   res.Confidence,
-		LinkDiagnostics:  res.Diagnostic,
-		Status:           status,
+		WorkspaceID:               repo.WorkspaceID,
+		RepoOwner:                 owner,
+		RepoName:                  name,
+		SourceType:                in.SourceType,
+		GitHubCommentID:           in.CommentID,
+		GitHubReviewID:            in.ReviewID,
+		GitHubReviewCommentID:     in.ReviewCommentID,
+		GitHubParentCommentID:     in.InReplyToID,
+		GitHubPullRequestReviewID: in.PullRequestReviewID,
+		GitHubDeliveryID:          in.DeliveryID,
+		SourceURL:                 in.SourceURL,
+		AuthorLogin:               in.AuthorLogin,
+		AuthorAuthorized:          authorized,
+		IssueNumber:               in.IssueNumber,
+		PRNumber:                  in.PRNumber,
+		RawBody:                   in.Body,
+		Tag:                       store.FeedbackTag,
+		FilePath:                  in.FilePath,
+		Line:                      in.Line,
+		Side:                      in.Side,
+		DiffHunk:                  in.DiffHunk,
+		CommitSHA:                 in.CommitSHA,
+		GitHubCreatedAt:           in.GitHubCreatedAt,
+		GitHubUpdatedAt:           in.GitHubUpdatedAt,
+		LinkConfidence:            res.Confidence,
+		LinkDiagnostics:           res.Diagnostic,
+		Status:                    status,
 	}
 	if res.Snapshot != nil {
 		input.LinkedSpanID = res.Snapshot.SpanID
@@ -801,26 +811,29 @@ func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {
 	owner, name := splitRepo(repo.Name)
 	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
 	ignored, err := h.store.IgnoreSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
-		WorkspaceID:      repo.WorkspaceID,
-		RepoOwner:        owner,
-		RepoName:         name,
-		SourceType:       in.SourceType,
-		GitHubCommentID:  in.CommentID,
-		GitHubReviewID:   in.ReviewID,
-		GitHubDeliveryID: in.DeliveryID,
-		SourceURL:        in.SourceURL,
-		AuthorLogin:      in.AuthorLogin,
-		AuthorAuthorized: authorized,
-		IssueNumber:      in.IssueNumber,
-		PRNumber:         in.PRNumber,
-		RawBody:          in.Body,
-		Tag:              store.FeedbackTag,
-		FilePath:         in.FilePath,
-		Line:             in.Line,
-		Side:             in.Side,
-		DiffHunk:         in.DiffHunk,
-		CommitSHA:        in.CommitSHA,
-		GitHubUpdatedAt:  in.GitHubUpdatedAt,
+		WorkspaceID:               repo.WorkspaceID,
+		RepoOwner:                 owner,
+		RepoName:                  name,
+		SourceType:                in.SourceType,
+		GitHubCommentID:           in.CommentID,
+		GitHubReviewID:            in.ReviewID,
+		GitHubReviewCommentID:     in.ReviewCommentID,
+		GitHubParentCommentID:     in.InReplyToID,
+		GitHubPullRequestReviewID: in.PullRequestReviewID,
+		GitHubDeliveryID:          in.DeliveryID,
+		SourceURL:                 in.SourceURL,
+		AuthorLogin:               in.AuthorLogin,
+		AuthorAuthorized:          authorized,
+		IssueNumber:               in.IssueNumber,
+		PRNumber:                  in.PRNumber,
+		RawBody:                   in.Body,
+		Tag:                       store.FeedbackTag,
+		FilePath:                  in.FilePath,
+		Line:                      in.Line,
+		Side:                      in.Side,
+		DiffHunk:                  in.DiffHunk,
+		CommitSHA:                 in.CommitSHA,
+		GitHubUpdatedAt:           in.GitHubUpdatedAt,
 	})
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -922,6 +935,7 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 	var payload struct {
 		Ref        string            `json:"ref"`
 		After      string            `json:"after"`
+		Commits    []webhookCommit   `json:"commits"`
 		Repository webhookRepository `json:"repository"`
 		Sender     webhookSender     `json:"sender"`
 	}
@@ -952,6 +966,18 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		owner, name := splitRepo(repo.Name)
+		for _, commit := range payload.Commits {
+			h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
+				SourceType:       "commit",
+				GitHubDeliveryID: deliveryID,
+				SourceURL:        commit.URL,
+				AuthorLogin:      payload.Sender.Login,
+				CommitSHA:        commit.ID,
+				GitHubCreatedAt:  zeroNil(commit.Timestamp),
+				GitHubUpdatedAt:  zeroNil(commit.Timestamp),
+			}, "", commit.Message)
+		}
 		events = append(events, workflow.Event{
 			ID:          deliveryID,
 			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),

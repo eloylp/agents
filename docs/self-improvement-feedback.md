@@ -70,14 +70,16 @@ to paste attribution metadata. The daemon walks GitHub artifact ownership to
 resolve attribution automatically:
 
 1. Direct signed metadata in the `/agents improve` body.
-2. Artifact lookup for the comment itself (if the agent posted on that line).
+2. For diff-line review comments, the GitHub `commit_id` resolves through a
+   signed commit artifact captured from a push webhook.
 3. Parent comment via `in_reply_to_id` — resolves when you reply to an agent
    inline comment.
 4. Owning PR review via `pull_request_review_id` — resolves when the agent
    submitted the review body with signed metadata.
-5. Conservative PR/file/commit context lookup — only when a single artifact
+5. Artifact lookup for the comment itself.
+6. Conservative PR/file/commit context lookup — only when a single artifact
    candidate matches.
-6. Time-window inference as a last resort, with internal analyst runs excluded.
+7. Time-window inference as a last resort, with internal analyst runs excluded.
 
 Exact attribution comes from the public `agents-run` hidden metadata or
 `Agents-Attribution` commit trailers that agents copy from the daemon-rendered
@@ -88,6 +90,12 @@ and ignored for exact attribution. The daemon stores a reverse index
 (`run_attribution_artifacts`) of every signed GitHub artifact it observes, so
 it can resolve ancestry across comment threads even when the human comment does
 not carry metadata.
+
+Push webhooks also scan commit messages for signed `Agents-Attribution`
+trailers. For inline feedback on a PR diff, this lets the daemon map the
+commented commit SHA back to the exact run that authored the code under review.
+Unsigned or untracked commits stay unresolved with an explicit diagnostic rather
+than falling through to a loose code-ownership guess.
 
 Authorized feedback is still stored when attribution is inferred or unresolved,
 but the analyst does not receive untrusted span, agent, prompt, skill, or

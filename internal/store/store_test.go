@@ -149,8 +149,11 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		WorkspaceID:               "team-a",
 		RepoOwner:                 "owner",
 		RepoName:                  "repo",
-		SourceType:                "issue_comment",
+		SourceType:                "pull_request_review_comment",
 		GitHubCommentID:           123,
+		GitHubReviewCommentID:     123,
+		GitHubParentCommentID:     99,
+		GitHubPullRequestReviewID: 456,
 		GitHubDeliveryID:          "delivery-1",
 		SourceURL:                 "https://github.com/owner/repo/issues/7#issuecomment-123",
 		AuthorLogin:               "maintainer",
@@ -175,18 +178,21 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 	}
 
 	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
-		WorkspaceID:      "team-a",
-		RepoOwner:        "owner",
-		RepoName:         "repo",
-		SourceType:       "issue_comment",
-		GitHubCommentID:  123,
-		GitHubDeliveryID: "delivery-2",
-		AuthorLogin:      "maintainer",
-		AuthorAuthorized: true,
-		IssueNumber:      7,
-		RawBody:          "edited /agents improve",
-		LinkConfidence:   "unresolved",
-		LinkDiagnostics:  "no matching run attribution snapshot",
+		WorkspaceID:               "team-a",
+		RepoOwner:                 "owner",
+		RepoName:                  "repo",
+		SourceType:                "pull_request_review_comment",
+		GitHubCommentID:           123,
+		GitHubReviewCommentID:     123,
+		GitHubParentCommentID:     99,
+		GitHubPullRequestReviewID: 456,
+		GitHubDeliveryID:          "delivery-2",
+		AuthorLogin:               "maintainer",
+		AuthorAuthorized:          true,
+		IssueNumber:               7,
+		RawBody:                   "edited /agents improve",
+		LinkConfidence:            "unresolved",
+		LinkDiagnostics:           "no matching run attribution snapshot",
 	}); err != nil {
 		t.Fatalf("update feedback: %v", err)
 	}
@@ -204,6 +210,9 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 	}
 	if got.LinkedSpanID != "" || got.LinkConfidence != "unresolved" {
 		t.Fatalf("updated attribution = %+v, want unresolved with no linked span", got)
+	}
+	if got.GitHubReviewCommentID != 123 || got.GitHubParentCommentID != 99 || got.GitHubPullRequestReviewID != 456 {
+		t.Fatalf("feedback ancestry = (%d,%d,%d), want (123,99,456)", got.GitHubReviewCommentID, got.GitHubParentCommentID, got.GitHubPullRequestReviewID)
 	}
 }
 

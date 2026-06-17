@@ -206,6 +206,82 @@ func TestCaptureArtifactResolvedViaReviewID(t *testing.T) {
 	}
 }
 
+func TestCaptureCommitArtifactResolvesReviewCommentCommitID(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod",
+	})
+	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	seedSpan(t, s, "span-commit", "default", "owner/repo", "coder", 90, at)
+
+	attr := workflow.RunAttribution{
+		WorkspaceID: "default",
+		RepoOwner:   "owner",
+		RepoName:    "repo",
+		SpanID:      "span-commit",
+		AgentName:   "coder",
+	}
+	commitMessage := "fix http handler\n\n" + attr.CommitAttributionTrailer("secret", "prod")
+	s.CaptureArtifact(observe.RunAttributionArtifactInput{
+		WorkspaceID:     "default",
+		RepoOwner:       "owner",
+		RepoName:        "repo",
+		SourceType:      "commit",
+		CommitSHA:       "abc123",
+		AuthorLogin:     "coder",
+		SourceURL:       "https://github.com/owner/repo/commit/abc123",
+		GitHubUpdatedAt: &at,
+	}, "", commitMessage)
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID:     "default",
+		RepoOwner:       "owner",
+		RepoName:        "repo",
+		IssueOrPRNumber: 90,
+		ReviewCommentID: 700,
+		HeadSHA:         "abc123",
+		Body:            "/agents improve http handlers should be per method",
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want exact; diagnostic: %s", got.Confidence, got.Diagnostic)
+	}
+	if got.Mode != observe.AttributionModeCommitArtifact {
+		t.Fatalf("Mode = %q, want %q", got.Mode, observe.AttributionModeCommitArtifact)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-commit" {
+		t.Fatalf("Snapshot.SpanID want span-commit, got %v", got.Snapshot)
+	}
+}
+
+func TestReviewCommentUnsignedCommitReturnsClearDiagnostic(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	at := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	seedSpan(t, s, "span-inferred", "default", "owner/repo", "coder", 91, at)
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID:     "default",
+		RepoOwner:       "owner",
+		RepoName:        "repo",
+		IssueOrPRNumber: 91,
+		ReviewCommentID: 701,
+		HeadSHA:         "unsigned123",
+		At:              at.Add(time.Second),
+		Body:            "/agents improve this diff line",
+	})
+	if got.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("Confidence = %q, want unresolved", got.Confidence)
+	}
+	if got.Mode != observe.AttributionModeCommitArtifact {
+		t.Fatalf("Mode = %q, want %q", got.Mode, observe.AttributionModeCommitArtifact)
+	}
+	if got.Diagnostic != "commented commit has no signed agent attribution" {
+		t.Fatalf("Diagnostic = %q, want unsigned commit diagnostic", got.Diagnostic)
+	}
+}
+
 // TestCaptureArtifactRejectsWrongRepoMetadata verifies that signed metadata
 // from a different repo is rejected and not stored as an authoritative artifact.
 func TestCaptureArtifactRejectsWrongRepoMetadata(t *testing.T) {

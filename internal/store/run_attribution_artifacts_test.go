@@ -60,6 +60,14 @@ func TestRunAttributionArtifactUpsertAndLookups(t *testing.T) {
 			GitHubCommentID: 3001,
 			SpanID:          "span-issue",
 		},
+		{
+			WorkspaceID: "default",
+			RepoOwner:   "owner",
+			RepoName:    "repo",
+			SourceType:  "commit",
+			CommitSHA:   "def456",
+			SpanID:      "span-commit",
+		},
 	}
 	for _, in := range inputs {
 		if err := st.UpsertRunAttributionArtifact(in); err != nil {
@@ -95,6 +103,13 @@ func TestRunAttributionArtifactUpsertAndLookups(t *testing.T) {
 				return st.RunAttributionArtifactByCommentID("default", "owner", "repo", "issue_comment", 3001)
 			},
 			want: "span-issue",
+		},
+		{
+			name: "commit sha",
+			lookup: func() (store.RunAttributionArtifact, bool) {
+				return st.RunAttributionArtifactByCommitSHA("default", "owner", "repo", "def456")
+			},
+			want: "span-commit",
 		},
 	}
 	for _, tt := range tests {

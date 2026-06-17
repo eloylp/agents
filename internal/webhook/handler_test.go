@@ -15,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -48,6 +49,9 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 	st := store.New(db)
 	t.Cleanup(func() { st.Close() })
 
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
 	repo := fleet.Repo{
 		WorkspaceID: "team-a",
 		Name:        "owner/repo",
@@ -89,6 +93,80 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for queued event")
+	}
+}
+
+func TestPushEventCapturesCommitAttributionArtifact(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	repo := fleet.Repo{
+		WorkspaceID: "team-a",
+		Name:        "owner/repo",
+		Enabled:     true,
+	}
+	if err := st.UpsertRepo(repo); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	obs := observe.NewStore(db)
+	obs.WithAttributionVerifier(observe.AttributionVerifierConfig{
+		SigningSecret: "secret",
+		InstanceID:    "prod",
+	})
+	obs.RecordSpan(workflow.SpanInput{
+		SpanID:      "span-commit",
+		WorkspaceID: "team-a",
+		Agent:       "coder",
+		Backend:     "claude",
+		Repo:        "owner/repo",
+		StartedAt:   time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC),
+		Status:      "success",
+	})
+	attr := workflow.RunAttribution{
+		WorkspaceID: "team-a",
+		RepoOwner:   "owner",
+		RepoName:    "repo",
+		SpanID:      "span-commit",
+		AgentName:   "coder",
+	}
+	trailer := attr.CommitAttributionTrailer("secret", "prod")
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, obs, config.HTTPConfig{}, config.SelfImprovementConfig{}, zerolog.Nop())
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"after":"abc123",
+		"commits":[{
+			"id":"abc123",
+			"message":"fix handler\n\n` + trailer + `",
+			"url":"https://github.com/owner/repo/commit/abc123",
+			"timestamp":"2026-01-10T12:00:00Z"
+		}],
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"coder"}
+	}`)
+	w := httptest.NewRecorder()
+
+	h.handlePushEvent(context.Background(), w, body, "delivery-commit")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	got, ok := st.RunAttributionArtifactByCommitSHA("team-a", "owner", "repo", "abc123")
+	if !ok {
+		t.Fatalf("commit artifact lookup ok = false, want true")
+	}
+	if got.SpanID != "span-commit" {
+		t.Fatalf("SpanID = %q, want span-commit", got.SpanID)
 	}
 }
 

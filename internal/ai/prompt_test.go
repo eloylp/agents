@@ -144,7 +144,8 @@ func TestRenderAgentPromptIncludesRunAttributionContract(t *testing.T) {
 	for _, want := range []string{
 		"Run attribution metadata: " + comment,
 		"include that exact hidden HTML comment",
-		"For commits authored for this run, add this exact commit trailer: `" + trailer + "`",
+		"For commits authored for this run, you must add this exact commit trailer without editing it: `" + trailer + "`",
+		"The daemon will not rewrite commits or write to GitHub directly to add attribution metadata.",
 		"Agents-Run: <span_id>",
 		"Agents-Agent: <agent_name>",
 	} {
