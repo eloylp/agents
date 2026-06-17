@@ -150,7 +150,6 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		RepoOwner:                 "owner",
 		RepoName:                  "repo",
 		SourceType:                "pull_request_review_comment",
-		GitHubCommentID:           123,
 		GitHubReviewCommentID:     123,
 		GitHubParentCommentID:     99,
 		GitHubPullRequestReviewID: 456,
@@ -182,7 +181,6 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		RepoOwner:                 "owner",
 		RepoName:                  "repo",
 		SourceType:                "pull_request_review_comment",
-		GitHubCommentID:           123,
 		GitHubReviewCommentID:     123,
 		GitHubParentCommentID:     99,
 		GitHubPullRequestReviewID: 456,
@@ -211,8 +209,64 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 	if got.LinkedSpanID != "" || got.LinkConfidence != "unresolved" {
 		t.Fatalf("updated attribution = %+v, want unresolved with no linked span", got)
 	}
+	if got.GitHubCommentID != 0 {
+		t.Fatalf("github_comment_id = %d, want 0 for pull_request_review_comment", got.GitHubCommentID)
+	}
 	if got.GitHubReviewCommentID != 123 || got.GitHubParentCommentID != 99 || got.GitHubPullRequestReviewID != 456 {
 		t.Fatalf("feedback ancestry = (%d,%d,%d), want (123,99,456)", got.GitHubReviewCommentID, got.GitHubParentCommentID, got.GitHubPullRequestReviewID)
+	}
+}
+
+func TestSelfImprovementReviewCommentFeedbackUsesReviewCommentIdentity(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	for _, reviewCommentID := range []int64{123, 124} {
+		if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+			WorkspaceID:               "team-a",
+			RepoOwner:                 "owner",
+			RepoName:                  "repo",
+			SourceType:                "pull_request_review_comment",
+			GitHubReviewCommentID:     reviewCommentID,
+			GitHubPullRequestReviewID: 456,
+			GitHubDeliveryID:          "delivery",
+			AuthorLogin:               "maintainer",
+			AuthorAuthorized:          true,
+			PRNumber:                  7,
+			RawBody:                   "first /agents improve",
+		}); err != nil {
+			t.Fatalf("insert review comment %d: %v", reviewCommentID, err)
+		}
+	}
+
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:               "team-a",
+		RepoOwner:                 "owner",
+		RepoName:                  "repo",
+		SourceType:                "pull_request_review_comment",
+		GitHubReviewCommentID:     123,
+		GitHubPullRequestReviewID: 456,
+		GitHubDeliveryID:          "delivery-2",
+		AuthorLogin:               "maintainer",
+		AuthorAuthorized:          true,
+		PRNumber:                  7,
+		RawBody:                   "edited /agents improve",
+	}); err != nil {
+		t.Fatalf("redeliver review comment: %v", err)
+	}
+	rows, err := st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("feedback rows = %d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.GitHubCommentID != 0 {
+			t.Fatalf("row %d github_comment_id = %d, want 0", row.ID, row.GitHubCommentID)
+		}
 	}
 }
 

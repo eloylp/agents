@@ -592,7 +592,6 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 				SourceURL:           payload.Comment.HTMLURL,
 				AuthorLogin:         payload.Sender.Login,
 				PRNumber:            payload.PullRequest.Number,
-				CommentID:           payload.Comment.ID,
 				ReviewCommentID:     payload.Comment.ID,
 				InReplyToID:         payload.Comment.InReplyToID,
 				PullRequestReviewID: payload.Comment.PullRequestReviewID,
@@ -615,7 +614,6 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		h.captureArtifact(repo, owner, name, observe.RunAttributionArtifactInput{
 			IssueOrPRNumber:       payload.PullRequest.Number,
 			SourceType:            "pull_request_review_comment",
-			GitHubCommentID:       payload.Comment.ID,
 			GitHubReviewID:        payload.Comment.PullRequestReviewID,
 			GitHubReviewCommentID: payload.Comment.ID,
 			GitHubParentCommentID: payload.Comment.InReplyToID,
@@ -636,7 +634,6 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 			SourceURL:           payload.Comment.HTMLURL,
 			AuthorLogin:         payload.Sender.Login,
 			PRNumber:            payload.PullRequest.Number,
-			CommentID:           payload.Comment.ID,
 			ReviewCommentID:     payload.Comment.ID,
 			InReplyToID:         payload.Comment.InReplyToID,
 			PullRequestReviewID: payload.Comment.PullRequestReviewID,

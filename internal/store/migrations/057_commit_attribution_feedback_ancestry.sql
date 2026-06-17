@@ -13,3 +13,7 @@ ALTER TABLE self_improvement_feedback
 
 ALTER TABLE self_improvement_feedback
     ADD COLUMN github_pull_request_review_id INTEGER NOT NULL DEFAULT 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_self_improvement_feedback_review_comment
+    ON self_improvement_feedback(workspace_id, source_type, github_review_comment_id, tag)
+    WHERE github_review_comment_id > 0;
