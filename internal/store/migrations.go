@@ -53,6 +53,16 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("store: read migration %s: %w", name, err)
 		}
 
+		if strings.Contains(string(data), "-- agents:migration-no-transaction") {
+			if _, err := db.Exec(string(data)); err != nil {
+				return fmt.Errorf("store: apply migration %s: %w", name, err)
+			}
+			if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+				return fmt.Errorf("store: record migration %s: %w", name, err)
+			}
+			continue
+		}
+
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("store: begin migration %s: %w", name, err)

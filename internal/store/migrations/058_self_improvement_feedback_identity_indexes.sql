@@ -1,6 +1,7 @@
 -- 058_self_improvement_feedback_identity_indexes: keep feedback identity
 -- columns orthogonal by replacing the legacy table-level unique constraint
 -- with source-specific partial indexes.
+-- agents:migration-no-transaction
 
 PRAGMA foreign_keys = OFF;
 PRAGMA legacy_alter_table = ON;
@@ -76,16 +77,6 @@ SELECT
 FROM self_improvement_feedback_legacy_identity_058;
 
 DROP TABLE self_improvement_feedback_legacy_identity_058;
-
-PRAGMA writable_schema = ON;
-
-UPDATE sqlite_schema
-SET sql = replace(sql, 'self_improvement_feedback_legacy_identity_058', 'self_improvement_feedback')
-WHERE type = 'table'
-  AND sql LIKE '%self_improvement_feedback_legacy_identity_058%';
-
-PRAGMA writable_schema = OFF;
-PRAGMA schema_version = 58;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_self_improvement_feedback_legacy_identity
     ON self_improvement_feedback(workspace_id, source_type, github_comment_id, github_review_id, tag)
