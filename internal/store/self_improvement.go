@@ -206,15 +206,12 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	if confidence == "" {
 		confidence = "unresolved"
 	}
-	in.GitHubCommentID, in.GitHubReviewID = feedbackLegacyIdentity(in)
 	if in.SourceType == "pull_request_review_comment" && in.GitHubReviewCommentID > 0 {
-		updated, err := updateSelfImprovementFeedbackByReviewCommentID(db, workspaceID, tag, in, status, confidence)
+		err := upsertSelfImprovementFeedbackByReviewCommentID(db, workspaceID, tag, in, status, confidence)
 		if err != nil {
 			return SelfImprovementFeedback{}, err
 		}
-		if updated {
-			return getSelfImprovementFeedbackByReviewCommentID(db, workspaceID, strings.TrimSpace(in.SourceType), in.GitHubReviewCommentID, tag)
-		}
+		return getSelfImprovementFeedbackByReviewCommentID(db, workspaceID, strings.TrimSpace(in.SourceType), in.GitHubReviewCommentID, tag)
 	}
 	_, err := db.Exec(
 		`INSERT INTO self_improvement_feedback (
@@ -226,7 +223,7 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 			linked_prompt_version_id, linked_skill_version_ids, linked_guardrail_version_ids,
 			link_confidence, link_diagnostics, status
 		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(workspace_id, source_type, github_comment_id, github_review_id, tag) DO UPDATE SET
+		ON CONFLICT(workspace_id, source_type, github_comment_id, github_review_id, tag) WHERE github_review_comment_id = 0 DO UPDATE SET
 			github_review_comment_id=excluded.github_review_comment_id,
 			github_parent_comment_id=excluded.github_parent_comment_id,
 			github_pull_request_review_id=excluded.github_pull_request_review_id,
@@ -285,59 +282,62 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	return scanSelfImprovementFeedback(row)
 }
 
-func updateSelfImprovementFeedbackByReviewCommentID(db *sql.DB, workspaceID, tag string, in SelfImprovementFeedbackInput, status, confidence string) (bool, error) {
-	res, err := db.Exec(
-		`UPDATE self_improvement_feedback SET
-			github_comment_id=?,
-			github_review_id=?,
-			github_parent_comment_id=?,
-			github_pull_request_review_id=?,
-			github_delivery_id=?,
-			source_url=?,
-			author_login=?,
-			author_authorized=?,
-			issue_number=?,
-			pr_number=?,
-			raw_body=?,
-			file_path=?,
-			line=?,
-			side=?,
-			diff_hunk=?,
-			commit_sha=?,
-			github_updated_at=?,
-			linked_span_id=?,
-			linked_event_id=?,
-			linked_agent_id=?,
-			linked_agent_name=?,
-			linked_prompt_version_id=?,
-			linked_skill_version_ids=?,
-			linked_guardrail_version_ids=?,
-			link_confidence=?,
-			link_diagnostics=?,
+func upsertSelfImprovementFeedbackByReviewCommentID(db *sql.DB, workspaceID, tag string, in SelfImprovementFeedbackInput, status, confidence string) error {
+	_, err := db.Exec(
+		`INSERT INTO self_improvement_feedback (
+			workspace_id, repo_owner, repo_name, source_type, github_comment_id, github_review_id,
+			github_review_comment_id, github_parent_comment_id, github_pull_request_review_id,
+			github_delivery_id, source_url, author_login, author_authorized, issue_number, pr_number,
+			raw_body, tag, file_path, line, side, diff_hunk, commit_sha, github_created_at,
+			github_updated_at, linked_span_id, linked_event_id, linked_agent_id, linked_agent_name,
+			linked_prompt_version_id, linked_skill_version_ids, linked_guardrail_version_ids,
+			link_confidence, link_diagnostics, status
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(workspace_id, source_type, github_review_comment_id, tag) WHERE github_review_comment_id > 0 DO UPDATE SET
+			repo_owner=excluded.repo_owner,
+			repo_name=excluded.repo_name,
+			github_comment_id=0,
+			github_review_id=0,
+			github_parent_comment_id=excluded.github_parent_comment_id,
+			github_pull_request_review_id=excluded.github_pull_request_review_id,
+			github_delivery_id=excluded.github_delivery_id,
+			source_url=excluded.source_url,
+			author_login=excluded.author_login,
+			author_authorized=excluded.author_authorized,
+			issue_number=excluded.issue_number,
+			pr_number=excluded.pr_number,
+			raw_body=excluded.raw_body,
+			file_path=excluded.file_path,
+			line=excluded.line,
+			side=excluded.side,
+			diff_hunk=excluded.diff_hunk,
+			commit_sha=excluded.commit_sha,
+			github_updated_at=excluded.github_updated_at,
+			linked_span_id=excluded.linked_span_id,
+			linked_event_id=excluded.linked_event_id,
+			linked_agent_id=excluded.linked_agent_id,
+			linked_agent_name=excluded.linked_agent_name,
+			linked_prompt_version_id=excluded.linked_prompt_version_id,
+			linked_skill_version_ids=excluded.linked_skill_version_ids,
+			linked_guardrail_version_ids=excluded.linked_guardrail_version_ids,
+			link_confidence=excluded.link_confidence,
+			link_diagnostics=excluded.link_diagnostics,
 			status=CASE
-				WHEN ? = 'ignored' THEN ?
-				WHEN raw_body <> ? THEN ?
-				ELSE status
-			END
-		WHERE workspace_id=? AND source_type=? AND github_review_comment_id=? AND tag=?`,
-		in.GitHubCommentID, in.GitHubReviewID, in.GitHubParentCommentID, in.GitHubPullRequestReviewID,
+				WHEN excluded.status = 'ignored' THEN excluded.status
+				WHEN self_improvement_feedback.raw_body <> excluded.raw_body THEN excluded.status
+				ELSE self_improvement_feedback.status
+			END`,
+		workspaceID, strings.TrimSpace(in.RepoOwner), strings.TrimSpace(in.RepoName), strings.TrimSpace(in.SourceType),
+		0, 0, in.GitHubReviewCommentID, in.GitHubParentCommentID, in.GitHubPullRequestReviewID,
 		strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin),
-		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, strings.TrimSpace(in.FilePath),
-		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubUpdatedAt,
-		strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID), strings.TrimSpace(in.LinkedAgentID),
-		strings.TrimSpace(in.LinkedAgentName), strings.TrimSpace(in.LinkedPromptVersionID),
+		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, tag, strings.TrimSpace(in.FilePath),
+		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubCreatedAt,
+		in.GitHubUpdatedAt, strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
+		strings.TrimSpace(in.LinkedAgentID), strings.TrimSpace(in.LinkedAgentName), strings.TrimSpace(in.LinkedPromptVersionID),
 		strings.Join(in.LinkedSkillVersionIDs, ","), strings.Join(in.LinkedGuardrailVersionIDs, ","), confidence,
-		strings.TrimSpace(in.LinkDiagnostics), status, status, in.RawBody, status,
-		workspaceID, strings.TrimSpace(in.SourceType), in.GitHubReviewCommentID, tag,
+		strings.TrimSpace(in.LinkDiagnostics), status,
 	)
-	if err != nil {
-		return false, err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return affected > 0, nil
+	return err
 }
 
 func getSelfImprovementFeedbackByReviewCommentID(db *sql.DB, workspaceID, sourceType string, reviewCommentID int64, tag string) (SelfImprovementFeedback, error) {
@@ -356,20 +356,12 @@ func getSelfImprovementFeedbackByReviewCommentID(db *sql.DB, workspaceID, source
 	return scanSelfImprovementFeedback(row)
 }
 
-func feedbackLegacyIdentity(in SelfImprovementFeedbackInput) (commentID, reviewID int64) {
-	if in.SourceType == "pull_request_review_comment" {
-		return 0, in.GitHubReviewCommentID
-	}
-	return in.GitHubCommentID, in.GitHubReviewID
-}
-
 func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) (bool, error) {
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
 	tag := strings.TrimSpace(in.Tag)
 	if tag == "" {
 		tag = FeedbackTag
 	}
-	in.GitHubCommentID, in.GitHubReviewID = feedbackLegacyIdentity(in)
 	if in.SourceType == "pull_request_review_comment" && in.GitHubReviewCommentID > 0 {
 		res, err := db.Exec(
 			`UPDATE self_improvement_feedback SET
@@ -831,17 +823,7 @@ func scanSelfImprovementFeedback(row selfImprovementScanner) (SelfImprovementFee
 	ev.AuthorAuthorized = authorized == 1
 	ev.LinkedSkillVersionIDs = splitCSV(skillIDs)
 	ev.LinkedGuardrailVersionIDs = splitCSV(guardrailIDs)
-	normalizeFeedbackIdentity(&ev)
 	return ev, nil
-}
-
-func normalizeFeedbackIdentity(ev *SelfImprovementFeedback) {
-	if ev.SourceType == "pull_request_review_comment" {
-		ev.GitHubCommentID = 0
-		if ev.GitHubReviewID == ev.GitHubReviewCommentID {
-			ev.GitHubReviewID = 0
-		}
-	}
 }
 
 func recommendationSelectSQL() string {
@@ -899,7 +881,6 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 	feedback.AuthorAuthorized = authorized == 1
 	feedback.LinkedSkillVersionIDs = splitCSV(skillIDs)
 	feedback.LinkedGuardrailVersionIDs = splitCSV(guardrailIDs)
-	normalizeFeedbackIdentity(&feedback)
 	if includeFeedback {
 		rec.Feedback = &feedback
 	}

@@ -267,6 +267,47 @@ func TestSelfImprovementReviewCommentFeedbackUsesReviewCommentIdentity(t *testin
 		if row.GitHubCommentID != 0 {
 			t.Fatalf("row %d github_comment_id = %d, want 0", row.ID, row.GitHubCommentID)
 		}
+		if row.GitHubReviewID != 0 {
+			t.Fatalf("row %d github_review_id = %d, want 0", row.ID, row.GitHubReviewID)
+		}
+	}
+
+	dbRows, err := db.Query(`
+		SELECT github_comment_id, github_review_id, github_review_comment_id, github_pull_request_review_id, raw_body
+		FROM self_improvement_feedback
+		WHERE workspace_id=? AND source_type=?
+		ORDER BY github_review_comment_id`, "team-a", "pull_request_review_comment")
+	if err != nil {
+		t.Fatalf("query stored feedback rows: %v", err)
+	}
+	defer dbRows.Close()
+	wantBodies := map[int64]string{
+		123: "edited /agents improve",
+		124: "first /agents improve",
+	}
+	seen := 0
+	for dbRows.Next() {
+		var commentID, reviewID, reviewCommentID, pullRequestReviewID int64
+		var rawBody string
+		if err := dbRows.Scan(&commentID, &reviewID, &reviewCommentID, &pullRequestReviewID, &rawBody); err != nil {
+			t.Fatalf("scan stored feedback row: %v", err)
+		}
+		if commentID != 0 || reviewID != 0 {
+			t.Fatalf("stored identity for review comment %d = comment %d review %d, want both 0", reviewCommentID, commentID, reviewID)
+		}
+		if pullRequestReviewID != 456 {
+			t.Fatalf("stored pull_request_review_id for review comment %d = %d, want 456", reviewCommentID, pullRequestReviewID)
+		}
+		if want := wantBodies[reviewCommentID]; rawBody != want {
+			t.Fatalf("stored raw_body for review comment %d = %q, want %q", reviewCommentID, rawBody, want)
+		}
+		seen++
+	}
+	if err := dbRows.Err(); err != nil {
+		t.Fatalf("iterate stored feedback rows: %v", err)
+	}
+	if seen != 2 {
+		t.Fatalf("stored feedback rows = %d, want 2", seen)
 	}
 }
 

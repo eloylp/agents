@@ -16,7 +16,7 @@ type RunAttributionArtifactInput struct {
 	RepoName              string
 	IssueOrPRNumber       int
 	SourceType            string // "issue_comment", "pull_request_review", "pull_request_review_comment", "commit"
-	GitHubCommentID       int64  // issue_comment or pull_request_review_comment id
+	GitHubCommentID       int64  // issue_comment id
 	GitHubReviewID        int64  // pull_request_review id
 	GitHubReviewCommentID int64  // pull_request_review_comment id (distinguished from CommentID)
 	GitHubParentCommentID int64  // in_reply_to_id from PR review comment
