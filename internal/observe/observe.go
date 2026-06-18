@@ -23,6 +23,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	storepkg "github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
+	"github.com/rs/zerolog"
 )
 
 const maxTraceSteps = 100
@@ -413,6 +414,7 @@ type Store struct {
 	store               *storepkg.Store
 	stepMu              sync.Mutex
 	attributionVerifier AttributionVerifierConfig
+	logger              zerolog.Logger
 	EventsSSE           *SSEHub
 	TracesSSE           *SSEHub
 	MemorySSE           *SSEHub
@@ -429,12 +431,17 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{
 		db:         db,
 		store:      storepkg.New(db),
+		logger:     zerolog.Nop(),
 		EventsSSE:  NewSSEHub(64),
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
 		ActiveRuns: &ActiveRuns{runs: make(map[string]int)},
 		Runs:       newRunRegistry(),
 	}
+}
+
+func (s *Store) WithLogger(logger zerolog.Logger) {
+	s.logger = logger.With().Str("component", "observe").Logger()
 }
 
 type AttributionVerifierConfig struct {
