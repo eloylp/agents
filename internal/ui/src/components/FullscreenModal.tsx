@@ -31,7 +31,8 @@ export default function FullscreenModal({ title, onClose, children }: Fullscreen
             onClick={onClose}
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', color: 'var(--text-faint)', lineHeight: 1 }}
             aria-label="Close"
-          >x</button>
+            title="Close"
+          >×</button>
         </div>
         <div style={{ flex: 1, minHeight: 0, padding: '1rem 1.25rem', overflow: 'auto' }}>
           {children}
