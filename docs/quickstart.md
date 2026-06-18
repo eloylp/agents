@@ -26,6 +26,13 @@ Verify the daemon is healthy:
 curl -s http://localhost:8080/status | jq
 ```
 
+Configure each GitHub repository webhook to send **all events** to
+`https://<your-daemon-host>/webhooks/github` with the generated
+`GITHUB_WEBHOOK_SECRET`. Label-triggered agents only need labeled issue/PR
+events to start, but observability and self-improvement attribution depend on
+the surrounding GitHub event stream, including `push`, `pull_request`,
+`pull_request_review`, `pull_request_review_comment`, and `issue_comment`.
+
 ## Credential reference
 
 The quickstart script writes credentials to `.env`. Production runs are env-driven: credentials are injected into each short-lived runner container and are not exported through UI, REST, MCP, or fleet YAML.
