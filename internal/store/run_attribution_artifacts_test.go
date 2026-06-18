@@ -132,3 +132,37 @@ func TestRunAttributionArtifactUpsertAndLookups(t *testing.T) {
 		t.Fatalf("review id lookup matched a review comment row, want false")
 	}
 }
+
+func TestRunAttributionArtifactLookupParsesLiveTimestampText(t *testing.T) {
+	t.Parallel()
+	st := store.New(openTestDB(t))
+	t.Cleanup(func() { st.Close() })
+
+	_, err := st.DB().Exec(`
+		INSERT INTO run_attribution_artifacts (
+			workspace_id, repo_owner, repo_name, issue_or_pr_number,
+			source_type, commit_sha, span_id, metadata_json,
+			github_created_at, github_updated_at, observed_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		"self-improvement-demo", "eloylp", "test-acme-repo", 0,
+		"commit", "82170ee3de01de12873a0e4dad3ebbc96759166f", "50cc824e1d7faf8d", `{"span_id":"50cc824e1d7faf8d"}`,
+		"2026-06-18 13:06:18 +0200 +0200", "2026-06-18 13:06:18 +0200 +0200", "2026-06-18 11:06:20",
+	)
+	if err != nil {
+		t.Fatalf("insert live-shaped artifact: %v", err)
+	}
+
+	got, ok := st.RunAttributionArtifactByCommitSHA("self-improvement-demo", "eloylp", "test-acme-repo", "82170ee3de01de12873a0e4dad3ebbc96759166f")
+	if !ok {
+		t.Fatalf("lookup ok = false, want true")
+	}
+	if got.SpanID != "50cc824e1d7faf8d" {
+		t.Fatalf("SpanID = %q, want 50cc824e1d7faf8d", got.SpanID)
+	}
+	if got.GitHubCreatedAt == nil {
+		t.Fatalf("GitHubCreatedAt = nil, want parsed time")
+	}
+	if got.ObservedAt.IsZero() {
+		t.Fatalf("ObservedAt is zero, want parsed time")
+	}
+}
