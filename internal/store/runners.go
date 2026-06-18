@@ -328,8 +328,10 @@ func scanRunnerRow(s rowScanner) (RunnerRecord, error) {
 // bound. Returns the number of rows removed.
 func (s *Store) DeleteCompletedEventsBefore(before time.Time) (int64, error) {
 	res, err := s.db.Exec(
-		"DELETE FROM event_queue WHERE completed_at IS NOT NULL AND completed_at < ?",
-		before.UTC().Format(time.RFC3339Nano),
+		`DELETE FROM event_queue
+		WHERE completed_at IS NOT NULL
+		  AND replace(substr(completed_at, 1, 19), 'T', ' ') < ?`,
+		before.UTC().Format(time.DateTime),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: prune completed events: %w", err)
