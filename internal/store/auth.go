@@ -549,36 +549,46 @@ func randomBytes(n int) ([]byte, error) {
 func scanUser(row rowScanner) (User, error) {
 	var user User
 	var isAdmin int
-	var created, updated, lastLogin, disabled sql.NullString
+	var created, updated, lastLogin, disabled SQLiteTime
 	if err := row.Scan(&user.ID, &user.Username, &created, &updated, &lastLogin, &disabled, &isAdmin); err != nil {
 		return User{}, err
 	}
-	user.CreatedAt = parseDBTime(created)
-	user.UpdatedAt = parseDBTime(updated)
-	user.LastLoginAt = parseDBTimePtr(lastLogin)
-	user.DisabledAt = parseDBTimePtr(disabled)
+	for name, ts := range map[string]SQLiteTime{"created_at": created, "updated_at": updated, "last_login_at": lastLogin, "disabled_at": disabled} {
+		if err := ts.Err(); err != nil {
+			return User{}, fmt.Errorf("auth: scan user %s: %w", name, err)
+		}
+	}
+	user.CreatedAt = created.OrZero()
+	user.UpdatedAt = updated.OrZero()
+	user.LastLoginAt = lastLogin.Ptr()
+	user.DisabledAt = disabled.Ptr()
 	user.IsAdmin = isAdmin != 0
 	return user, nil
 }
 
 func scanAuthToken(row rowScanner) (AuthToken, error) {
 	var tok AuthToken
-	var created, expires, lastUsed, revoked sql.NullString
+	var created, expires, lastUsed, revoked SQLiteTime
 	if err := row.Scan(&tok.ID, &tok.UserID, &tok.Kind, &tok.Name, &tok.Prefix, &created, &expires, &lastUsed, &revoked); err != nil {
 		return AuthToken{}, fmt.Errorf("auth: scan token: %w", err)
 	}
-	tok.CreatedAt = parseDBTime(created)
-	tok.ExpiresAt = parseDBTimePtr(expires)
-	tok.LastUsedAt = parseDBTimePtr(lastUsed)
-	tok.RevokedAt = parseDBTimePtr(revoked)
+	for name, ts := range map[string]SQLiteTime{"created_at": created, "expires_at": expires, "last_used_at": lastUsed, "revoked_at": revoked} {
+		if err := ts.Err(); err != nil {
+			return AuthToken{}, fmt.Errorf("auth: scan token %s: %w", name, err)
+		}
+	}
+	tok.CreatedAt = created.OrZero()
+	tok.ExpiresAt = expires.Ptr()
+	tok.LastUsedAt = lastUsed.Ptr()
+	tok.RevokedAt = revoked.Ptr()
 	return tok, nil
 }
 
 func scanAuthIdentity(row rowScanner) (AuthIdentity, error) {
 	var ident AuthIdentity
 	var isAdmin int
-	var userCreated, userUpdated, lastLogin, disabled sql.NullString
-	var tokCreated, expires, lastUsed, revoked sql.NullString
+	var userCreated, userUpdated, lastLogin, disabled SQLiteTime
+	var tokCreated, expires, lastUsed, revoked SQLiteTime
 	err := row.Scan(
 		&ident.User.ID, &ident.User.Username, &userCreated, &userUpdated, &lastLogin, &disabled, &isAdmin,
 		&ident.Token.ID, &ident.Token.UserID, &ident.Token.Kind, &ident.Token.Name, &ident.Token.Prefix, &tokCreated, &expires, &lastUsed, &revoked,
@@ -586,34 +596,22 @@ func scanAuthIdentity(row rowScanner) (AuthIdentity, error) {
 	if err != nil {
 		return AuthIdentity{}, err
 	}
-	ident.User.CreatedAt = parseDBTime(userCreated)
-	ident.User.UpdatedAt = parseDBTime(userUpdated)
-	ident.User.LastLoginAt = parseDBTimePtr(lastLogin)
-	ident.User.DisabledAt = parseDBTimePtr(disabled)
-	ident.User.IsAdmin = isAdmin != 0
-	ident.Token.CreatedAt = parseDBTime(tokCreated)
-	ident.Token.ExpiresAt = parseDBTimePtr(expires)
-	ident.Token.LastUsedAt = parseDBTimePtr(lastUsed)
-	ident.Token.RevokedAt = parseDBTimePtr(revoked)
-	return ident, nil
-}
-
-func parseDBTime(ns sql.NullString) time.Time {
-	if t := parseDBTimePtr(ns); t != nil {
-		return *t
-	}
-	return time.Time{}
-}
-
-func parseDBTimePtr(ns sql.NullString) *time.Time {
-	if !ns.Valid || ns.String == "" {
-		return nil
-	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, ns.String); err == nil {
-			u := t.UTC()
-			return &u
+	for name, ts := range map[string]SQLiteTime{
+		"user.created_at": userCreated, "user.updated_at": userUpdated, "user.last_login_at": lastLogin, "user.disabled_at": disabled,
+		"token.created_at": tokCreated, "token.expires_at": expires, "token.last_used_at": lastUsed, "token.revoked_at": revoked,
+	} {
+		if err := ts.Err(); err != nil {
+			return AuthIdentity{}, fmt.Errorf("auth: scan identity %s: %w", name, err)
 		}
 	}
-	return nil
+	ident.User.CreatedAt = userCreated.OrZero()
+	ident.User.UpdatedAt = userUpdated.OrZero()
+	ident.User.LastLoginAt = lastLogin.Ptr()
+	ident.User.DisabledAt = disabled.Ptr()
+	ident.User.IsAdmin = isAdmin != 0
+	ident.Token.CreatedAt = tokCreated.OrZero()
+	ident.Token.ExpiresAt = expires.Ptr()
+	ident.Token.LastUsedAt = lastUsed.Ptr()
+	ident.Token.RevokedAt = revoked.Ptr()
+	return ident, nil
 }
