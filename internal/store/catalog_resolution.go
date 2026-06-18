@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -115,6 +116,11 @@ func ensureCatalogScope(tx *sql.Tx, kind, workspaceID, repo string) error {
 func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (string, error) {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	repo = fleet.NormalizeRepoName(repo)
+
+	exactID, exactName, err := resolveVisibleCatalogExactRef(q, table, ref, workspaceID, repo)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
 	rows, err := q.Query(`
 		SELECT id,
 			CASE
@@ -123,14 +129,14 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 				ELSE 2
 			END AS specificity
 		FROM `+table+`
-		WHERE (id = ? OR ref = ? OR name = ?)
+		WHERE name = ?
 		  AND (
 			(workspace_id IS NULL AND repo IS NULL)
 			OR (workspace_id = ? AND repo IS NULL)
 			OR (? <> '' AND workspace_id = ? AND repo = ?)
 		  )
 		ORDER BY specificity DESC, id`,
-		ref, ref, ref, workspaceID, repo, workspaceID, repo,
+		ref, workspaceID, repo, workspaceID, repo,
 	)
 	if err != nil {
 		return "", err
@@ -159,13 +165,43 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 		return "", err
 	}
 	if bestSpecificity == -1 {
+		if exactID != "" {
+			return exactID, nil
+		}
 		return "", sql.ErrNoRows
+	}
+	if exactID != "" && exactName != ref {
+		return exactID, nil
 	}
 	if ambiguous {
 		label := strings.TrimSuffix(table, "s")
 		return "", fmt.Errorf("ambiguous %s %q in workspace %q; use %s id", label, ref, workspaceID, label)
 	}
 	return bestID, nil
+}
+
+func resolveVisibleCatalogExactRef(q querier, table, ref, workspaceID, repo string) (string, string, error) {
+	var id, name string
+	err := q.QueryRow(`
+		SELECT id, name
+		FROM `+table+`
+		WHERE (id = ? OR ref = ?)
+		  AND (
+			(workspace_id IS NULL AND repo IS NULL)
+			OR (workspace_id = ? AND repo IS NULL)
+			OR (? <> '' AND workspace_id = ? AND repo = ?)
+		  )
+		ORDER BY
+			CASE
+				WHEN workspace_id IS NULL THEN 0
+				WHEN repo IS NULL THEN 1
+				ELSE 2
+			END DESC,
+			id
+		LIMIT 1`,
+		ref, ref, workspaceID, repo, workspaceID, repo,
+	).Scan(&id, &name)
+	return id, name, err
 }
 
 func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (string, error) {
