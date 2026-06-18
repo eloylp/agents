@@ -75,7 +75,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		IssueNumber:           7,
 		RawBody:               "Keep files under 800 lines /agents improve",
 		Tag:                   store.FeedbackTag,
-		LinkedPromptVersionID: "promptver_self_improvement_analyst_v8",
+		LinkedPromptVersionID: "promptver_self_improvement_analyst_v9",
 		LinkConfidence:        "exact",
 		LinkDiagnostics:       "matched run attribution metadata",
 		Status:                store.FeedbackStatusNew,
@@ -96,14 +96,14 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 		"attribution_confidence":"exact",
 			"target_asset_type":"prompt",
 			"target_asset_id":"prompt_self-improvement-analyst",
-				"target_base_version_id":"promptver_self_improvement_analyst_v8",
+				"target_base_version_id":"promptver_self_improvement_analyst_v9",
 		"proposed_patch":"",
 		"proposed_new_body":"",
 		"changes":[{
 				"operation":"update_existing",
 				"asset_type":"prompt",
 				"asset_id":"prompt_self-improvement-analyst",
-					"base_version_id":"promptver_self_improvement_analyst_v8",
+					"base_version_id":"promptver_self_improvement_analyst_v9",
 			"proposed_body":"Prefer files under 800 lines when practical.",
 			"rationale":"Feedback event 1 provides direct evidence."
 		}],
@@ -196,6 +196,69 @@ func TestCurrentCatalogVersionsRequiresAttribution(t *testing.T) {
 	})
 	if len(versions) != 0 {
 		t.Fatalf("catalog versions = %+v, want none without attribution", versions)
+	}
+}
+
+func TestCurrentCatalogVersionsIncludesCurrentWhenAttributedVersionIsStale(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	if err := st.UpsertSkill("go-api", fleet.Skill{Name: "go-api", Prompt: "Initial handler guidance."}); err != nil {
+		t.Fatalf("upsert skill v1: %v", err)
+	}
+	if err := st.UpsertSkill("go-api", fleet.Skill{Name: "go-api", Prompt: "Current handler guidance."}); err != nil {
+		t.Fatalf("upsert skill v2: %v", err)
+	}
+	versions, err := st.ListSkillVersions("go-api")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	var v1, v2 string
+	for _, version := range versions {
+		switch version.Version {
+		case 1:
+			v1 = version.ID
+		case 2:
+			v2 = version.ID
+		}
+	}
+	if v1 == "" || v2 == "" {
+		t.Fatalf("skill versions = %+v, want v1 and v2", versions)
+	}
+
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+	got := e.currentCatalogVersions(store.SelfImprovementFeedback{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		LinkedSkillVersionIDs: []string{v1},
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("catalog versions = %+v, want stale attributed and current entries", got)
+	}
+	if got[0].Relation != "attributed" || !got[0].Stale || got[0].VersionID != v1 || got[0].CurrentVersionID != v2 || got[0].Prompt != "Initial handler guidance." {
+		t.Fatalf("attributed entry = %+v, want stale v1 with current pointer", got[0])
+	}
+	if got[1].Relation != "current" || got[1].Stale || got[1].VersionID != v2 || got[1].LinkedVersionID != v1 || got[1].Prompt != "Current handler guidance." {
+		t.Fatalf("current entry = %+v, want current v2 with linked pointer", got[1])
+	}
+}
+
+func TestCurrentCatalogVersionsSurfacesUnavailableAttributedVersion(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+
+	got := e.currentCatalogVersions(store.SelfImprovementFeedback{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		LinkedSkillVersionIDs: []string{"skillver_missing"},
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("catalog versions = %+v, want one unavailable attributed entry", got)
+	}
+	if got[0].Relation != "attributed" || !got[0].Unavailable || !got[0].IndexOnly || got[0].VersionID != "skillver_missing" || got[0].Diagnostics == "" {
+		t.Fatalf("unavailable entry = %+v, want diagnostic tombstone", got[0])
 	}
 }
 

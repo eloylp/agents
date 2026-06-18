@@ -10,7 +10,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestSelfImprovementAnalystPromptV8BecomesCurrentOnFreshStore(t *testing.T) {
+func TestSelfImprovementAnalystPromptV9BecomesCurrentOnFreshStore(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -24,8 +24,8 @@ func TestSelfImprovementAnalystPromptV8BecomesCurrentOnFreshStore(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read seeded prompt: %v", err)
 	}
-	if prompt.VersionID != "promptver_self_improvement_analyst_v8" {
-		t.Fatalf("version_id = %q, want v8", prompt.VersionID)
+	if prompt.VersionID != "promptver_self_improvement_analyst_v9" {
+		t.Fatalf("version_id = %q, want v9", prompt.VersionID)
 	}
 	for _, want := range []string{
 		"Supplied context:",
@@ -41,7 +41,9 @@ func TestSelfImprovementAnalystPromptV8BecomesCurrentOnFreshStore(t *testing.T) 
 		"Every status=recommended catalog-changing result must be directly reviewable",
 		"proposed_body must be the full replacement body",
 		"Catalog context is attribution-only.",
-		"return status=needs_user_input instead of scanning or guessing from the wider catalog",
+		"relation=attributed",
+		"relation=current",
+		"Never scan or guess from the wider catalog",
 		"changes, and no_auto_apply_confirmed",
 	} {
 		if !strings.Contains(prompt.Content, want) {

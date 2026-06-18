@@ -104,15 +104,21 @@ type selfImprovementOutputChange struct {
 }
 
 type selfImprovementCatalogVersion struct {
-	AssetType   string `json:"asset_type"`
-	ID          string `json:"id"`
-	Scope       string `json:"scope"`
-	VersionID   string `json:"version_id"`
-	Version     int    `json:"version"`
-	Description string `json:"description,omitempty"`
-	Content     string `json:"content,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`
-	IndexOnly   bool   `json:"index_only,omitempty"`
+	AssetType        string `json:"asset_type"`
+	ID               string `json:"id"`
+	Scope            string `json:"scope"`
+	VersionID        string `json:"version_id"`
+	Version          int    `json:"version"`
+	Relation         string `json:"relation"`
+	LinkedVersionID  string `json:"linked_version_id,omitempty"`
+	CurrentVersionID string `json:"current_version_id,omitempty"`
+	Stale            bool   `json:"stale,omitempty"`
+	Unavailable      bool   `json:"unavailable,omitempty"`
+	Diagnostics      string `json:"diagnostics,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Content          string `json:"content,omitempty"`
+	Prompt           string `json:"prompt,omitempty"`
+	IndexOnly        bool   `json:"index_only,omitempty"`
 }
 
 type selfImprovementInput struct {
@@ -407,36 +413,108 @@ func (e *Engine) currentCatalogVersions(feedback store.SelfImprovementFeedback) 
 		return nil
 	}
 
+	seen := map[string]struct{}{}
 	for _, versionID := range sortedSetValues(linkedPromptIDs) {
 		prompt, err := e.store.ReadPromptVersion(versionID)
 		if err != nil {
+			out = appendCatalogVersion(out, seen, unavailableCatalogVersion("prompt", versionID, err))
 			continue
 		}
 		version := catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version)
+		version.Relation = "attributed"
+		version.LinkedVersionID = versionID
 		version.Description = prompt.Description
 		version.Content = prompt.Content
-		out = append(out, version)
+		out = e.appendCurrentCatalogVersion(out, seen, version)
 	}
 	for _, versionID := range sortedSetValues(linkedSkillIDs) {
 		skill, err := e.store.ReadSkillVersion(versionID)
 		if err != nil {
+			out = appendCatalogVersion(out, seen, unavailableCatalogVersion("skill", versionID, err))
 			continue
 		}
 		version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
+		version.Relation = "attributed"
+		version.LinkedVersionID = versionID
 		version.Prompt = skill.Prompt
-		out = append(out, version)
+		out = e.appendCurrentCatalogVersion(out, seen, version)
 	}
 	for _, versionID := range sortedSetValues(linkedGuardrailIDs) {
 		guardrail, err := e.store.ReadGuardrailVersion(versionID)
 		if err != nil {
+			out = appendCatalogVersion(out, seen, unavailableCatalogVersion("guardrail", versionID, err))
 			continue
+		}
+		version := catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version)
+		version.Relation = "attributed"
+		version.LinkedVersionID = versionID
+		version.Description = guardrail.Description
+		version.Content = guardrail.Content
+		out = e.appendCurrentCatalogVersion(out, seen, version)
+	}
+	return out
+}
+
+func (e *Engine) appendCurrentCatalogVersion(out []selfImprovementCatalogVersion, seen map[string]struct{}, attributed selfImprovementCatalogVersion) []selfImprovementCatalogVersion {
+	currentVersionID, err := e.store.CurrentSelfImprovementCatalogVersionID(attributed.AssetType, attributed.ID)
+	if err != nil {
+		attributed.Diagnostics = fmt.Sprintf("could not resolve current %s version: %v", attributed.AssetType, err)
+		return appendCatalogVersion(out, seen, attributed)
+	}
+	attributed.CurrentVersionID = currentVersionID
+	if currentVersionID == attributed.VersionID {
+		return appendCatalogVersion(out, seen, attributed)
+	}
+	attributed.Stale = true
+	out = appendCatalogVersion(out, seen, attributed)
+
+	current, err := e.readCurrentCatalogVersion(attributed.AssetType, currentVersionID)
+	if err != nil {
+		missing := unavailableCatalogVersion(attributed.AssetType, currentVersionID, err)
+		missing.ID = attributed.ID
+		missing.Scope = attributed.Scope
+		missing.Relation = "current"
+		missing.LinkedVersionID = attributed.VersionID
+		missing.CurrentVersionID = currentVersionID
+		return appendCatalogVersion(out, seen, missing)
+	}
+	current.Relation = "current"
+	current.LinkedVersionID = attributed.VersionID
+	current.CurrentVersionID = currentVersionID
+	return appendCatalogVersion(out, seen, current)
+}
+
+func (e *Engine) readCurrentCatalogVersion(assetType, versionID string) (selfImprovementCatalogVersion, error) {
+	switch assetType {
+	case "prompt":
+		prompt, err := e.store.ReadPromptVersion(versionID)
+		if err != nil {
+			return selfImprovementCatalogVersion{}, err
+		}
+		version := catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version)
+		version.Description = prompt.Description
+		version.Content = prompt.Content
+		return version, nil
+	case "skill":
+		skill, err := e.store.ReadSkillVersion(versionID)
+		if err != nil {
+			return selfImprovementCatalogVersion{}, err
+		}
+		version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
+		version.Prompt = skill.Prompt
+		return version, nil
+	case "guardrail":
+		guardrail, err := e.store.ReadGuardrailVersion(versionID)
+		if err != nil {
+			return selfImprovementCatalogVersion{}, err
 		}
 		version := catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version)
 		version.Description = guardrail.Description
 		version.Content = guardrail.Content
-		out = append(out, version)
+		return version, nil
+	default:
+		return selfImprovementCatalogVersion{}, fmt.Errorf("unsupported catalog asset type %q", assetType)
 	}
-	return out
 }
 
 func catalogVersion(assetType, id, workspace, repo, versionID string, version int) selfImprovementCatalogVersion {
@@ -448,6 +526,27 @@ func catalogVersion(assetType, id, workspace, repo, versionID string, version in
 		scope += "/" + repo
 	}
 	return selfImprovementCatalogVersion{AssetType: assetType, ID: id, Scope: scope, VersionID: versionID, Version: version}
+}
+
+func unavailableCatalogVersion(assetType, versionID string, err error) selfImprovementCatalogVersion {
+	return selfImprovementCatalogVersion{
+		AssetType:       assetType,
+		VersionID:       versionID,
+		Relation:        "attributed",
+		LinkedVersionID: versionID,
+		IndexOnly:       true,
+		Unavailable:     true,
+		Diagnostics:     err.Error(),
+	}
+}
+
+func appendCatalogVersion(out []selfImprovementCatalogVersion, seen map[string]struct{}, version selfImprovementCatalogVersion) []selfImprovementCatalogVersion {
+	key := version.AssetType + "\x00" + version.Relation + "\x00" + version.VersionID
+	if _, ok := seen[key]; ok {
+		return out
+	}
+	seen[key] = struct{}{}
+	return append(out, version)
 }
 
 func recommendationInputFromAssistant(feedback store.SelfImprovementFeedback, promptVersionID string, raw json.RawMessage) (selfimprovement.SelfImprovementRecommendationInput, error) {
