@@ -23,6 +23,9 @@ The daemon schedules each agent and runs the AI CLI ([Claude Code](https://docs.
     <td align="center">
       <video src="https://github.com/user-attachments/assets/f55ab9d5-f65d-4990-a432-ad9738b3725f" controls></video>
     </td>
+    <td align="center">
+      <video src="https://github.com/user-attachments/assets/7e5e0a50-fc31-4992-83fa-64bbf244ee50" controls></video>
+    </td>
   </tr>
 </table>
 
