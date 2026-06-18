@@ -78,6 +78,10 @@ FROM self_improvement_feedback_legacy_identity_058;
 
 DROP TABLE self_improvement_feedback_legacy_identity_058;
 
+DELETE FROM self_improvement_feedback
+WHERE source_type = 'pull_request_review_comment'
+  AND github_review_comment_id = 0;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_self_improvement_feedback_legacy_identity
     ON self_improvement_feedback(workspace_id, source_type, github_comment_id, github_review_id, tag)
     WHERE github_review_comment_id = 0;
