@@ -94,11 +94,16 @@ export default function LiveTraceModal({ span, onClose }: { span: LiveTraceSpan;
               span <code>{span.id}</code> · {status === 'live' ? 'streaming' : status === 'ended' ? 'run completed' : status === 'error' ? 'disconnected' : 'connecting'} · {entries.length} event{entries.length !== 1 ? 's' : ''}
             </div>
           </div>
-          <button onClick={onClose} style={{
-            background: 'var(--bg-input)', border: '1px solid var(--border)',
-            color: 'var(--text)', padding: '4px 12px', borderRadius: '4px',
-            cursor: 'pointer', fontSize: '0.85rem',
-          }}>Close</button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+            style={{
+              background: 'none', border: 'none', color: 'var(--text-faint)',
+              width: 28, height: 28, borderRadius: 4, cursor: 'pointer',
+              fontSize: '1.25rem', lineHeight: 1,
+            }}
+          >×</button>
         </div>
         <div
           ref={scrollRef}

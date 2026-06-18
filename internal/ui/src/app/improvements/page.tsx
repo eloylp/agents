@@ -1,6 +1,7 @@
 'use client'
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import Modal from '@/components/Modal'
 import { formatDateTime } from '@/lib/datetime'
 import { withWorkspace } from '@/lib/workspace'
 
@@ -1038,16 +1039,16 @@ export default function ImprovementsPage() {
       )}
 
       {reviewingProposal && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.48)', display: 'grid', placeItems: 'center', zIndex: 1200, padding: '1rem' }}>
-          <section style={{ width: 'min(1100px, 100%)', maxHeight: 'min(860px, 94vh)', overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
-            <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'start', padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div>
-                <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>Review proposal</h2>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{reviewingProposal.id} · {reviewingProposal.status}</div>
-              </div>
-              <button onClick={() => setReviewingProposal(null)} style={{ border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, padding: '6px 9px' }}>Close</button>
-            </header>
-            <div style={{ display: 'grid', gap: '1rem', padding: '1rem' }}>
+        <Modal
+          title="Review proposal"
+          subtitle={`${reviewingProposal.id} · ${reviewingProposal.status}`}
+          onClose={() => setReviewingProposal(null)}
+          maxWidth="1100px"
+          maxHeight="min(860px, 94vh)"
+          overlayBackground="rgba(0,0,0,0.48)"
+          align="center"
+        >
+            <div style={{ display: 'grid', gap: '1rem' }}>
               <section style={{ display: 'grid', gap: 6 }}>
                 <strong style={{ color: 'var(--text-heading)' }}>{reviewingProposal.finding}</strong>
                 <span style={{ color: 'var(--text)' }}>{reviewingProposal.rationale}</span>
@@ -1234,21 +1235,21 @@ export default function ImprovementsPage() {
                 </section>
               )}
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
 
       {clarifying && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'grid', placeItems: 'center', zIndex: 1300, padding: '1rem' }}>
-          <section style={{ width: 'min(920px, 100%)', maxHeight: 'min(760px, 92vh)', overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
-            <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'start', padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div>
-                <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>Clarify proposal</h2>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>#{clarifying.feedback_event_id} · {clarifying.id} · {clarifying.status}</div>
-              </div>
-              <button onClick={() => setClarifying(null)} style={{ border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, padding: '6px 9px' }}>Close</button>
-            </header>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem', padding: '1rem' }}>
+        <Modal
+          title="Clarify proposal"
+          subtitle={`#${clarifying.feedback_event_id} · ${clarifying.id} · ${clarifying.status}`}
+          onClose={() => setClarifying(null)}
+          maxWidth="920px"
+          maxHeight="min(760px, 92vh)"
+          zIndex={1300}
+          overlayBackground="rgba(0,0,0,0.42)"
+          align="center"
+        >
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
               <div style={{ display: 'grid', gap: '0.85rem' }}>
                 <section style={{ display: 'grid', gap: 6 }}>
                   <h3 style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>Proposal</h3>
@@ -1289,27 +1290,23 @@ export default function ImprovementsPage() {
                 {clarifying.clarification && <InfoRow label="Last clarified" value={formatDateTime(clarifying.clarification.updated_at)} />}
               </aside>
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
 
       {bundleDecision && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'grid', placeItems: 'center', zIndex: 1200, padding: '1rem' }}>
-          <section style={{ width: 'min(620px, 100%)', maxHeight: 'min(620px, 92vh)', overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
-            <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'start', padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div>
-                <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>
-                  {bundleDecision.kind === 'reject'
-                    ? bundleDecision.closesProposal ? 'Reject proposal' : 'Reject bundle item'
-                    : 'Use existing asset'}
-                </h2>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{bundleDecision.assetLabel}</div>
-              </div>
-              {bundleDecision.kind === 'link' && (
-                <button onClick={() => setBundleDecision(null)} style={{ border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6, padding: '6px 9px' }}>Close</button>
-              )}
-            </header>
-            <div style={{ display: 'grid', gap: '0.85rem', padding: '1rem' }}>
+        <Modal
+          title={bundleDecision.kind === 'reject'
+            ? bundleDecision.closesProposal ? 'Reject proposal' : 'Reject bundle item'
+            : 'Use existing asset'}
+          subtitle={bundleDecision.assetLabel}
+          onClose={() => setBundleDecision(null)}
+          maxWidth="620px"
+          maxHeight="min(620px, 92vh)"
+          overlayBackground="rgba(0,0,0,0.42)"
+          align="center"
+          showHeaderClose={bundleDecision.kind === 'link'}
+        >
+            <div style={{ display: 'grid', gap: '0.85rem' }}>
               {bundleDecision.kind === 'reject' && bundleDecision.closesProposal && (
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem', lineHeight: 1.45, margin: 0 }}>
                   This is the only item in the bundle, so rejecting it will close the whole proposal. The decision is terminal.
@@ -1362,20 +1359,21 @@ export default function ImprovementsPage() {
                 </button>
               </div>
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
 
       {rejectingRecommendation && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'grid', placeItems: 'center', zIndex: 1210, padding: '1rem' }}>
-          <section style={{ width: 'min(560px, 100%)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
-            <header style={{ padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
-              <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>Reject proposal</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem', lineHeight: 1.45, margin: 0 }}>
-                Rejecting this proposal is a terminal decision. You can optionally record why.
-              </p>
-            </header>
-            <div style={{ display: 'grid', gap: '0.85rem', padding: '1rem' }}>
+        <Modal
+          title="Reject proposal"
+          subtitle="Rejecting this proposal is a terminal decision. You can optionally record why."
+          onClose={() => setRejectingRecommendation(null)}
+          maxWidth="560px"
+          zIndex={1210}
+          overlayBackground="rgba(0,0,0,0.42)"
+          align="center"
+          showHeaderClose={false}
+        >
+            <div style={{ display: 'grid', gap: '0.85rem' }}>
               <label style={{ display: 'grid', gap: 5, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                 Reason
                 <textarea
@@ -1392,25 +1390,25 @@ export default function ImprovementsPage() {
                 <button disabled={recommendationRejectSaving} onClick={submitRecommendationReject} style={{ padding: '7px 10px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6, opacity: recommendationRejectSaving ? 0.6 : 1 }}>{recommendationRejectSaving ? 'Rejecting...' : 'Reject Proposal'}</button>
               </div>
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
 
       {confirming && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'grid', placeItems: 'center', zIndex: 1210, padding: '1rem' }}>
-          <section style={{ width: 'min(520px, 100%)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 18px 48px rgba(0,0,0,0.35)' }}>
-            <header style={{ padding: '1rem', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div>
-                <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: 4 }}>{confirming.title}</h2>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem', lineHeight: 1.45, margin: 0 }}>{confirming.body}</p>
-              </div>
-            </header>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '1rem', flexWrap: 'wrap' }}>
+        <Modal
+          title={confirming.title}
+          subtitle={confirming.body}
+          onClose={() => setConfirming(null)}
+          maxWidth="520px"
+          zIndex={1210}
+          overlayBackground="rgba(0,0,0,0.42)"
+          align="center"
+          showHeaderClose={false}
+        >
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button onClick={() => setConfirming(null)} style={{ padding: '7px 10px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Cancel</button>
               <button disabled={confirmSaving} onClick={submitConfirmation} style={{ padding: '7px 10px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6, opacity: confirmSaving ? 0.6 : 1 }}>{confirmSaving ? 'Working...' : confirming.confirmLabel}</button>
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
 
     </main>
