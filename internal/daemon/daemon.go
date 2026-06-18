@@ -113,6 +113,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	engine.WithMemory(memBackend)
 
 	obs := observe.NewStore(st.DB())
+	obs.WithLogger(logger)
 	obs.WithAttributionVerifier(observe.AttributionVerifierConfig{
 		SigningSecret: cfg.Daemon.Attribution.SigningSecret,
 		InstanceID:    cfg.Daemon.Attribution.InstanceID,

@@ -131,37 +131,112 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 	var missingCommitArtifact bool
 	if q.ReviewCommentID > 0 && strings.TrimSpace(q.HeadSHA) != "" {
 		if a, ok := s.store.RunAttributionArtifactByCommitSHA(workspaceID, owner, name, q.HeadSHA); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("review_comment_id", q.ReviewCommentID).
+				Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution commit artifact hit")
 			return s.artifactResolution(a, AttributionModeCommitArtifact)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int("number", q.IssueOrPRNumber).
+			Int64("review_comment_id", q.ReviewCommentID).
+			Int64("pull_request_review_id", q.PullRequestReviewID).
+			Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+			Str("file_path", strings.TrimSpace(q.FilePath)).
+			Msg("attribution commit artifact miss")
 		missingCommitArtifact = true
 	}
 
 	// Step 3: Parent review comment lookup via in_reply_to_id.
 	if q.InReplyToID > 0 {
 		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.InReplyToID); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("parent_review_comment_id", q.InReplyToID).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution parent review comment artifact hit")
 			return s.artifactResolution(a, AttributionModeArtifactParent)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int64("parent_review_comment_id", q.InReplyToID).
+			Msg("attribution parent review comment artifact miss")
 	}
 
 	// Step 4: Owning review lookup via pull_request_review_id.
 	if q.PullRequestReviewID > 0 {
 		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.PullRequestReviewID); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("pull_request_review_id", q.PullRequestReviewID).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution review artifact hit")
 			return s.artifactResolution(a, AttributionModeArtifactReview)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int64("pull_request_review_id", q.PullRequestReviewID).
+			Msg("attribution review artifact miss")
 	}
 
 	// Step 5: ReviewID direct lookup (for pull_request_review feedback).
 	if q.ReviewID > 0 {
 		if a, ok := s.store.RunAttributionArtifactByReviewID(workspaceID, owner, name, q.ReviewID); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("review_id", q.ReviewID).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution direct review artifact hit")
 			return s.artifactResolution(a, AttributionModeArtifactReview)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int64("review_id", q.ReviewID).
+			Msg("attribution direct review artifact miss")
 	}
 
 	// Step 6: issue_comment artifact lookup.
 	if q.CommentID > 0 {
 		if a, ok := s.store.RunAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("comment_id", q.CommentID).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution issue comment artifact hit")
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int64("comment_id", q.CommentID).
+			Msg("attribution issue comment artifact miss")
 	}
 
 	// Step 6a: Direct PR review comment artifact lookup. This comes after
@@ -170,11 +245,34 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 	// code; code ownership should win.
 	if q.ReviewCommentID > 0 {
 		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int64("review_comment_id", q.ReviewCommentID).
+				Int64("artifact_id", a.ID).
+				Str("span_id", a.SpanID).
+				Msg("attribution review comment artifact hit")
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
+		s.logger.Debug().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int64("review_comment_id", q.ReviewCommentID).
+			Msg("attribution review comment artifact miss")
 	}
 
 	if missingCommitArtifact {
+		s.logger.Warn().
+			Str("workspace", workspaceID).
+			Str("repo_owner", owner).
+			Str("repo_name", name).
+			Int("number", q.IssueOrPRNumber).
+			Int64("review_comment_id", q.ReviewCommentID).
+			Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+			Str("diagnostic", "commented commit has no signed agent attribution").
+			Msg("attribution unresolved after artifact walk")
 		return AttributionResolution{
 			Confidence: AttributionUnresolved,
 			Mode:       AttributionModeCommitArtifact,
@@ -188,10 +286,37 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 		candidates := s.store.RunAttributionArtifactsByPRContext(workspaceID, owner, name, q.IssueOrPRNumber, q.FilePath, q.HeadSHA)
 		switch len(candidates) {
 		case 0:
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int("number", q.IssueOrPRNumber).
+				Str("file_path", strings.TrimSpace(q.FilePath)).
+				Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+				Msg("attribution PR context artifact miss")
 			// No artifact candidates; fall through to inference.
 		case 1:
+			s.logger.Debug().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int("number", q.IssueOrPRNumber).
+				Str("file_path", strings.TrimSpace(q.FilePath)).
+				Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+				Int64("artifact_id", candidates[0].ID).
+				Str("span_id", candidates[0].SpanID).
+				Msg("attribution PR context artifact hit")
 			return s.artifactResolution(candidates[0], AttributionModeArtifactPRContext)
 		default:
+			s.logger.Warn().
+				Str("workspace", workspaceID).
+				Str("repo_owner", owner).
+				Str("repo_name", name).
+				Int("number", q.IssueOrPRNumber).
+				Str("file_path", strings.TrimSpace(q.FilePath)).
+				Str("head_sha", strings.TrimSpace(q.HeadSHA)).
+				Int("candidates", len(candidates)).
+				Msg("attribution PR context ambiguous")
 			return AttributionResolution{
 				Confidence: AttributionUnresolved,
 				Mode:       AttributionModeArtifactPRContext,
@@ -208,12 +333,33 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 func (s *Store) artifactResolution(a RunAttributionArtifact, mode string) (AttributionResolution, bool) {
 	snap, ok := s.runAttributionBySpan(a.WorkspaceID, a.SpanID)
 	if !ok {
+		s.logger.Warn().
+			Str("mode", mode).
+			Int64("artifact_id", a.ID).
+			Str("workspace", a.WorkspaceID).
+			Str("repo_owner", a.RepoOwner).
+			Str("repo_name", a.RepoName).
+			Str("source_type", a.SourceType).
+			Str("span_id", a.SpanID).
+			Msg("attribution artifact references unknown span")
 		return AttributionResolution{
 			Confidence: AttributionUnresolved,
 			Mode:       mode,
 			Diagnostic: fmt.Sprintf("artifact references unknown span %q", a.SpanID),
 		}, true
 	}
+	s.logger.Debug().
+		Str("mode", mode).
+		Int64("artifact_id", a.ID).
+		Str("workspace", a.WorkspaceID).
+		Str("repo_owner", a.RepoOwner).
+		Str("repo_name", a.RepoName).
+		Str("span_id", a.SpanID).
+		Str("agent", snap.AgentName).
+		Str("prompt_version_id", snap.PromptVersionID).
+		Strs("skill_version_ids", snap.SkillVersionIDs).
+		Strs("guardrail_version_ids", snap.GuardrailVersionIDs).
+		Msg("attribution resolved via artifact")
 	return AttributionResolution{Confidence: AttributionExact, Mode: mode, Snapshot: &snap}, true
 }
 
