@@ -113,7 +113,7 @@ func crudMinimalConfig() *config.Config {
 
 // ── /agents ────────────────────────────────────────────────────────
 
-func TestStoreCRUDAgentListReturnsArray(t *testing.T) {
+func TestStoreCRUDAgentListReturnsPage(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
@@ -122,14 +122,11 @@ func TestStoreCRUDAgentListReturnsArray(t *testing.T) {
 		t.Fatalf("GET /agents: got %d, want 200", rr.Code)
 	}
 	var agents []any
-	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	// Store invariants require ≥1 agent, so the fixture pre-seeds one. The
-	// endpoint just needs to return a JSON array, the array shape, not its
-	// emptiness, is what /agents commits to.
+	decodeItems(t, rr.Body, &agents)
+	// Store invariants require >=1 agent, so the fixture pre-seeds one. The
+	// endpoint commits to a non-nil items slice inside the pagination envelope.
 	if agents == nil {
-		t.Errorf("/agents returned nil slice, want JSON array")
+		t.Errorf("/agents returned nil items slice")
 	}
 }
 
@@ -177,9 +174,7 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 		t.Fatalf("GET /agents: got %d", rr.Code)
 	}
 	var agents []map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
+	decodeItems(t, rr.Body, &agents)
 	if !slices.ContainsFunc(agents, func(a map[string]any) bool {
 		return a["name"] == "coder"
 	}) {
@@ -256,9 +251,7 @@ func TestStoreCRUDAgentsListFiltersByWorkspace(t *testing.T) {
 		t.Fatalf("GET team agents: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode agents: %v", err)
-	}
+	decodeItems(t, rr.Body, &agents)
 	if len(agents) != 1 || agents[0].Name != "team-reviewer" || agents[0].WorkspaceID != "team-a" {
 		t.Fatalf("team agents = %+v, want only team-reviewer", agents)
 	}
@@ -786,9 +779,7 @@ func TestStoreCRUDReposListFiltersByWorkspace(t *testing.T) {
 		t.Fatalf("GET team repos: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var repos []storeRepoJSON
-	if err := json.NewDecoder(rr.Body).Decode(&repos); err != nil {
-		t.Fatalf("decode repos: %v", err)
-	}
+	decodeItems(t, rr.Body, &repos)
 	if len(repos) != 1 || repos[0].Name != "owner/team" || repos[0].WorkspaceID != "team-a" {
 		t.Fatalf("team repos = %+v, want only owner/team", repos)
 	}
@@ -810,9 +801,7 @@ func TestStoreCRUDGuardrailsListSeeded(t *testing.T) {
 		t.Fatalf("GET /guardrails: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var rows []map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&rows); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rr.Body, &rows)
 	if len(rows) != 4 ||
 		rows[0]["name"] != "security" || rows[0]["is_builtin"] != true ||
 		rows[1]["name"] != "discretion" || rows[1]["is_builtin"] != true ||
@@ -960,9 +949,7 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 		t.Fatalf("GET backends: got %d", rr.Code)
 	}
 	var list []storeBackendJSON
-	if err := json.NewDecoder(rr.Body).Decode(&list); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
+	decodeItems(t, rr.Body, &list)
 	if len(list) != 1 {
 		t.Fatalf("want 1 backend, got %d", len(list))
 	}
@@ -1246,9 +1233,7 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 		t.Fatalf("GET repos: got %d", rr.Code)
 	}
 	var repos []map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&repos); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rr.Body, &repos)
 	if len(repos) != 2 {
 		t.Fatalf("got %d repos, want 2", len(repos))
 	}
@@ -2139,9 +2124,7 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 		t.Fatalf("GET /api/agents: %d, %s", rr.Code, rr.Body.String())
 	}
 	var apiAgents []map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&apiAgents); err != nil {
-		t.Fatalf("decode /api/agents: %v", err)
-	}
+	decodeItems(t, rr.Body, &apiAgents)
 	if len(apiAgents) != 1 {
 		t.Fatalf("/api/agents: want 1 agent, got %d", len(apiAgents))
 	}

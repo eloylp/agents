@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 )
 
@@ -30,16 +31,21 @@ func guardrailJSON(g fleet.Guardrail) map[string]any {
 }
 
 func toolListGuardrails(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		gs, err := deps.Store.ReadAllGuardrails()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		gs, err := deps.Store.ListAllGuardrails(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list guardrails", err), nil
+		}
+		total, err := deps.Store.CountAllGuardrails()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count guardrails", err), nil
 		}
 		out := make([]map[string]any, 0, len(gs))
 		for _, g := range gs {
 			out = append(out, guardrailJSON(g))
 		}
-		return jsonResult(out)
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 

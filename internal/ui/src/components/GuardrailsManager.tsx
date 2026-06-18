@@ -6,6 +6,7 @@ import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
+import { itemsFromResponse } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
@@ -212,8 +213,9 @@ export default function GuardrailsManager() {
         return r.json()
       }),
     ])
-      .then(([catalog, refs]: [Guardrail[], WorkspaceGuardrailRef[]]) => {
+      .then(([catalogRaw, refs]: [unknown, WorkspaceGuardrailRef[]]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
+        const catalog = itemsFromResponse<Guardrail>(catalogRaw)
         setGuardrails(catalog ?? [])
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)

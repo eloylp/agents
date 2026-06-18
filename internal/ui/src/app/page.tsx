@@ -3,12 +3,14 @@ import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
 import { formatDateTime } from '@/lib/datetime'
+import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
 import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 
 interface Binding {
@@ -122,6 +124,9 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
 
 export default function FleetPage() {
   const [agents, setAgents] = useState<Agent[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
@@ -142,32 +147,37 @@ export default function FleetPage() {
   const loadLookups = () => {
     fetch('/backends')
       .then(r => r.ok ? r.json() : [])
-      .then((data: BackendOption[]) => setBackendOptions((data ?? []).filter(b => b.detected !== false)))
+      .then((data) => setBackendOptions(itemsFromResponse<BackendOption>(data).filter(b => b.detected !== false)))
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
-      .then((data: CatalogItem[]) => setSkillOptions(data ?? []))
+      .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: CatalogItem[]) => setPromptOptions(data ?? []))
+      .then((data) => setPromptOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
     fetch(withWorkspace('/repos', workspace))
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setRepoNames(data.map(r => r.name)))
+      .then((data) => setRepoNames(itemsFromResponse<{ name: string }>(data).map(r => r.name)))
       .catch(() => {})
   }
 
   const load = () => {
     if (!loadRef.current) setLoading(true)
     loadRef.current = true
-    fetch(withWorkspace('/agents', workspace))
+    fetch(withWorkspace(`/agents?limit=${limit}&offset=${offset}`, workspace))
       .then(r => r.json())
-      .then(data => { setAgents(data); setLoading(false) })
+      .then(data => {
+        const page = pageFromResponse<Agent>(data, limit, offset)
+        setAgents(page.items)
+        setTotal(page.total)
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
@@ -176,6 +186,10 @@ export default function FleetPage() {
     loadLookups()
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
+  }, [workspace, limit, offset])
+
+  useEffect(() => {
+    setOffset(0)
   }, [workspace])
 
   const openEdit = async (agentName: string) => {
@@ -320,6 +334,16 @@ export default function FleetPage() {
             Refresh
           </button>
         </div>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <PaginationControls
+          total={total}
+          limit={limit}
+          offset={offset}
+          onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+          onOffsetChange={setOffset}
+        />
       </div>
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}

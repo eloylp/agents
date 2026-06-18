@@ -2,10 +2,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
+import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface Repo {
@@ -369,6 +371,9 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, existingRepos, onSa
 export default function ReposPage() {
   const { workspace } = useSelectedWorkspace()
   const [repos, setRepos] = useState<Repo[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -391,17 +396,26 @@ export default function ReposPage() {
 
   const load = useCallback(() => {
     setLoading(true)
-    fetch(withWorkspace('/repos', workspace))
+    fetch(withWorkspace(`/repos?limit=${limit}&offset=${offset}`, workspace))
       .then(r => r.json())
-      .then((data: Repo[]) => { setRepos(data); setLoading(false) })
+      .then((data) => {
+        const page = pageFromResponse<Repo>(data, limit, offset)
+        setRepos(page.items)
+        setTotal(page.total)
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
+  }, [workspace, limit, offset])
+
+  useEffect(() => {
+    setOffset(0)
   }, [workspace])
 
   useEffect(() => {
     load()
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => { /* store not configured, no-op */ })
   }, [load, workspace])
 
@@ -546,6 +560,16 @@ export default function ReposPage() {
             Refresh
           </button>
         </div>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <PaginationControls
+          total={total}
+          limit={limit}
+          offset={offset}
+          onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+          onOffsetChange={setOffset}
+        />
       </div>
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}

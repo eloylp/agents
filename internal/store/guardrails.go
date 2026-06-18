@@ -58,6 +58,27 @@ func ReadAllGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	return scanGuardrails(db, q)
 }
 
+func ListAllGuardrails(db *sql.DB, limit, offset int) ([]fleet.Guardrail, error) {
+	limit, offset = clampPage(limit, offset)
+	const q = `
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, g.enabled, g.position,
+		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
+		FROM guardrails g
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
+		ORDER BY g.position ASC, g.name ASC
+		LIMIT ? OFFSET ?`
+	return scanGuardrails(db, q, limit, offset)
+}
+
+func CountAllGuardrails(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM guardrails").Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count guardrails: %w", err)
+	}
+	return total, nil
+}
+
 // GetGuardrail returns the named guardrail. Returns *ErrNotFound when the
 // row does not exist.
 func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {

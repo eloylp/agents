@@ -24,6 +24,7 @@ import dagre from 'dagre'
 import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import { formatDateTime } from '@/lib/datetime'
+import { itemsFromResponse } from '@/lib/pagination'
 import BadgePicker from '@/components/BadgePicker'
 import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
@@ -469,20 +470,20 @@ export default function GraphPage() {
   const loadLookups = useCallback(() => {
     fetch('/backends')
       .then(r => r.ok ? r.json() : [])
-      .then((data: BackendOption[]) => setBackendOptions((data ?? []).filter(b => b.detected !== false)))
+      .then((data) => setBackendOptions(itemsFromResponse<BackendOption>(data).filter(b => b.detected !== false)))
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
-      .then((data: CatalogItem[]) => setSkillOptions(data ?? []))
+      .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: GraphPromptItem[]) => {
-        setPromptOptions(data ?? [])
+      .then((data) => {
+        setPromptOptions(itemsFromResponse<GraphPromptItem>(data))
         setPromptOptionsLoaded(true)
       })
       .catch(() => setPromptOptionsLoaded(true))
@@ -498,9 +499,10 @@ export default function GraphPage() {
       fetch(withWorkspace('/repos', workspace)).then(r => r.ok ? r.json() : []),
     ]).then(([gd, ad, ld, rd]) => {
       setGraphData(gd)
-      setAgents(ad)
-      setRepos(rd ?? [])
-      setAgentNames((ad ?? []).map((a: AgentInfo) => a.name))
+      const agentItems = itemsFromResponse<AgentInfo>(ad)
+      setAgents(agentItems)
+      setRepos(itemsFromResponse<RepoInfo>(rd))
+      setAgentNames(agentItems.map((a: AgentInfo) => a.name))
       const nextPositions: Record<string, { x: number; y: number }> = {}
       ;(ld.positions ?? []).forEach((p: { node_id: string; x: number; y: number }) => {
         nextPositions[p.node_id] = { x: p.x, y: p.y }

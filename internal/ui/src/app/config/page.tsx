@@ -6,6 +6,7 @@ import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
+import { itemsFromResponse } from '@/lib/pagination'
 import { defaultWorkspaceID, useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
@@ -373,7 +374,7 @@ export default function ConfigPage() {
         if (!diagRes.ok) throw new Error((await diagRes.text()) || 'Failed to load diagnostics')
         if (!orphanRes.ok) throw new Error((await orphanRes.text()) || 'Failed to load orphaned agents')
 
-        const dbData = sortBackends(await dbRes.json() as Backend[])
+        const dbData = sortBackends(itemsFromResponse<Backend>(await dbRes.json()))
         const diagData = await diagRes.json() as BackendsDiscoveryResponse
         const diagBackends = sortBackends(diagData.backends ?? [])
         const diagTools = diagData.tools ?? (diagData.github_cli ? [diagData.github_cli] : [])
@@ -777,8 +778,7 @@ export default function ConfigPage() {
     try {
       const res = await fetch('/token_budgets')
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load budgets')
-      const data = await res.json() as TokenBudget[] | null
-      setBudgets(data ?? [])
+      setBudgets(itemsFromResponse<TokenBudget>(await res.json()))
     } catch (e) {
       setBudgetError(String(e))
     }
@@ -804,16 +804,13 @@ export default function ConfigPage() {
     try {
       const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(withWorkspace('/agents', workspace)), fetch(withWorkspace('/repos', workspace))])
       if (backendRes.ok) {
-        const backendData = await backendRes.json() as Backend[] | null
-        setBackends(sortBackends(backendData ?? []))
+        setBackends(sortBackends(itemsFromResponse<Backend>(await backendRes.json())))
       }
       if (agentRes.ok) {
-        const agentData = await agentRes.json() as Agent[] | null
-        setAgents((agentData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+        setAgents(itemsFromResponse<Agent>(await agentRes.json()).slice().sort((a, b) => a.name.localeCompare(b.name)))
       }
       if (repoRes.ok) {
-        const repoData = await repoRes.json() as Repo[] | null
-        setRepos((repoData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+        setRepos(itemsFromResponse<Repo>(await repoRes.json()).slice().sort((a, b) => a.name.localeCompare(b.name)))
       }
     } catch {
       // Keep any already-loaded options; validation still happens server-side.

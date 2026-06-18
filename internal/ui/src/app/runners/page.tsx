@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { formatDateTime, formatTime } from '@/lib/datetime'
@@ -106,6 +107,9 @@ function RunnersInner() {
   }
 
   const [rows, setRows] = useState<RunnerRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [status, setStatus] = useState<'' | 'enqueued' | 'running' | 'completed'>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -121,11 +125,12 @@ function RunnersInner() {
 
   const load = async () => {
     try {
-      const url = withWorkspace(`/runners?limit=200${status ? `&status=${status}` : ''}`, workspace)
+      const url = withWorkspace(`/runners?limit=${limit}&offset=${offset}${status ? `&status=${status}` : ''}`, workspace)
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
       const nextRows = data.runners ?? []
+      setTotal(data.total ?? nextRows.length)
       const newTimeout = observeRunnerTimeouts(nextRows, timeoutTracker.current)
       if (newTimeout) setTimeoutToast(newTimeout)
       let newFailure: RunnerRow | null = null
@@ -154,7 +159,11 @@ function RunnersInner() {
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)
-  }, [status, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, workspace, limit, offset]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setOffset(0)
+  }, [status, workspace])
 
   // Trigger highlight pulse when arriving with ?event=X. Wait until
   // the first batch of rows lands, otherwise the animation runs while
@@ -275,6 +284,13 @@ function RunnersInner() {
               padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{s || 'All'}</button>
           ))}
+          <PaginationControls
+            total={total}
+            limit={limit}
+            offset={offset}
+            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+            onOffsetChange={setOffset}
+          />
         </div>
       </div>
 

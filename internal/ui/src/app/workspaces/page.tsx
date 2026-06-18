@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
+import { itemsFromResponse } from '@/lib/pagination'
 import { defaultWorkspaceID } from '@/lib/workspace'
 
 interface Workspace {
@@ -105,6 +107,9 @@ function WorkspaceForm({ initial, isNew, saving, error, onSave, onCancel }: {
 
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saveError, setSaveError] = useState('')
@@ -115,13 +120,16 @@ export default function WorkspacesPage() {
   const load = () => {
     setLoading(true)
     setError('')
-    fetch('/workspaces', { cache: 'no-store' })
+    fetch(`/workspaces?limit=${limit}&offset=${offset}`, { cache: 'no-store' })
       .then(async res => {
         if (!res.ok) throw new Error((await res.text()) || 'Failed to load workspaces')
         return res.json()
       })
-      .then((data: Workspace[] | null) => {
-        setWorkspaces((data ?? []).slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)))
+      .then((data) => {
+        const items = itemsFromResponse<Workspace>(data)
+        const page = data as { total?: number }
+        setWorkspaces(items.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)))
+        setTotal(page.total ?? items.length)
         setLoading(false)
       })
       .catch(e => {
@@ -130,7 +138,7 @@ export default function WorkspacesPage() {
       })
   }
 
-  useEffect(() => load(), [])
+  useEffect(() => load(), [limit, offset])
 
   const openCreate = () => {
     setSaveError('')
@@ -210,6 +218,15 @@ export default function WorkspacesPage() {
       </div>
 
       <Card>
+        <div style={{ marginBottom: '1rem' }}>
+          <PaginationControls
+            total={total}
+            limit={limit}
+            offset={offset}
+            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+            onOffsetChange={setOffset}
+          />
+        </div>
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
         {error && <p style={{ color: 'var(--text-danger)' }}>{error}</p>}
         {!loading && !error && workspaces.length === 0 && (

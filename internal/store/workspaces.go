@@ -28,6 +28,32 @@ func ReadWorkspaces(db *sql.DB) ([]fleet.Workspace, error) {
 	return out, rows.Err()
 }
 
+func ListWorkspaces(db *sql.DB, limit, offset int) ([]fleet.Workspace, error) {
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query("SELECT id, name, description, runner_image FROM workspaces ORDER BY name LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list workspaces: %w", err)
+	}
+	defer rows.Close()
+	var out []fleet.Workspace
+	for rows.Next() {
+		var w fleet.Workspace
+		if err := rows.Scan(&w.ID, &w.Name, &w.Description, &w.RunnerImage); err != nil {
+			return nil, fmt.Errorf("store: list workspaces: %w", err)
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func CountWorkspaces(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspaces").Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count workspaces: %w", err)
+	}
+	return total, nil
+}
+
 // ResolveWorkspaceID resolves either a workspace id or display name to the
 // stable workspace id used by storage.
 func ResolveWorkspaceID(db *sql.DB, workspace string) (string, error) {
@@ -334,4 +360,36 @@ func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func ListPrompts(db *sql.DB, limit, offset int) ([]fleet.Prompt, error) {
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query(`
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name, p.description, p.content,
+		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
+		FROM prompts p
+		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
+		ORDER BY COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list prompts: %w", err)
+	}
+	defer rows.Close()
+	var out []fleet.Prompt
+	for rows.Next() {
+		var p fleet.Prompt
+		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version); err != nil {
+			return nil, fmt.Errorf("store: list prompts: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func CountPrompts(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM prompts").Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count prompts: %w", err)
+	}
+	return total, nil
 }

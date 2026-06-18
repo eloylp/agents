@@ -64,6 +64,12 @@ func (s *Store) ReadAgents() ([]fleet.Agent, error)   { return ReadAgents(s.db) 
 func (s *Store) UpsertAgent(a fleet.Agent) error      { return UpsertAgent(s.db, a) }
 func (s *Store) DeleteAgent(name string) error        { return DeleteAgent(s.db, name) }
 func (s *Store) DeleteAgentCascade(name string) error { return DeleteAgentCascade(s.db, name) }
+func (s *Store) ListWorkspaceAgents(workspace string, limit, offset int) ([]fleet.Agent, error) {
+	return ListWorkspaceAgents(s.db, workspace, limit, offset)
+}
+func (s *Store) CountWorkspaceAgents(workspace string) (int, error) {
+	return CountWorkspaceAgents(s.db, workspace)
+}
 func (s *Store) DeleteWorkspaceAgent(workspace, name string) error {
 	return DeleteWorkspaceAgent(s.db, workspace, name)
 }
@@ -91,6 +97,14 @@ func (s *Store) ClearWorkspaceGraphLayout(workspace string) error {
 
 func (s *Store) ReadWorkspaces() ([]fleet.Workspace, error) { return ReadWorkspaces(s.db) }
 func (s *Store) ReadPrompts() ([]fleet.Prompt, error)       { return ReadPrompts(s.db) }
+func (s *Store) ListWorkspaces(limit, offset int) ([]fleet.Workspace, error) {
+	return ListWorkspaces(s.db, limit, offset)
+}
+func (s *Store) CountWorkspaces() (int, error) { return CountWorkspaces(s.db) }
+func (s *Store) ListPrompts(limit, offset int) ([]fleet.Prompt, error) {
+	return ListPrompts(s.db, limit, offset)
+}
+func (s *Store) CountPrompts() (int, error) { return CountPrompts(s.db) }
 func (s *Store) ReadRuntimeSettings() (fleet.RuntimeSettings, error) {
 	return ReadRuntimeSettings(s.db)
 }
@@ -142,6 +156,10 @@ func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) 
 // ── Skills ──────────────────────────────────────────────────────────────
 
 func (s *Store) ReadSkills() (map[string]fleet.Skill, error) { return ReadSkills(s.db) }
+func (s *Store) ListSkills(limit, offset int) ([]SkillRecord, error) {
+	return ListSkills(s.db, limit, offset)
+}
+func (s *Store) CountSkills() (int, error) { return CountSkills(s.db) }
 func (s *Store) ReadSkillVersion(versionID string) (fleet.Skill, error) {
 	return ReadSkillVersion(s.db, versionID)
 }
@@ -157,6 +175,10 @@ func (s *Store) DeleteSkill(name string) error                 { return DeleteSk
 // ── Backends ────────────────────────────────────────────────────────────
 
 func (s *Store) ReadBackends() (map[string]fleet.Backend, error) { return ReadBackends(s.db) }
+func (s *Store) ListBackends(limit, offset int) ([]BackendRecord, error) {
+	return ListBackends(s.db, limit, offset)
+}
+func (s *Store) CountBackends() (int, error) { return CountBackends(s.db) }
 func (s *Store) UpsertBackend(name string, b fleet.Backend) error {
 	return UpsertBackend(s.db, name, b)
 }
@@ -167,6 +189,12 @@ func (s *Store) DeleteBackend(name string) error { return DeleteBackend(s.db, na
 func (s *Store) ReadRepos() ([]fleet.Repo, error) { return ReadRepos(s.db) }
 func (s *Store) UpsertRepo(r fleet.Repo) error    { return UpsertRepo(s.db, r) }
 func (s *Store) DeleteRepo(name string) error     { return DeleteRepo(s.db, name) }
+func (s *Store) ListWorkspaceRepos(workspace string, limit, offset int) ([]fleet.Repo, error) {
+	return ListWorkspaceRepos(s.db, workspace, limit, offset)
+}
+func (s *Store) CountWorkspaceRepos(workspace string) (int, error) {
+	return CountWorkspaceRepos(s.db, workspace)
+}
 func (s *Store) DeleteWorkspaceRepo(workspace, name string) error {
 	return DeleteWorkspaceRepo(s.db, workspace, name)
 }
@@ -207,7 +235,11 @@ func (s *Store) ReadEnabledGuardrails() ([]fleet.Guardrail, error) {
 func (s *Store) ReadWorkspacePromptGuardrails(workspace string) ([]fleet.Guardrail, error) {
 	return ReadWorkspacePromptGuardrails(s.db, workspace)
 }
-func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)     { return ReadAllGuardrails(s.db) }
+func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error) { return ReadAllGuardrails(s.db) }
+func (s *Store) ListAllGuardrails(limit, offset int) ([]fleet.Guardrail, error) {
+	return ListAllGuardrails(s.db, limit, offset)
+}
+func (s *Store) CountAllGuardrails() (int, error)                  { return CountAllGuardrails(s.db) }
 func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error) { return GetGuardrail(s.db, name) }
 func (s *Store) ListGuardrailVersions(ref string) ([]fleet.CatalogVersion, error) {
 	return ListGuardrailVersions(s.db, ref)
@@ -280,7 +312,11 @@ func (s *Store) CountFrom() (ImportCount, error)          { return CountFrom(s.d
 
 // ── Token budgets and leaderboard ────────────────────────────────────────
 
-func (s *Store) ListTokenBudgets() ([]TokenBudget, error)     { return ListTokenBudgets(s.db) }
+func (s *Store) ListTokenBudgets() ([]TokenBudget, error) { return ListTokenBudgets(s.db) }
+func (s *Store) ListTokenBudgetsPage(limit, offset int) ([]TokenBudget, error) {
+	return ListTokenBudgetsPage(s.db, limit, offset)
+}
+func (s *Store) CountTokenBudgets() (int, error)              { return CountTokenBudgets(s.db) }
 func (s *Store) GetTokenBudget(id int64) (TokenBudget, error) { return GetTokenBudget(s.db, id) }
 func (s *Store) CreateTokenBudget(b TokenBudget) (TokenBudget, error) {
 	return CreateTokenBudget(s.db, b)

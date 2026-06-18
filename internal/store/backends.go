@@ -93,6 +93,45 @@ func ReadBackends(db *sql.DB) (map[string]fleet.Backend, error) {
 	return cfg.Daemon.AIBackends, nil
 }
 
+type BackendRecord struct {
+	Name    string
+	Backend fleet.Backend
+}
+
+func ListBackends(db *sql.DB, limit, offset int) ([]BackendRecord, error) {
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars FROM backends ORDER BY name LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list backends: %w", err)
+	}
+	defer rows.Close()
+	var out []BackendRecord
+	for rows.Next() {
+		var rec BackendRecord
+		var modelsJSON string
+		var healthy, timeout, maxChars int
+		if err := rows.Scan(&rec.Name, &rec.Backend.Command, &rec.Backend.Version, &modelsJSON, &healthy, &rec.Backend.HealthDetail, &rec.Backend.LocalModelURL, &timeout, &maxChars); err != nil {
+			return nil, fmt.Errorf("store: list backends: %w", err)
+		}
+		if err := json.Unmarshal([]byte(modelsJSON), &rec.Backend.Models); err != nil {
+			return nil, fmt.Errorf("store: list backends: parse %s models: %w", rec.Name, err)
+		}
+		rec.Backend.Healthy = intToBool(healthy)
+		rec.Backend.TimeoutSeconds = timeout
+		rec.Backend.MaxPromptChars = maxChars
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func CountBackends(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM backends").Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count backends: %w", err)
+	}
+	return total, nil
+}
+
 // UpsertBackend inserts or replaces a single AI backend configuration.
 // Before writing, the backend is fully normalized to match what startup
 // produces: the name is lowercased and trimmed, Command is trimmed, blank env

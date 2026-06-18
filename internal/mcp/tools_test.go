@@ -462,8 +462,15 @@ func TestToolListAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeText(t, res, &page)
+	got := page.Items
+	if page.Total != 2 {
+		t.Fatalf("total = %d, want 2", page.Total)
+	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 agents, got %d: %+v", len(got), got)
 	}
@@ -547,8 +554,12 @@ func TestToolListSkillsSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeText(t, res, &page)
+	got := page.Items
 	if len(got) != 2 {
 		t.Fatalf("expected 2 skills, got %d", len(got))
 	}
@@ -788,8 +799,12 @@ func TestToolListBackendsSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeText(t, res, &page)
+	got := page.Items
 	if len(got) != 2 || got[0]["name"] != "claude" || got[1]["name"] != "codex" {
 		t.Fatalf("backends should be sorted alphabetically, got %+v", got)
 	}
@@ -836,8 +851,12 @@ func TestToolListRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeText(t, res, &page)
+	got := page.Items
 	if len(got) != 2 {
 		t.Fatalf("expected 2 repos, got %d", len(got))
 	}

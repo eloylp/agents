@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	fleetcfg "github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/scheduler"
 )
@@ -61,6 +62,7 @@ type apiAgentJSON struct {
 // requests to HandleAgentsCreate.
 func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 	workspaceID := fleetcfg.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	page := pagination.Parse(r)
 	// Index scheduling state by (workspace, agent, repo) for O(1) lookup below.
 	type scheduleKey struct {
 		Workspace string
@@ -74,18 +76,25 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	storedAgents, storedRepos, _, _, err := h.store.ReadSnapshot()
+	storedAgents, err := h.store.ListWorkspaceAgents(workspaceID, page.Limit, page.Offset)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
+		return
+	}
+	total, err := h.store.CountWorkspaceAgents(workspaceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count agents: %v", err), http.StatusInternalServerError)
+		return
+	}
+	storedRepos, err := h.store.ReadRepos()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Build one entry per configured agent.
 	agents := make([]apiAgentJSON, 0, len(storedAgents))
 	for _, a := range storedAgents {
-		if fleetcfg.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
-			continue
-		}
 		currentStatus := "idle"
 		if h.obs != nil && h.obs.IsRunningInWorkspace(workspaceID, a.Name) {
 			currentStatus = "running"
@@ -155,5 +164,5 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(agents)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(agents, total, page))
 }

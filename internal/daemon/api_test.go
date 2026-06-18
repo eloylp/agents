@@ -60,9 +60,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	}
 
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	// Locate "reviewer" in the response, the fixture also seeds an agent
 	// and "sec-reviewer" exists for the can_dispatch reference.
 	idx := slices.IndexFunc(agents, func(a viewAgentJSON) bool { return a.Name == "reviewer" })
@@ -107,9 +105,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	if len(agents) != 1 {
 		t.Fatalf("want 1 agent")
 	}
@@ -159,9 +155,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	if len(agents) != 1 {
 		t.Fatalf("want 1 agent, got %d", len(agents))
 	}
@@ -238,9 +232,7 @@ func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	if len(agents) != 1 {
 		t.Fatalf("want 1 agent, got %d", len(agents))
 	}
@@ -284,9 +276,7 @@ func TestHandleAPIAgentsReturnsArrayShape(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	if agents == nil {
 		t.Errorf("/agents returned nil slice, want JSON array")
 	}
@@ -305,9 +295,7 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	for _, a := range agents {
 		if a.CurrentStatus != "idle" {
 			t.Errorf("agent %q: want current_status=idle, got %q", a.Name, a.CurrentStatus)
@@ -342,9 +330,7 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	var agents []viewAgentJSON
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeItems(t, rec.Body, &agents)
 	coderIdx := slices.IndexFunc(agents, func(a viewAgentJSON) bool {
 		return a.Name == "coder"
 	})

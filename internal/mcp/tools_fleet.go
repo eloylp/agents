@@ -2,10 +2,10 @@ package mcp
 
 import (
 	"context"
-	"maps"
 	"slices"
 	"strings"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -19,18 +19,21 @@ import (
 func toolListAgents(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace := strings.TrimSpace(req.GetString("workspace", ""))
-		agents, err := deps.Store.ReadAgents()
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		workspaceID := fleet.NormalizeWorkspaceID(workspace)
+		agents, err := deps.Store.ListWorkspaceAgents(workspaceID, page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
 		}
+		total, err := deps.Store.CountWorkspaceAgents(workspaceID)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count agents", err), nil
+		}
 		out := make([]map[string]any, 0, len(agents))
 		for _, a := range agents {
-			if workspace != "" && fleet.NormalizeWorkspaceID(a.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
-				continue
-			}
 			out = append(out, agentJSON(a))
 		}
-		return jsonResult(out)
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 
@@ -59,45 +62,59 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolListSkills(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		skills, err := deps.Store.ReadSkills()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		skills, err := deps.Store.ListSkills(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list skills", err), nil
 		}
-		names := slices.Sorted(maps.Keys(skills))
-		out := make([]map[string]any, 0, len(names))
-		for _, n := range names {
-			out = append(out, skillJSON(n, skills[n]))
+		total, err := deps.Store.CountSkills()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count skills", err), nil
 		}
-		return jsonResult(out)
+		out := make([]map[string]any, 0, len(skills))
+		for _, rec := range skills {
+			out = append(out, skillJSON(rec.ID, rec.Skill))
+		}
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 
 func toolListPrompts(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		prompts, err := deps.Store.ReadPrompts()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		prompts, err := deps.Store.ListPrompts(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list prompts", err), nil
+		}
+		total, err := deps.Store.CountPrompts()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count prompts", err), nil
 		}
 		out := make([]map[string]any, 0, len(prompts))
 		for _, p := range prompts {
 			out = append(out, promptJSON(p))
 		}
-		return jsonResult(out)
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 
 func toolListWorkspaces(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspaces, err := deps.Store.ReadWorkspaces()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		workspaces, err := deps.Store.ListWorkspaces(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list workspaces", err), nil
+		}
+		total, err := deps.Store.CountWorkspaces()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count workspaces", err), nil
 		}
 		out := make([]map[string]any, 0, len(workspaces))
 		for _, w := range workspaces {
 			out = append(out, workspaceJSON(w))
 		}
-		return jsonResult(out)
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 
@@ -170,17 +187,21 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolListBackends(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		backends, err := deps.Store.ReadBackends()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		backends, err := deps.Store.ListBackends(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list backends", err), nil
 		}
-		names := slices.Sorted(maps.Keys(backends))
-		out := make([]map[string]any, 0, len(names))
-		for _, n := range names {
-			out = append(out, backendJSON(n, backends[n]))
+		total, err := deps.Store.CountBackends()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count backends", err), nil
 		}
-		return jsonResult(out)
+		out := make([]map[string]any, 0, len(backends))
+		for _, rec := range backends {
+			out = append(out, backendJSON(rec.Name, rec.Backend))
+		}
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 
@@ -208,18 +229,21 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 func toolListRepos(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace := strings.TrimSpace(req.GetString("workspace", ""))
-		repos, err := deps.Store.ReadRepos()
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		workspaceID := fleet.NormalizeWorkspaceID(workspace)
+		repos, err := deps.Store.ListWorkspaceRepos(workspaceID, page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
 		}
+		total, err := deps.Store.CountWorkspaceRepos(workspaceID)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count repos", err), nil
+		}
 		out := make([]map[string]any, 0, len(repos))
 		for _, r := range repos {
-			if workspace != "" && fleet.NormalizeWorkspaceID(r.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
-				continue
-			}
 			out = append(out, repoJSON(r))
 		}
-		return jsonResult(out)
+		return jsonResult(pagination.NewPage(out, total, page))
 	}
 }
 

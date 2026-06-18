@@ -21,6 +21,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("workspace",
 				mcpgo.Description("Optional workspace id/name filter. Omit to list all workspace-local agents."),
 			),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListAgents(deps),
 	)
@@ -40,18 +42,24 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
 		mcpgo.NewTool("list_skills",
 			mcpgo.WithDescription("List every configured skill with its prompt body. Skills are reusable prompt fragments agents can compose."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListSkills(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("list_prompts",
 			mcpgo.WithDescription("List every prompt catalog entry. Prompts are reusable task/personality contracts that may be global, workspace-scoped, or repo-scoped."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListPrompts(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("list_workspaces",
 			mcpgo.WithDescription("List every workspace. Workspaces scope repos, agents, runs, memory, graph layout, and budgets."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListWorkspaces(deps),
 	)
@@ -101,6 +109,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
 		mcpgo.NewTool("list_guardrails",
 			mcpgo.WithDescription("List every prompt guardrail (operator-defined policy blocks prepended to every agent's composed prompt). Includes the shipped 'security' default and any operator-added rules. Returns enabled and disabled rows in render order (position ASC, name ASC)."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListGuardrails(deps),
 	)
@@ -126,6 +136,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
 		mcpgo.NewTool("list_backends",
 			mcpgo.WithDescription("List every configured AI backend (command, models, timeouts). Includes local backends routed through the translation proxy."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListBackends(deps),
 	)
@@ -145,6 +157,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("workspace",
 				mcpgo.Description("Optional workspace id/name filter. Omit to list all workspace-local repos."),
 			),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListRepos(deps),
 	)

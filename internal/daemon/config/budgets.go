@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -72,18 +73,22 @@ func (h *Handler) deleteTokenBudgetByID(w http.ResponseWriter, r *http.Request) 
 	h.deleteTokenBudget(w, r, id)
 }
 
-func (h *Handler) listTokenBudgets(w http.ResponseWriter, _ *http.Request) {
-	budgets, err := h.store.ListTokenBudgets()
+func (h *Handler) listTokenBudgets(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	budgets, err := h.store.ListTokenBudgetsPage(page.Limit, page.Offset)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list token budgets")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if budgets == nil {
-		budgets = []store.TokenBudget{}
+	total, err := h.store.CountTokenBudgets()
+	if err != nil {
+		h.logger.Error().Err(err).Msg("count token budgets")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(budgets)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(budgets, total, page))
 }
 
 func (h *Handler) createTokenBudget(w http.ResponseWriter, r *http.Request) {

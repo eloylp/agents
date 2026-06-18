@@ -3,8 +3,10 @@
 import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
+import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
 
 interface Prompt {
   id?: string
@@ -36,6 +38,9 @@ function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | '
 
 export default function PromptsPage() {
   const [prompts, setPrompts] = useState<Prompt[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [repos, setRepos] = useState<Repo[]>([])
   const [loading, setLoading] = useState(true)
@@ -51,9 +56,14 @@ export default function PromptsPage() {
 
   const load = () => {
     setLoading(true)
-    fetch('/prompts', { cache: 'no-store' })
+    fetch(`/prompts?limit=${limit}&offset=${offset}`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Prompt[]) => { setPrompts(data ?? []); setLoading(false) })
+      .then((data) => {
+        const page = pageFromResponse<Prompt>(data, limit, offset)
+        setPrompts(page.items)
+        setTotal(page.total)
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
@@ -61,9 +71,9 @@ export default function PromptsPage() {
     load()
     fetch('/workspaces', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Workspace[]) => setWorkspaces(data ?? []))
+      .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
-  }, [])
+  }, [limit, offset])
 
   useEffect(() => {
     if (selectedScope !== 'repo' || !selected.workspace_id) {
@@ -72,7 +82,7 @@ export default function PromptsPage() {
     }
     fetch(`/repos?workspace=${encodeURIComponent(selected.workspace_id)}`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Repo[]) => setRepos(data ?? []))
+      .then((data) => setRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setRepos([]))
   }, [selectedScope, selected.workspace_id])
 
@@ -83,7 +93,7 @@ export default function PromptsPage() {
     }
     fetch(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Repo[]) => setFilterRepos(data ?? []))
+      .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))
   }, [filterScope, filterWorkspace])
 
@@ -206,6 +216,16 @@ export default function PromptsPage() {
             + New prompt
           </button>
         </div>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <PaginationControls
+          total={total}
+          limit={limit}
+          offset={offset}
+          onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+          onOffsetChange={setOffset}
+        />
       </div>
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}

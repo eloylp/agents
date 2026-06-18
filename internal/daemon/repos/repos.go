@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/service"
 	"github.com/eloylp/agents/internal/store"
@@ -132,19 +133,22 @@ type repoRuntimeSettingsJSON struct {
 
 func (h *Handler) handleReposList(w http.ResponseWriter, r *http.Request) {
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
-	repos, err := h.store.ReadRepos()
+	page := pagination.Parse(r)
+	repos, err := h.store.ListWorkspaceRepos(workspaceID, page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 		return
 	}
+	total, err := h.store.CountWorkspaceRepos(workspaceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count repos: %v", err), http.StatusInternalServerError)
+		return
+	}
 	out := make([]storeRepoJSON, 0, len(repos))
 	for _, r := range repos {
-		if fleet.NormalizeWorkspaceID(r.WorkspaceID) != workspaceID {
-			continue
-		}
 		out = append(out, repoToStoreJSON(r))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handleRepoCreate(w http.ResponseWriter, r *http.Request) {

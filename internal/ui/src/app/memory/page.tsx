@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { formatDateTime } from '@/lib/datetime'
+import { itemsFromResponse } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -29,7 +30,7 @@ export default function MemoryPage() {
   useEffect(() => {
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.json())
-      .then(data => setAgents(data ?? []))
+      .then(data => setAgents(itemsFromResponse<Agent>(data)))
       .catch(() => {})
   }, [workspace])
 
