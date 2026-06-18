@@ -20,7 +20,7 @@ describe('<SkillsPage />', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows stable skill ids next to display names', async () => {
+  it('keeps long stable skill ids in tooltips instead of row labels', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/skills') {
@@ -53,14 +53,16 @@ describe('<SkillsPage />', () => {
 
     render(<SkillsPage />)
 
-    expect(await screen.findByText('go-api · go api boundaries')).toBeInTheDocument()
+    expect(await screen.findByText('go api boundaries')).toBeInTheDocument()
     expect(screen.getByText('testing')).toBeInTheDocument()
+    expect(screen.queryByText('go-api · go api boundaries')).not.toBeInTheDocument()
+    expect(screen.getByText('go api boundaries')).toHaveAttribute('title', 'go api boundaries · go-api')
 
-    const goAPI = screen.getByText('go-api · go api boundaries').closest('div')
+    const goAPI = screen.getByText('go api boundaries').closest('div')
     if (!goAPI) throw new Error('go-api skill row not found')
     fireEvent.click(within(goAPI.parentElement?.parentElement ?? goAPI).getByRole('button', { name: 'Edit' }))
 
-    expect(await screen.findByText('Edit, go-api · go api boundaries')).toBeInTheDocument()
+    expect(await screen.findByText('Edit, go api boundaries')).toBeInTheDocument()
     expect(screen.getByText('Stable id')).toBeInTheDocument()
     expect(screen.getByText('go-api')).toBeInTheDocument()
     expect(screen.getByTestId('catalog-versions')).toHaveTextContent('versions for go-api')

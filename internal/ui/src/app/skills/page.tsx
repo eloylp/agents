@@ -44,10 +44,15 @@ function stableSkillID(skill: Skill) {
 }
 
 function skillDisplayLabel(skill: Skill) {
+  const name = (skill.name || '').trim()
+  return name || stableSkillID(skill)
+}
+
+function skillIdentityTooltip(skill: Skill) {
   const id = stableSkillID(skill)
   const name = (skill.name || '').trim()
   if (!id || id === name) return name || id
-  return `${id} · ${name}`
+  return `${name} · ${id}`
 }
 
 function SkillForm({
@@ -302,6 +307,12 @@ export default function SkillsPage() {
     return 'Global'
   }
 
+  const shortScopeLabel = (sk: Skill) => {
+    if (sk.repo) return 'Repo'
+    if (sk.workspace_id) return 'Workspace'
+    return 'Global'
+  }
+
   const visibleSkills = skills.filter(sk => {
     const type = scopeType(sk)
     if (filterScope !== 'all' && type !== filterScope) return false
@@ -382,9 +393,17 @@ export default function SkillsPage() {
           <Card key={stableSkillID(sk) || sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}>{skillDisplayLabel(sk)}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>
-                  {scopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
+                <div
+                  title={skillIdentityTooltip(sk)}
+                  style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}
+                >
+                  {skillDisplayLabel(sk)}
+                </div>
+                <div
+                  title={scopeLabel(sk)}
+                  style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}
+                >
+                  {shortScopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
                 </div>
                 <pre style={{
                   fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
