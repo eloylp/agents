@@ -577,11 +577,15 @@ func (s *Store) inferRunAttributions(workspaceID string, q AttributionQuery) []A
 		FROM run_attributions
 		WHERE workspace_id=? AND repo_owner=? AND repo_name=? AND issue_or_pr_number=?
 		  AND (?='' OR head_sha=?)
-		  AND created_at BETWEEN ? AND ?
-		ORDER BY created_at DESC`,
+		  AND (
+			created_at BETWEEN ? AND ?
+			OR replace(substr(created_at, 1, 19), 'T', ' ') BETWEEN ? AND ?
+		  )
+		ORDER BY replace(substr(created_at, 1, 19), 'T', ' ') DESC, created_at DESC`,
 		workspaceID, q.RepoOwner, q.RepoName, q.IssueOrPRNumber,
 		strings.TrimSpace(q.HeadSHA), strings.TrimSpace(q.HeadSHA),
 		from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano),
+		from.UTC().Format(time.DateTime), to.UTC().Format(time.DateTime),
 	)
 	if err != nil {
 		return nil

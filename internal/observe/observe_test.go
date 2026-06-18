@@ -933,6 +933,44 @@ func TestResolveRunAttributionInferredAmbiguousAndUnresolved(t *testing.T) {
 	}
 }
 
+func TestResolveRunAttributionInfersLegacySQLiteDatetimeText(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	s := observe.NewStore(db)
+
+	_, err = db.Exec(
+		`INSERT INTO run_attributions (
+			span_id, workspace_id, repo_owner, repo_name, issue_or_pr_number,
+			agent_name, backend_name, head_sha, created_at
+		) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"legacy-span", "default", "owner", "repo", 7,
+		"coder", "codex", "abc", "2026-06-18 12:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert legacy run attribution: %v", err)
+	}
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 7,
+		HeadSHA: "abc",
+		At:      time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC),
+		Window:  time.Hour,
+	})
+	if got.Confidence != observe.AttributionInferred {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionInferred, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "legacy-span" {
+		t.Fatalf("Snapshot = %+v, want legacy-span", got.Snapshot)
+	}
+	if got.Snapshot.CreatedAt != time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC) {
+		t.Fatalf("CreatedAt = %v, want parsed legacy timestamp", got.Snapshot.CreatedAt)
+	}
+}
+
 // ─── Store.RecordDispatch ─────────────────────────────────────────────────────
 
 // TestStoreRecordDispatchPersistsToDB verifies that RecordDispatch persists
