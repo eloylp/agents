@@ -256,26 +256,25 @@ func scanRunnerRow(s rowScanner) (RunnerRecord, error) {
 		id              int64
 		workspaceID     string
 		blob            string
-		enq             string
-		started, comple sql.NullString
+		enq             SQLiteTime
+		started, comple SQLiteTime
 	)
 	if err := s.Scan(&id, &workspaceID, &blob, &enq, &started, &comple); err != nil {
 		return RunnerRecord{}, err
 	}
 	rec := RunnerRecord{ID: id, WorkspaceID: fleet.NormalizeWorkspaceID(workspaceID)}
-	if t, err := time.Parse(time.RFC3339Nano, enq); err == nil {
-		rec.EnqueuedAt = t
+	if err := enq.Err(); err != nil {
+		return RunnerRecord{}, fmt.Errorf("store: scan runner enqueued_at: %w", err)
 	}
-	if started.Valid {
-		if t, err := time.Parse(time.RFC3339Nano, started.String); err == nil {
-			rec.StartedAt = &t
-		}
+	if err := started.Err(); err != nil {
+		return RunnerRecord{}, fmt.Errorf("store: scan runner started_at: %w", err)
 	}
-	if comple.Valid {
-		if t, err := time.Parse(time.RFC3339Nano, comple.String); err == nil {
-			rec.CompletedAt = &t
-		}
+	if err := comple.Err(); err != nil {
+		return RunnerRecord{}, fmt.Errorf("store: scan runner completed_at: %w", err)
 	}
+	rec.EnqueuedAt = enq.OrZero()
+	rec.StartedAt = started.Ptr()
+	rec.CompletedAt = comple.Ptr()
 	switch {
 	case rec.CompletedAt != nil:
 		rec.Status = RunnerCompleted
@@ -329,8 +328,10 @@ func scanRunnerRow(s rowScanner) (RunnerRecord, error) {
 // bound. Returns the number of rows removed.
 func (s *Store) DeleteCompletedEventsBefore(before time.Time) (int64, error) {
 	res, err := s.db.Exec(
-		"DELETE FROM event_queue WHERE completed_at IS NOT NULL AND completed_at < ?",
-		before.UTC().Format(time.RFC3339Nano),
+		`DELETE FROM event_queue
+		WHERE completed_at IS NOT NULL
+		  AND replace(substr(completed_at, 1, 19), 'T', ' ') < ?`,
+		before.UTC().Format(time.DateTime),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: prune completed events: %w", err)

@@ -474,9 +474,14 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 			workspaceID,
 		)
 	} else {
+		sinceTime := since.UTC()
 		rows, err = s.db.Query(
-			`SELECT id, workspace_id, at, repo, kind, number, actor, payload FROM events WHERE workspace_id = ? AND at > ? ORDER BY at ASC LIMIT 500`,
-			workspaceID, since,
+			`SELECT id, workspace_id, at, repo, kind, number, actor, payload
+			FROM events
+			WHERE workspace_id = ?
+			  AND (at > ? OR replace(substr(at, 1, 19), 'T', ' ') > ?)
+			ORDER BY at ASC LIMIT 500`,
+			workspaceID, sinceTime.Format(time.RFC3339Nano), sinceTime.Format(time.DateTime),
 		)
 	}
 	if err != nil {
@@ -488,10 +493,16 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 	for rows.Next() {
 		var te TimestampedEvent
 		var payloadStr string
-		if err := rows.Scan(&te.ID, &te.WorkspaceID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
+		var at storepkg.SQLiteTime
+		if err := rows.Scan(&te.ID, &te.WorkspaceID, &at, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
 			log.Printf("observe: scan event row: %v", err)
 			continue
 		}
+		if err := at.Err(); err != nil {
+			log.Printf("observe: parse event timestamp: %v", err)
+			continue
+		}
+		te.At = at.OrZero()
 		if payloadStr != "" {
 			_ = json.Unmarshal([]byte(payloadStr), &te.Payload)
 		}
@@ -584,12 +595,13 @@ func scanSpans(rows *sql.Rows) []Span {
 		var sp Span
 		var promptSize, inTok, outTok, cacheR, cacheW sql.NullInt64
 		var promptVersionID, skillVersionIDs, guardrailVersionIDs string
+		var started, finished storepkg.SQLiteTime
 		if err := rows.Scan(
 			&sp.SpanID, &sp.WorkspaceID, &sp.RootEventID, &sp.ParentSpanID,
 			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
 			&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
-			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
+			&started, &finished, &sp.DurationMs,
 			&sp.Status, &sp.ErrorMsg, &sp.ErrorDetail,
 			&promptSize, &promptVersionID, &skillVersionIDs, &guardrailVersionIDs,
 			&inTok, &outTok, &cacheR, &cacheW,
@@ -597,6 +609,16 @@ func scanSpans(rows *sql.Rows) []Span {
 			log.Printf("observe: scan trace row: %v", err)
 			continue
 		}
+		if err := started.Err(); err != nil {
+			log.Printf("observe: parse trace started_at: %v", err)
+			continue
+		}
+		if err := finished.Err(); err != nil {
+			log.Printf("observe: parse trace finished_at: %v", err)
+			continue
+		}
+		sp.StartedAt = started.OrZero()
+		sp.FinishedAt = finished.OrZero()
 		sp.PromptSize = promptSize.Int64
 		sp.PromptVersionID = promptVersionID
 		sp.SkillVersionIDs = splitCatalogVersionIDs(skillVersionIDs)
@@ -646,9 +668,13 @@ func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
 	for rows.Next() {
 		var from, to, repo, reason string
 		var number int
-		var at time.Time
+		var at storepkg.SQLiteTime
 		if err := rows.Scan(&from, &to, &repo, &number, &reason, &at); err != nil {
 			log.Printf("observe: scan dispatch row: %v", err)
+			continue
+		}
+		if err := at.Err(); err != nil {
+			log.Printf("observe: parse dispatch timestamp: %v", err)
 			continue
 		}
 		key := from + "\x00" + to
@@ -658,7 +684,7 @@ func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
 			edges[key] = e
 		}
 		e.Count++
-		e.Dispatches = append(e.Dispatches, DispatchRecord{At: at, WorkspaceID: workspaceID, Repo: repo, Number: number, Reason: reason})
+		e.Dispatches = append(e.Dispatches, DispatchRecord{At: at.OrZero(), WorkspaceID: workspaceID, Repo: repo, Number: number, Reason: reason})
 	}
 
 	out := make([]Edge, 0, len(edges))
@@ -727,7 +753,7 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 		payload, _ := json.Marshal(te.Payload)
 		_, err := s.db.Exec(
 			`INSERT OR IGNORE INTO events (id, workspace_id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			te.ID, te.WorkspaceID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
+			te.ID, te.WorkspaceID, te.At.UTC().Format(time.RFC3339Nano), te.Repo, te.Kind, te.Number, te.Actor, string(payload),
 		)
 		if err != nil {
 			log.Printf("observe: persist event %s: %v", te.ID, err)
@@ -791,7 +817,7 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 			sp.Agent, sp.Backend, sp.Repo, sp.Number,
 			sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
 			sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
-			sp.StartedAt, sp.FinishedAt, sp.DurationMs,
+			sp.StartedAt.UTC().Format(time.RFC3339Nano), sp.FinishedAt.UTC().Format(time.RFC3339Nano), sp.DurationMs,
 			sp.Status, sp.ErrorMsg, sp.ErrorDetail,
 			promptGz, sp.PromptSize,
 			sp.PromptVersionID, strings.Join(sp.SkillVersionIDs, ","), strings.Join(sp.GuardrailVersionIDs, ","),

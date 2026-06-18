@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/fleet"
+	storepkg "github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -513,7 +514,7 @@ func (s *Store) recordRunAttribution(in workflow.SpanInput, createdAt time.Time)
 		a.SpanID, a.WorkspaceID, a.RepoOwner, a.RepoName, a.IssueOrPRNumber,
 		a.EventID, a.EventQueueID, a.AgentID, a.AgentName, a.BackendID, a.BackendName,
 		nullString(a.PromptVersionID), a.PromptRef, strings.Join(a.SkillVersionIDs, ","), strings.Join(a.GuardrailVersionIDs, ","),
-		a.HeadSHA, a.Branch, a.CreatedAt,
+		a.HeadSHA, a.Branch, a.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		log.Printf("observe: persist run attribution %s: %v", in.SpanID, err)
@@ -576,11 +577,15 @@ func (s *Store) inferRunAttributions(workspaceID string, q AttributionQuery) []A
 		FROM run_attributions
 		WHERE workspace_id=? AND repo_owner=? AND repo_name=? AND issue_or_pr_number=?
 		  AND (?='' OR head_sha=?)
-		  AND created_at BETWEEN ? AND ?
-		ORDER BY created_at DESC`,
+		  AND (
+			created_at BETWEEN ? AND ?
+			OR replace(substr(created_at, 1, 19), 'T', ' ') BETWEEN ? AND ?
+		  )
+		ORDER BY replace(substr(created_at, 1, 19), 'T', ' ') DESC, created_at DESC`,
 		workspaceID, q.RepoOwner, q.RepoName, q.IssueOrPRNumber,
 		strings.TrimSpace(q.HeadSHA), strings.TrimSpace(q.HeadSHA),
-		from, to,
+		from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano),
+		from.UTC().Format(time.DateTime), to.UTC().Format(time.DateTime),
 	)
 	if err != nil {
 		return nil
@@ -609,15 +614,20 @@ type attributionScanner interface {
 func scanAttribution(row attributionScanner) (AttributionSnapshot, error) {
 	var snap AttributionSnapshot
 	var skills, guardrails string
+	var createdAt storepkg.SQLiteTime
 	err := row.Scan(
 		&snap.WorkspaceID, &snap.RepoOwner, &snap.RepoName, &snap.IssueOrPRNumber,
 		&snap.EventID, &snap.EventQueueID, &snap.SpanID, &snap.AgentID, &snap.AgentName,
 		&snap.BackendID, &snap.BackendName, &snap.PromptVersionID, &snap.PromptRef,
-		&skills, &guardrails, &snap.HeadSHA, &snap.Branch, &snap.CreatedAt,
+		&skills, &guardrails, &snap.HeadSHA, &snap.Branch, &createdAt,
 	)
 	if err != nil {
 		return AttributionSnapshot{}, err
 	}
+	if err := createdAt.Err(); err != nil {
+		return AttributionSnapshot{}, fmt.Errorf("scan attribution created_at: %w", err)
+	}
+	snap.CreatedAt = createdAt.OrZero()
 	snap.SkillVersionIDs = splitList(skills)
 	snap.GuardrailVersionIDs = splitList(guardrails)
 	return snap, nil

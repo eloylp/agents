@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -100,7 +99,7 @@ func UpsertRunAttributionArtifact(db sqlExec, in RunAttributionArtifactInput) er
 		in.GitHubParentCommentID, strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL),
 		strings.TrimSpace(in.AuthorLogin), strings.TrimSpace(in.FilePath), in.Line, strings.TrimSpace(in.Side),
 		strings.TrimSpace(in.CommitSHA), strings.TrimSpace(in.SpanID), in.MetadataJSON,
-		in.GitHubCreatedAt, in.GitHubUpdatedAt,
+		sqliteTimeArg(in.GitHubCreatedAt), sqliteTimeArg(in.GitHubUpdatedAt),
 	)
 	return err
 }
@@ -230,7 +229,7 @@ type runAttributionArtifactScanner interface {
 
 func scanRunAttributionArtifact(row runAttributionArtifactScanner) (RunAttributionArtifact, error) {
 	var a RunAttributionArtifact
-	var githubCreatedAt, githubUpdatedAt, observedAt sql.NullString
+	var githubCreatedAt, githubUpdatedAt, observedAt SQLiteTime
 	err := row.Scan(
 		&a.ID, &a.WorkspaceID, &a.RepoOwner, &a.RepoName, &a.IssueOrPRNumber,
 		&a.SourceType, &a.GitHubCommentID, &a.GitHubReviewID, &a.GitHubReviewCommentID,
@@ -241,32 +240,11 @@ func scanRunAttributionArtifact(row runAttributionArtifactScanner) (RunAttributi
 	if err != nil {
 		return RunAttributionArtifact{}, fmt.Errorf("scan run attribution artifact: %w", err)
 	}
-	a.GitHubCreatedAt = parseRunAttributionArtifactTimePtr(githubCreatedAt)
-	a.GitHubUpdatedAt = parseRunAttributionArtifactTimePtr(githubUpdatedAt)
-	if t := parseRunAttributionArtifactTimePtr(observedAt); t != nil {
-		a.ObservedAt = *t
+	a.GitHubCreatedAt = githubCreatedAt.Ptr()
+	a.GitHubUpdatedAt = githubUpdatedAt.Ptr()
+	if err := observedAt.Err(); err != nil {
+		return RunAttributionArtifact{}, fmt.Errorf("scan run attribution artifact observed_at: %w", err)
 	}
+	a.ObservedAt = observedAt.OrZero()
 	return a, nil
-}
-
-func parseRunAttributionArtifactTimePtr(ns sql.NullString) *time.Time {
-	value := strings.TrimSpace(ns.String)
-	if !ns.Valid || value == "" {
-		return nil
-	}
-	for _, layout := range []string{
-		time.RFC3339Nano,
-		time.RFC3339,
-		time.DateTime,
-		"2006-01-02 15:04:05 -0700 MST",
-		"2006-01-02 15:04:05.999999999 -0700 MST",
-		"2006-01-02 15:04:05 -0700 -0700",
-		"2006-01-02 15:04:05.999999999 -0700 -0700",
-	} {
-		if t, err := time.Parse(layout, value); err == nil {
-			u := t.UTC()
-			return &u
-		}
-	}
-	return nil
 }

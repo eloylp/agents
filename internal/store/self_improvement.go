@@ -259,7 +259,7 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 		in.GitHubPullRequestReviewID, strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL),
 		strings.TrimSpace(in.AuthorLogin), boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, tag,
 		strings.TrimSpace(in.FilePath), in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA),
-		in.GitHubCreatedAt, in.GitHubUpdatedAt, strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
+		sqliteTimeArg(in.GitHubCreatedAt), sqliteTimeArg(in.GitHubUpdatedAt), strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
 		strings.TrimSpace(in.LinkedAgentID), strings.TrimSpace(in.LinkedAgentName), strings.TrimSpace(in.LinkedPromptVersionID),
 		strings.Join(in.LinkedSkillVersionIDs, ","), strings.Join(in.LinkedGuardrailVersionIDs, ","), confidence,
 		strings.TrimSpace(in.LinkDiagnostics), status,
@@ -331,8 +331,8 @@ func upsertSelfImprovementFeedbackByReviewCommentID(db *sql.DB, workspaceID, tag
 		0, 0, in.GitHubReviewCommentID, in.GitHubParentCommentID, in.GitHubPullRequestReviewID,
 		strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin),
 		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, tag, strings.TrimSpace(in.FilePath),
-		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubCreatedAt,
-		in.GitHubUpdatedAt, strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
+		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), sqliteTimeArg(in.GitHubCreatedAt),
+		sqliteTimeArg(in.GitHubUpdatedAt), strings.TrimSpace(in.LinkedSpanID), strings.TrimSpace(in.LinkedEventID),
 		strings.TrimSpace(in.LinkedAgentID), strings.TrimSpace(in.LinkedAgentName), strings.TrimSpace(in.LinkedPromptVersionID),
 		strings.Join(in.LinkedSkillVersionIDs, ","), strings.Join(in.LinkedGuardrailVersionIDs, ","), confidence,
 		strings.TrimSpace(in.LinkDiagnostics), status,
@@ -385,7 +385,7 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 			in.GitHubParentCommentID, in.GitHubPullRequestReviewID, strings.TrimSpace(in.GitHubDeliveryID),
 			strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin), boolInt(in.AuthorAuthorized),
 			in.IssueNumber, in.PRNumber, in.RawBody, strings.TrimSpace(in.FilePath), in.Line, strings.TrimSpace(in.Side),
-			in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubUpdatedAt, FeedbackStatusIgnored,
+			in.DiffHunk, strings.TrimSpace(in.CommitSHA), sqliteTimeArg(in.GitHubUpdatedAt), FeedbackStatusIgnored,
 			workspaceID, strings.TrimSpace(in.SourceType), in.GitHubReviewCommentID, tag,
 		)
 		if err != nil {
@@ -420,7 +420,7 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 		in.GitHubReviewCommentID, in.GitHubParentCommentID, in.GitHubPullRequestReviewID,
 		strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin),
 		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, strings.TrimSpace(in.FilePath),
-		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubUpdatedAt,
+		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), sqliteTimeArg(in.GitHubUpdatedAt),
 		FeedbackStatusIgnored, workspaceID, strings.TrimSpace(in.SourceType), in.GitHubCommentID, in.GitHubReviewID, tag,
 	)
 	if err != nil {
@@ -809,17 +809,24 @@ func scanSelfImprovementFeedback(row selfImprovementScanner) (SelfImprovementFee
 	var ev SelfImprovementFeedback
 	var authorized int
 	var skillIDs, guardrailIDs string
+	var githubCreatedAt, githubUpdatedAt, ingestedAt SQLiteTime
 	if err := row.Scan(
 		&ev.ID, &ev.WorkspaceID, &ev.RepoOwner, &ev.RepoName, &ev.SourceType, &ev.GitHubCommentID, &ev.GitHubReviewID,
 		&ev.GitHubReviewCommentID, &ev.GitHubParentCommentID, &ev.GitHubPullRequestReviewID,
 		&ev.GitHubDeliveryID, &ev.SourceURL, &ev.AuthorLogin, &authorized, &ev.IssueNumber, &ev.PRNumber,
-		&ev.RawBody, &ev.Tag, &ev.FilePath, &ev.Line, &ev.Side, &ev.DiffHunk, &ev.CommitSHA, &ev.GitHubCreatedAt,
-		&ev.GitHubUpdatedAt, &ev.IngestedAt, &ev.LinkedSpanID, &ev.LinkedEventID, &ev.LinkedAgentID,
+		&ev.RawBody, &ev.Tag, &ev.FilePath, &ev.Line, &ev.Side, &ev.DiffHunk, &ev.CommitSHA, &githubCreatedAt,
+		&githubUpdatedAt, &ingestedAt, &ev.LinkedSpanID, &ev.LinkedEventID, &ev.LinkedAgentID,
 		&ev.LinkedAgentName, &ev.LinkedPromptVersionID, &skillIDs, &guardrailIDs, &ev.LinkConfidence,
 		&ev.LinkDiagnostics, &ev.Status,
 	); err != nil {
 		return SelfImprovementFeedback{}, err
 	}
+	if err := ingestedAt.Err(); err != nil {
+		return SelfImprovementFeedback{}, fmt.Errorf("store: scan self-improvement feedback ingested_at: %w", err)
+	}
+	ev.GitHubCreatedAt = githubCreatedAt.Ptr()
+	ev.GitHubUpdatedAt = githubUpdatedAt.Ptr()
+	ev.IngestedAt = ingestedAt.OrZero()
 	ev.AuthorAuthorized = authorized == 1
 	ev.LinkedSkillVersionIDs = splitCSV(skillIDs)
 	ev.LinkedGuardrailVersionIDs = splitCSV(guardrailIDs)
@@ -853,6 +860,7 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 	var evidenceIDs, evidenceURLs, structured string
 	var authorized int
 	var skillIDs, guardrailIDs string
+	var githubCreatedAt, githubUpdatedAt, ingestedAt SQLiteTime
 	if err := row.Scan(
 		&rec.ID, &rec.WorkspaceID, &rec.FeedbackEventID, &rec.Type, &rec.Status, &rec.Confidence, &rec.Risk,
 		&rec.Finding, &rec.NormalizedLesson, &rec.Rationale, &evidenceIDs, &evidenceURLs,
@@ -865,7 +873,7 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 		&feedback.GitHubDeliveryID, &feedback.SourceURL,
 		&feedback.AuthorLogin, &authorized, &feedback.IssueNumber, &feedback.PRNumber, &feedback.RawBody,
 		&feedback.Tag, &feedback.FilePath, &feedback.Line, &feedback.Side, &feedback.DiffHunk,
-		&feedback.CommitSHA, &feedback.GitHubCreatedAt, &feedback.GitHubUpdatedAt, &feedback.IngestedAt,
+		&feedback.CommitSHA, &githubCreatedAt, &githubUpdatedAt, &ingestedAt,
 		&feedback.LinkedSpanID, &feedback.LinkedEventID, &feedback.LinkedAgentID, &feedback.LinkedAgentName,
 		&feedback.LinkedPromptVersionID, &skillIDs, &guardrailIDs, &feedback.LinkConfidence,
 		&feedback.LinkDiagnostics, &feedback.Status, &clarification.RecommendationID, &clarification.Author,
@@ -873,12 +881,18 @@ func scanSelfImprovementRecommendation(row selfImprovementScanner, includeFeedba
 	); err != nil {
 		return SelfImprovementRecommendationRow{}, err
 	}
+	if err := ingestedAt.Err(); err != nil {
+		return SelfImprovementRecommendationRow{}, fmt.Errorf("store: scan self-improvement recommendation feedback ingested_at: %w", err)
+	}
 	rec.EvidenceFeedbackIDs = splitInt64CSV(evidenceIDs)
 	rec.EvidenceSourceURLs = splitCSV(evidenceURLs)
 	if structured != "" {
 		_ = json.Unmarshal([]byte(structured), &rec.StructuredOutput)
 	}
 	feedback.AuthorAuthorized = authorized == 1
+	feedback.GitHubCreatedAt = githubCreatedAt.Ptr()
+	feedback.GitHubUpdatedAt = githubUpdatedAt.Ptr()
+	feedback.IngestedAt = ingestedAt.OrZero()
 	feedback.LinkedSkillVersionIDs = splitCSV(skillIDs)
 	feedback.LinkedGuardrailVersionIDs = splitCSV(guardrailIDs)
 	if includeFeedback {

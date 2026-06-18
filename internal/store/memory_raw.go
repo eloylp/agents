@@ -12,7 +12,8 @@ import (
 // ("", false, time.Time{}, nil). An empty content string with found=true
 // means the agent intentionally cleared its memory.
 func ReadMemory(db *sql.DB, workspace, agent, repo string) (string, bool, time.Time, error) {
-	var content, updatedAt string
+	var content string
+	var updatedAt SQLiteTime
 	err := db.QueryRow(
 		"SELECT content, updated_at FROM memory WHERE workspace_id=? AND agent=? AND repo=?", workspace, agent, repo,
 	).Scan(&content, &updatedAt)
@@ -22,14 +23,10 @@ func ReadMemory(db *sql.DB, workspace, agent, repo string) (string, bool, time.T
 	if err != nil {
 		return "", false, time.Time{}, fmt.Errorf("store: read memory %s/%s/%s: %w", workspace, agent, repo, err)
 	}
-	// The modernc.org/sqlite driver returns TIMESTAMP columns as RFC3339 strings
-	// (e.g. "2026-04-21T10:30:00Z"). Parse with time.RFC3339 and fall back to
-	// the bare "YYYY-MM-DD HH:MM:SS" SQLite text format as a safety net.
-	t, parseErr := time.Parse(time.RFC3339, updatedAt)
-	if parseErr != nil {
-		t, _ = time.Parse(time.DateTime, updatedAt)
+	if err := updatedAt.Err(); err != nil {
+		return "", false, time.Time{}, fmt.Errorf("store: read memory %s/%s/%s updated_at: %w", workspace, agent, repo, err)
 	}
-	return content, true, t.UTC(), nil
+	return content, true, updatedAt.OrZero(), nil
 }
 
 // WriteMemory upserts the memory string for (workspace, agent, repo), setting updated_at

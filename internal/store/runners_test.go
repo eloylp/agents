@@ -173,6 +173,73 @@ func TestDeleteCompletedEventsBeforePrunesOnlyCompletedRows(t *testing.T) {
 	}
 }
 
+func TestDeleteCompletedEventsBeforeKeepsSameDayLegacyDatetimeAfterCutoff(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+
+	cutoff := time.Date(2026, 6, 18, 14, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		completed string
+		wantGone  bool
+	}{
+		{
+			name:      "legacy before cutoff",
+			completed: "2026-06-18 13:59:59",
+			wantGone:  true,
+		},
+		{
+			name:      "legacy after cutoff",
+			completed: "2026-06-18 15:00:00",
+			wantGone:  false,
+		},
+		{
+			name:      "rfc3339 before cutoff",
+			completed: "2026-06-18T13:59:59Z",
+			wantGone:  true,
+		},
+		{
+			name:      "rfc3339 after cutoff",
+			completed: "2026-06-18T15:00:00Z",
+			wantGone:  false,
+		},
+	}
+
+	ids := make(map[string]int64, len(cases))
+	for _, tc := range cases {
+		id, err := st.EnqueueEvent(`{"kind":"` + tc.name + `"}`)
+		if err != nil {
+			t.Fatalf("%s: enqueue: %v", tc.name, err)
+		}
+		if _, err := db.Exec("UPDATE event_queue SET completed_at = ? WHERE id = ?", tc.completed, id); err != nil {
+			t.Fatalf("%s: set completed_at: %v", tc.name, err)
+		}
+		ids[tc.name] = id
+	}
+
+	n, err := st.DeleteCompletedEventsBefore(cutoff)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("rows pruned = %d, want 2", n)
+	}
+
+	for _, tc := range cases {
+		_, err := st.ReadQueuedEvent(ids[tc.name])
+		if tc.wantGone {
+			if !errors.Is(err, store.ErrRunnerNotFound) {
+				t.Fatalf("%s: err = %v, want ErrRunnerNotFound", tc.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: row missing: %v", tc.name, err)
+		}
+	}
+}
+
 // TestListRunnersReturnsParsedRows seeds three rows in distinct
 // states and asserts the listing decodes status + blob fields.
 func TestListRunnersReturnsParsedRows(t *testing.T) {
