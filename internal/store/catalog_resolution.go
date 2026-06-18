@@ -170,7 +170,7 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 		}
 		return "", sql.ErrNoRows
 	}
-	if exactID != "" && exactName != ref {
+	if exactID != "" && (exactName != ref || isGeneratedCatalogRef(table, ref)) {
 		return exactID, nil
 	}
 	if ambiguous {
@@ -178,6 +178,10 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 		return "", fmt.Errorf("ambiguous %s %q in workspace %q; use %s id", label, ref, workspaceID, label)
 	}
 	return bestID, nil
+}
+
+func isGeneratedCatalogRef(table, ref string) bool {
+	return strings.HasPrefix(ref, strings.TrimSuffix(table, "s")+"_")
 }
 
 func resolveVisibleCatalogExactRef(q querier, table, ref, workspaceID, repo string) (string, string, error) {

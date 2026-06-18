@@ -1985,6 +1985,42 @@ func TestAgentSkillStableRefBeatsMoreSpecificDisplayName(t *testing.T) {
 	}
 }
 
+func TestAgentSkillGeneratedRefBeatsMoreSpecificDefaultDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_global_shared"] = fleet.Skill{
+		Prompt: "Global shared guidance.",
+	}
+	cfg.Skills["skill_team_collision"] = fleet.Skill{
+		WorkspaceID: "team-a",
+		Name:        "skill_global_shared",
+		Prompt:      "Team collision guidance.",
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "skill_global_shared")
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_global_shared") {
+		t.Fatalf("coder skills = %v, want exact generated skill ref", out.Agents[idx].Skills)
+	}
+	if slices.Contains(out.Agents[idx].Skills, "skill_team_collision") {
+		t.Fatalf("coder skills = %v, unexpectedly selected display-name collision", out.Agents[idx].Skills)
+	}
+}
+
 func TestAgentSkillDisplayNamePrefersRepoOverWorkspaceAndGlobal(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
