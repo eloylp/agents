@@ -119,9 +119,14 @@ command; the analyzer never auto-applies, publishes, or mutates agents,
 guardrails, prompts, skills, or dispatch wiring.
 
 The analyst receives only the catalog versions linked by run attribution. It
-does not scan the entire catalog. When attribution is unresolved or the linked
-catalog bodies are insufficient to build a safe editable bundle, the analyst
-must ask for clarification instead of guessing a target.
+does not scan the entire catalog. If feedback points at an old run and the
+linked catalog asset has moved on, the analyst receives both the historical
+attributed version and the current version of that same asset. The historical
+version is evidence for why the feedback happened; the current version is the
+safe base for any proposed update. When attribution is unresolved, an
+historical version is unavailable, or the supplied catalog bodies are
+insufficient to build a safe editable bundle, the analyst must ask for
+clarification instead of guessing a target.
 
 The v1 self-improvement loop has no assistant preference memory. The analyst's
 decision process is intentionally prompt-led: feedback, attribution, current

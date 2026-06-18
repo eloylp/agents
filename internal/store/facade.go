@@ -121,6 +121,9 @@ func (s *Store) ReplaceWorkspaceGuardrails(workspace string, refs []fleet.Worksp
 func (s *Store) ReadGuardrailVersion(versionID string) (fleet.Guardrail, error) {
 	return ReadGuardrailVersion(s.db, versionID)
 }
+func (s *Store) CurrentSelfImprovementCatalogVersionID(assetType, assetID string) (string, error) {
+	return CurrentSelfImprovementCatalogVersionID(s.db, assetType, assetID)
+}
 func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }
