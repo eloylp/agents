@@ -1319,6 +1319,42 @@ func TestHandleTraceStreamReplaysHistoryAndEndsCleanly(t *testing.T) {
 	}
 }
 
+func TestHandleTraceStreamFlushesConnectedCommentBeforeFirstStep(t *testing.T) {
+	t.Parallel()
+	obs := newTestEvents(t)
+	h := newHandlerOnStore(t, obs)
+
+	obs.Runs.BeginRun(obstore.ActiveRun{
+		SpanID: "sp-pending", EventID: "ev-1", Agent: "coder", Backend: "claude",
+		Repo: "owner/r", EventKind: "issues.labeled", StartedAt: time.Now(),
+	})
+	t.Cleanup(func() { obs.Runs.EndRun("sp-pending") })
+
+	server := httptest.NewServer(newRouter(h))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/traces/sp-pending/stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read first SSE line: %v", err)
+	}
+	if line != ": connected\n" {
+		t.Fatalf("first SSE line = %q, want connected comment", line)
+	}
+}
+
 func TestHandleTraceStreamUnknownSpanReturns404(t *testing.T) {
 	t.Parallel()
 	obs := newTestEvents(t)

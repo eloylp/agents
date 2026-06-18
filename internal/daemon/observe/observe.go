@@ -581,6 +581,9 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
 	send := func(step workflow.TraceStep) bool {
 		payload, err := json.Marshal(step)
 		if err != nil {
