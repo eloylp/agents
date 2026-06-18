@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -229,15 +230,43 @@ type runAttributionArtifactScanner interface {
 
 func scanRunAttributionArtifact(row runAttributionArtifactScanner) (RunAttributionArtifact, error) {
 	var a RunAttributionArtifact
+	var githubCreatedAt, githubUpdatedAt, observedAt sql.NullString
 	err := row.Scan(
 		&a.ID, &a.WorkspaceID, &a.RepoOwner, &a.RepoName, &a.IssueOrPRNumber,
 		&a.SourceType, &a.GitHubCommentID, &a.GitHubReviewID, &a.GitHubReviewCommentID,
 		&a.GitHubParentCommentID, &a.GitHubDeliveryID, &a.SourceURL, &a.AuthorLogin,
 		&a.FilePath, &a.Line, &a.Side, &a.CommitSHA, &a.SpanID, &a.MetadataJSON,
-		&a.GitHubCreatedAt, &a.GitHubUpdatedAt, &a.ObservedAt,
+		&githubCreatedAt, &githubUpdatedAt, &observedAt,
 	)
 	if err != nil {
 		return RunAttributionArtifact{}, fmt.Errorf("scan run attribution artifact: %w", err)
 	}
+	a.GitHubCreatedAt = parseRunAttributionArtifactTimePtr(githubCreatedAt)
+	a.GitHubUpdatedAt = parseRunAttributionArtifactTimePtr(githubUpdatedAt)
+	if t := parseRunAttributionArtifactTimePtr(observedAt); t != nil {
+		a.ObservedAt = *t
+	}
 	return a, nil
+}
+
+func parseRunAttributionArtifactTimePtr(ns sql.NullString) *time.Time {
+	value := strings.TrimSpace(ns.String)
+	if !ns.Valid || value == "" {
+		return nil
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		time.DateTime,
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05 -0700 -0700",
+		"2006-01-02 15:04:05.999999999 -0700 -0700",
+	} {
+		if t, err := time.Parse(layout, value); err == nil {
+			u := t.UTC()
+			return &u
+		}
+	}
+	return nil
 }
