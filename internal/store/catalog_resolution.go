@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -114,14 +113,59 @@ func ensureCatalogScope(tx *sql.Tx, kind, workspaceID, repo string) error {
 }
 
 func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (string, error) {
-	id, err := resolveVisibleCatalogID(q, table, ref, workspaceID, repo)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repo = fleet.NormalizeRepoName(repo)
+	rows, err := q.Query(`
+		SELECT id,
+			CASE
+				WHEN workspace_id IS NULL THEN 0
+				WHEN repo IS NULL THEN 1
+				ELSE 2
+			END AS specificity
+		FROM `+table+`
+		WHERE (id = ? OR ref = ? OR name = ?)
+		  AND (
+			(workspace_id IS NULL AND repo IS NULL)
+			OR (workspace_id = ? AND repo IS NULL)
+			OR (? <> '' AND workspace_id = ? AND repo = ?)
+		  )
+		ORDER BY specificity DESC, id`,
+		ref, ref, ref, workspaceID, repo, workspaceID, repo,
+	)
+	if err != nil {
 		return "", err
 	}
-	return resolveVisibleCatalogName(q, table, strings.TrimSuffix(table, "s"), strings.TrimSuffix(table, "s")+" id", ref, workspaceID, repo)
+	defer rows.Close()
+
+	var bestID string
+	bestSpecificity := -1
+	ambiguous := false
+	for rows.Next() {
+		var id string
+		var specificity int
+		if err := rows.Scan(&id, &specificity); err != nil {
+			return "", err
+		}
+		if bestSpecificity == -1 {
+			bestID = id
+			bestSpecificity = specificity
+			continue
+		}
+		if specificity == bestSpecificity && id != bestID {
+			ambiguous = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if bestSpecificity == -1 {
+		return "", sql.ErrNoRows
+	}
+	if ambiguous {
+		label := strings.TrimSuffix(table, "s")
+		return "", fmt.Errorf("ambiguous %s %q in workspace %q; use %s id", label, ref, workspaceID, label)
+	}
+	return bestID, nil
 }
 
 func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (string, error) {

@@ -1911,7 +1911,7 @@ func TestAgentSkillDisplayNameResolvesToStableScopedID(t *testing.T) {
 	}
 }
 
-func TestAgentSkillDisplayNameRejectsAmbiguousVisibleName(t *testing.T) {
+func TestAgentSkillDisplayNamePrefersMostSpecificVisibleName(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
@@ -1929,12 +1929,76 @@ func TestAgentSkillDisplayNameRejectsAmbiguousVisibleName(t *testing.T) {
 	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "shared")
 	cfg.Agents[1].WorkspaceID = "team-a"
 	cfg.Repos[0].WorkspaceID = "team-a"
-	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
-	if err == nil {
-		t.Fatal("ImportAll succeeded, want ambiguous skill validation error")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
 	}
-	if !strings.Contains(err.Error(), `ambiguous skill "shared" in workspace "team-a"; use skill id`) {
-		t.Fatalf("error = %v, want ambiguous skill validation", err)
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_team_shared") {
+		t.Fatalf("coder skills = %v, want workspace-scoped skill ref", out.Agents[idx].Skills)
+	}
+	if slices.Contains(out.Agents[idx].Skills, "skill_global_shared") {
+		t.Fatalf("coder skills = %v, unexpectedly selected global skill", out.Agents[idx].Skills)
+	}
+}
+
+func TestAgentSkillDisplayNamePrefersRepoOverWorkspaceAndGlobal(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_global_shared"] = fleet.Skill{Name: "shared", Prompt: "Global shared guidance."}
+	cfg.Skills["skill_team_shared"] = fleet.Skill{WorkspaceID: "default", Name: "shared", Prompt: "Team shared guidance."}
+	cfg.Skills["skill_repo_shared"] = fleet.Skill{WorkspaceID: "default", Repo: "owner/repo", Name: "shared", Prompt: "Repo shared guidance."}
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "shared")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "default" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("default coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_repo_shared") {
+		t.Fatalf("coder skills = %v, want repo-scoped skill ref", out.Agents[idx].Skills)
+	}
+}
+
+func TestAgentSkillDisplayNameBeatsLessSpecificRef(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["go-api"] = fleet.Skill{Name: "go-api", Prompt: "Global guidance."}
+	cfg.Skills["skill_team_go_api"] = fleet.Skill{WorkspaceID: "team-a", Name: "go-api", Prompt: "Workspace guidance."}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "go-api")
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_team_go_api") {
+		t.Fatalf("coder skills = %v, want workspace-scoped skill ref", out.Agents[idx].Skills)
 	}
 }
 
