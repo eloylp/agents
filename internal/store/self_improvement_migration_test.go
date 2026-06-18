@@ -198,6 +198,73 @@ func TestSelfImprovementFeedbackIdentityMigrationPreservesRecommendations(t *tes
 	}
 }
 
+func TestSelfImprovementFeedbackIdentityMigrationDeletesLegacyReviewCommentsWithoutIDs(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := New(db)
+	t.Cleanup(func() { st.Close() })
+
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_self_improvement_feedback_legacy_identity`); err != nil {
+		t.Fatalf("drop legacy identity index: %v", err)
+	}
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_self_improvement_feedback_review_comment`); err != nil {
+		t.Fatalf("drop review comment identity index: %v", err)
+	}
+	for _, body := range []string{
+		"first legacy review comment without identity",
+		"second legacy review comment without identity",
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO self_improvement_feedback (
+				workspace_id, repo_owner, repo_name, source_type, raw_body, tag,
+				source_url, author_login, author_authorized, pr_number,
+				github_comment_id, github_review_id, github_review_comment_id
+			) VALUES (?, 'eloylp', 'test-acme-repo', 'pull_request_review_comment', ?, ?,
+				'https://github.com/eloylp/test-acme-repo/pull/1#discussion_r0',
+				'maintainer', 1, 1, 0, 0, 0
+			)
+		`, "self-improvement-demo", body, FeedbackTag); err != nil {
+			t.Fatalf("seed legacy review comment feedback: %v", err)
+		}
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = '058_self_improvement_feedback_identity_indexes.sql'`); err != nil {
+		t.Fatalf("unmark identity migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("rerun identity migration: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM self_improvement_feedback
+		WHERE workspace_id = 'self-improvement-demo'
+		  AND source_type = 'pull_request_review_comment'
+		  AND github_review_comment_id = 0
+	`).Scan(&count); err != nil {
+		t.Fatalf("count legacy review comments: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("legacy review comment count = %d, want 0", count)
+	}
+	rows, err := db.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("foreign_key_check reported violations")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign_key_check: %v", err)
+	}
+}
+
 func TestAcceptedRecommendationCleanupMigration(t *testing.T) {
 	t.Parallel()
 
