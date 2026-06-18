@@ -186,8 +186,9 @@ func renderRuntimeContext(ctx PromptContext) string {
 		fmt.Fprintf(&b, "Run attribution metadata: %s\n", ctx.RunAttributionComment)
 		b.WriteString("When you create or update a GitHub pull request body or GitHub comment for this run, include that exact hidden HTML comment in the content when feasible.\n")
 		if ctx.RunAttributionCommitTrailer != "" {
-			fmt.Fprintf(&b, "For commits authored for this run, add this exact commit trailer: `%s`.\n", ctx.RunAttributionCommitTrailer)
+			fmt.Fprintf(&b, "For commits authored for this run, you must add this exact commit trailer without editing it: `%s`.\n", ctx.RunAttributionCommitTrailer)
 		}
+		b.WriteString("The daemon will not rewrite commits or write to GitHub directly to add attribution metadata.\n")
 		b.WriteString("For human readability, commits may also include trailers `Agents-Run: <span_id>` and `Agents-Agent: <agent_name>` using the values in the metadata.\n")
 	}
 	if len(ctx.Payload) > 0 {

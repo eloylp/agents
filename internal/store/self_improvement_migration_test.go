@@ -131,6 +131,73 @@ func TestSelfImprovementLegacyFieldsRemovedOnFreshStore(t *testing.T) {
 	}
 }
 
+func TestSelfImprovementFeedbackIdentityMigrationPreservesRecommendations(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := New(db)
+	t.Cleanup(func() { st.Close() })
+
+	feedback, err := st.UpsertSelfImprovementFeedback(SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  58,
+		SourceURL:        "https://github.com/owner/repo/issues/1#issuecomment-58",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      1,
+		RawBody:          "preserve recommendation during feedback identity migration",
+		Tag:              FeedbackTag,
+		LinkConfidence:   "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_recommendations (
+			id, workspace_id, feedback_event_id, type, status, confidence, risk,
+			finding, normalized_lesson, rationale, evidence_feedback_ids,
+			evidence_source_urls, attribution_confidence, structured_output
+		) VALUES (?, ?, ?, 'catalog_patch', 'recommended', 'medium', 'low',
+			'finding', 'lesson', 'rationale', ?, 'https://github.com/owner/repo/issues/1#issuecomment-58',
+			'exact', '{}'
+		)
+	`, "rec_identity_migration", fleet.DefaultWorkspaceID, feedback.ID, feedback.ID); err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = '058_self_improvement_feedback_identity_indexes.sql'`); err != nil {
+		t.Fatalf("unmark identity migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("rerun identity migration: %v", err)
+	}
+
+	var gotFeedbackID int64
+	if err := db.QueryRow(`SELECT feedback_event_id FROM self_improvement_recommendations WHERE id = 'rec_identity_migration'`).Scan(&gotFeedbackID); err != nil {
+		t.Fatalf("read recommendation feedback id: %v", err)
+	}
+	if gotFeedbackID != feedback.ID {
+		t.Fatalf("feedback_event_id = %d, want %d", gotFeedbackID, feedback.ID)
+	}
+	rows, err := db.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("foreign_key_check reported violations")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign_key_check: %v", err)
+	}
+}
+
 func TestAcceptedRecommendationCleanupMigration(t *testing.T) {
 	t.Parallel()
 

@@ -57,6 +57,8 @@ Each resolution also reports a `mode` describing how the span was found:
 
 - `direct`: signed hidden comment in the feedback body.
 - `commit_trailer`: `Agents-Attribution:` commit trailer in the same body.
+- `commit_artifact`: push webhook captured a signed `Agents-Attribution`
+  trailer for the commit SHA GitHub attached to a diff-line review comment.
 - `artifact_comment`: the comment itself was stored as a signed artifact.
 - `artifact_parent_comment`: parent comment via `in_reply_to_id` is a signed artifact.
 - `artifact_review`: owning PR review via `pull_request_review_id` is a signed artifact.
@@ -66,23 +68,30 @@ Each resolution also reports a `mode` describing how the span was found:
 
 ## Artifact reverse-index
 
-Every incoming `issue_comment`, `pull_request_review`, and
-`pull_request_review_comment` webhook delivery is scanned for valid signed agent
-metadata, regardless of whether it contains `/agents improve`. Valid artifacts
-are stored in the `run_attribution_artifacts` table as a narrow reverse index:
-GitHub object identity (comment id, review id, review comment id) → span id.
+Every incoming `issue_comment`, `pull_request_review`,
+`pull_request_review_comment`, and `push` webhook delivery is scanned for valid
+signed agent metadata, regardless of whether it contains `/agents improve`.
+Valid artifacts are stored in the `run_attribution_artifacts` table as a narrow
+reverse index: GitHub object identity (comment id, review id, review comment id,
+or commit SHA) → span id.
 
 When a maintainer posts an `/agents improve` inline PR review comment:
-1. The daemon checks the comment's own `id` for a stored artifact (in case the
-   agent commented exactly on this line).
+1. The daemon checks the review comment's `commit_id` for a stored signed commit
+   artifact captured from a prior push webhook.
 2. If not found, it walks the `in_reply_to_id` chain to find the parent agent
-   comment.
+   inline comment.
 3. It then checks `pull_request_review_id` to see if the owning PR review
    carried signed metadata.
-4. As a conservative fallback, it looks for artifacts on the same PR/file/commit
+4. It checks the comment's own `id` for a stored artifact.
+5. As a conservative fallback, it looks for artifacts on the same PR/file/commit
    that have exactly one candidate.
-5. Only if none of the above succeeds does it fall back to time-window inference,
+6. Only if none of the above succeeds does it fall back to time-window inference,
    which never attributes feedback to internal analyst agent runs.
+
+If a diff-line review comment references a commit SHA but no signed commit
+artifact exists, attribution remains unresolved with a diagnostic that the
+commented commit has no signed agent attribution, unless stronger parent or
+review ancestry resolves first.
 
 Copied signed metadata from another repo, PR, or instance is rejected. If
 multiple artifact candidates exist for the same PR context without stronger

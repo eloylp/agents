@@ -74,6 +74,7 @@ const (
 	AttributionModeArtifactParent    = "artifact_parent_comment"
 	AttributionModeArtifactReview    = "artifact_review"
 	AttributionModeArtifactPRContext = "artifact_pr_context"
+	AttributionModeCommitArtifact    = "commit_artifact"
 	AttributionModeCommitTrailer     = "commit_trailer"
 	AttributionModeInferred          = "inferred"
 	AttributionModeUnresolved        = "unresolved"
@@ -127,12 +128,12 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 		return AttributionResolution{}, false
 	}
 
-	// Step 2: For pull_request_review_comment – check if the current comment
-	// itself has a stored artifact (i.e., it carried signed metadata).
-	if q.ReviewCommentID > 0 {
-		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
-			return s.artifactResolution(a, AttributionModeArtifactComment)
+	var missingCommitArtifact bool
+	if q.ReviewCommentID > 0 && strings.TrimSpace(q.HeadSHA) != "" {
+		if a, ok := s.store.RunAttributionArtifactByCommitSHA(workspaceID, owner, name, q.HeadSHA); ok {
+			return s.artifactResolution(a, AttributionModeCommitArtifact)
 		}
+		missingCommitArtifact = true
 	}
 
 	// Step 3: Parent review comment lookup via in_reply_to_id.
@@ -161,6 +162,24 @@ func (s *Store) resolveArtifactAttribution(workspaceID string, q AttributionQuer
 		if a, ok := s.store.RunAttributionArtifactByCommentID(workspaceID, owner, name, "issue_comment", q.CommentID); ok {
 			return s.artifactResolution(a, AttributionModeArtifactComment)
 		}
+	}
+
+	// Step 6a: Direct PR review comment artifact lookup. This comes after
+	// commit/parent/review ownership because a human diff-line feedback comment
+	// may carry its own metadata while still targeting unsigned agent-authored
+	// code; code ownership should win.
+	if q.ReviewCommentID > 0 {
+		if a, ok := s.store.RunAttributionArtifactByReviewCommentID(workspaceID, owner, name, q.ReviewCommentID); ok {
+			return s.artifactResolution(a, AttributionModeArtifactComment)
+		}
+	}
+
+	if missingCommitArtifact {
+		return AttributionResolution{
+			Confidence: AttributionUnresolved,
+			Mode:       AttributionModeCommitArtifact,
+			Diagnostic: "commented commit has no signed agent attribution",
+		}, true
 	}
 
 	// Step 7: Conservative PR/thread context lookup – only if it yields exactly

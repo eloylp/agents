@@ -15,8 +15,8 @@ type RunAttributionArtifactInput struct {
 	RepoOwner             string
 	RepoName              string
 	IssueOrPRNumber       int
-	SourceType            string // "issue_comment", "pull_request_review", "pull_request_review_comment"
-	GitHubCommentID       int64  // issue_comment or pull_request_review_comment id
+	SourceType            string // "issue_comment", "pull_request_review", "pull_request_review_comment", "commit"
+	GitHubCommentID       int64  // issue_comment id
 	GitHubReviewID        int64  // pull_request_review id
 	GitHubReviewCommentID int64  // pull_request_review_comment id (distinguished from CommentID)
 	GitHubParentCommentID int64  // in_reply_to_id from PR review comment
@@ -73,6 +73,10 @@ func (s *Store) RunAttributionArtifactByReviewCommentID(workspaceID, repoOwner, 
 
 func (s *Store) RunAttributionArtifactByReviewID(workspaceID, repoOwner, repoName string, reviewID int64) (RunAttributionArtifact, bool) {
 	return RunAttributionArtifactByReviewID(s.db, workspaceID, repoOwner, repoName, reviewID)
+}
+
+func (s *Store) RunAttributionArtifactByCommitSHA(workspaceID, repoOwner, repoName, commitSHA string) (RunAttributionArtifact, bool) {
+	return RunAttributionArtifactByCommitSHA(s.db, workspaceID, repoOwner, repoName, commitSHA)
 }
 
 func (s *Store) RunAttributionArtifactsByPRContext(workspaceID, repoOwner, repoName string, prNumber int, filePath, commitSHA string) []RunAttributionArtifact {
@@ -151,6 +155,27 @@ func RunAttributionArtifactByReviewID(db querier, workspaceID, repoOwner, repoNa
 		WHERE workspace_id=? AND repo_owner=? AND repo_name=? AND github_review_id=? AND github_review_comment_id=0
 		LIMIT 1`,
 		fleet.NormalizeWorkspaceID(workspaceID), strings.TrimSpace(repoOwner), strings.TrimSpace(repoName), reviewID,
+	)
+	a, err := scanRunAttributionArtifact(row)
+	if err != nil {
+		return RunAttributionArtifact{}, false
+	}
+	return a, true
+}
+
+// RunAttributionArtifactByCommitSHA looks up a signed commit artifact by the
+// commit SHA GitHub reports for a diff-line review comment.
+func RunAttributionArtifactByCommitSHA(db querier, workspaceID, repoOwner, repoName, commitSHA string) (RunAttributionArtifact, bool) {
+	commitSHA = strings.TrimSpace(commitSHA)
+	if db == nil || commitSHA == "" {
+		return RunAttributionArtifact{}, false
+	}
+	row := db.QueryRow(
+		runAttributionArtifactSelect+`
+		FROM run_attribution_artifacts
+		WHERE workspace_id=? AND repo_owner=? AND repo_name=? AND source_type='commit' AND commit_sha=?
+		LIMIT 1`,
+		fleet.NormalizeWorkspaceID(workspaceID), strings.TrimSpace(repoOwner), strings.TrimSpace(repoName), commitSHA,
 	)
 	a, err := scanRunAttributionArtifact(row)
 	if err != nil {
