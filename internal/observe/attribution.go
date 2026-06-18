@@ -3,7 +3,6 @@ package observe
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -53,6 +52,10 @@ type AttributionQuery struct {
 	InReplyToID         int64  // in_reply_to_id from PR review comment
 	PullRequestReviewID int64  // pull_request_review_id from PR review comment
 	FilePath            string // file path for PR review comment context
+}
+
+func (q AttributionQuery) repoFullName() string {
+	return strings.Trim(strings.TrimSpace(q.RepoOwner)+"/"+strings.TrimSpace(q.RepoName), "/")
 }
 
 type AttributionResolution struct {
@@ -384,13 +387,28 @@ func (s *Store) resolveExactAttribution(workspaceID string, q AttributionQuery) 
 		meta := candidate.meta
 		if err := workflow.VerifyPublicRunAttribution(meta, s.attributionVerifier.SigningSecret, s.attributionVerifier.InstanceID); err != nil {
 			diagnostic := fmt.Sprintf("%s: %v", candidate.source, err)
-			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", workspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("source_type", candidate.source).
+				Str("diagnostic", diagnostic).
+				Msg("ignore run attribution metadata")
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
 		if err := attributionMetadataMatchesQuery(meta, workspaceID, q); err != nil {
 			diagnostic := fmt.Sprintf("%s: %v", candidate.source, err)
-			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", workspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("span_id", meta.SpanID).
+				Str("source_type", candidate.source).
+				Str("diagnostic", diagnostic).
+				Msg("ignore run attribution metadata")
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
@@ -431,7 +449,14 @@ func (s *Store) extractAttributionMetadata(q AttributionQuery) []attributionMeta
 		meta, err := workflow.DecodePublicRunAttribution([]byte(m[1]))
 		if err != nil {
 			diagnostic := fmt.Sprintf("hidden comment %d: malformed attribution metadata: %v", i+1, err)
-			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", q.WorkspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("source_type", fmt.Sprintf("hidden comment %d", i+1)).
+				Str("diagnostic", diagnostic).
+				Msg("ignore run attribution metadata")
 			continue
 		}
 		out = append(out, attributionMetadataCandidate{
@@ -443,7 +468,14 @@ func (s *Store) extractAttributionMetadata(q AttributionQuery) []attributionMeta
 		meta, err := workflow.DecodeCommitAttributionTrailer(value)
 		if err != nil {
 			diagnostic := fmt.Sprintf("commit attribution trailer %d: malformed attribution metadata: %v", i+1, err)
-			log.Printf("observe: ignore run attribution metadata: %s", diagnostic)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", q.WorkspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("source_type", fmt.Sprintf("commit attribution trailer %d", i+1)).
+				Str("diagnostic", diagnostic).
+				Msg("ignore run attribution metadata")
 			continue
 		}
 		out = append(out, attributionMetadataCandidate{
@@ -517,7 +549,16 @@ func (s *Store) recordRunAttribution(in workflow.SpanInput, createdAt time.Time)
 		a.HeadSHA, a.Branch, a.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		log.Printf("observe: persist run attribution %s: %v", in.SpanID, err)
+		s.logger.Error().Err(err).
+			Str("workspace", a.WorkspaceID).
+			Str("repo", strings.Trim(strings.TrimSpace(a.RepoOwner)+"/"+strings.TrimSpace(a.RepoName), "/")).
+			Int("number", a.IssueOrPRNumber).
+			Str("event_id", a.EventID).
+			Str("span_id", a.SpanID).
+			Str("agent", a.AgentName).
+			Str("backend", a.BackendName).
+			Str("operation", "persist_run_attribution").
+			Msg("observe write failed")
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"slices"
 	"strings"
@@ -490,7 +489,7 @@ func (s *Store) ListEventsForWorkspacePage(workspaceID string, since time.Time, 
 		)
 	}
 	if err != nil {
-		log.Printf("observe: list events: %v", err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "list_events").Msg("observe query failed")
 		return nil
 	}
 	defer rows.Close()
@@ -500,11 +499,11 @@ func (s *Store) ListEventsForWorkspacePage(workspaceID string, since time.Time, 
 		var payloadStr string
 		var at storepkg.SQLiteTime
 		if err := rows.Scan(&te.ID, &te.WorkspaceID, &at, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
-			log.Printf("observe: scan event row: %v", err)
+			s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "scan_event_row").Msg("observe row scan failed")
 			continue
 		}
 		if err := at.Err(); err != nil {
-			log.Printf("observe: parse event timestamp: %v", err)
+			s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "parse_event_timestamp").Msg("observe timestamp parse failed")
 			continue
 		}
 		te.At = at.OrZero()
@@ -568,11 +567,11 @@ func (s *Store) ListTracesForWorkspacePage(workspaceID string, limit, offset int
 		workspaceID, limit, offset,
 	)
 	if err != nil {
-		log.Printf("observe: list traces: %v", err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "list_traces").Msg("observe query failed")
 		return nil
 	}
 	defer rows.Close()
-	return scanSpans(rows)
+	return s.scanSpans(rows)
 }
 
 func (s *Store) CountTracesForWorkspace(workspaceID string) int {
@@ -610,11 +609,11 @@ func (s *Store) TracesByRootEventIDForWorkspace(workspaceID, id string) []Span {
 		workspaceID, id,
 	)
 	if err != nil {
-		log.Printf("observe: traces by root event %s: %v", id, err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("event_id", id).Str("operation", "traces_by_root_event").Msg("observe query failed")
 		return nil
 	}
 	defer rows.Close()
-	return scanSpans(rows)
+	return s.scanSpans(rows)
 }
 
 // PromptForSpan returns the decompressed composed prompt for a span,
@@ -646,7 +645,7 @@ func (s *Store) PromptForSpan(spanID string) (string, error) {
 // The token columns are sql.NullInt64 because pre-migration rows have
 // NULL, we materialise NULL to zero, the JSON layer drops zero via
 // omitempty so the UI can detect "not recorded".
-func scanSpans(rows *sql.Rows) []Span {
+func (s *Store) scanSpans(rows *sql.Rows) []Span {
 	var out []Span
 	for rows.Next() {
 		var sp Span
@@ -663,15 +662,15 @@ func scanSpans(rows *sql.Rows) []Span {
 			&promptSize, &promptVersionID, &skillVersionIDs, &guardrailVersionIDs,
 			&inTok, &outTok, &cacheR, &cacheW,
 		); err != nil {
-			log.Printf("observe: scan trace row: %v", err)
+			s.logger.Error().Err(err).Str("operation", "scan_trace_row").Msg("observe row scan failed")
 			continue
 		}
 		if err := started.Err(); err != nil {
-			log.Printf("observe: parse trace started_at: %v", err)
+			s.logger.Error().Err(err).Str("operation", "parse_trace_started_at").Msg("observe timestamp parse failed")
 			continue
 		}
 		if err := finished.Err(); err != nil {
-			log.Printf("observe: parse trace finished_at: %v", err)
+			s.logger.Error().Err(err).Str("operation", "parse_trace_finished_at").Msg("observe timestamp parse failed")
 			continue
 		}
 		sp.StartedAt = started.OrZero()
@@ -716,7 +715,7 @@ func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
 		workspaceID,
 	)
 	if err != nil {
-		log.Printf("observe: list edges: %v", err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "list_dispatch_edges").Msg("observe query failed")
 		return nil
 	}
 	defer rows.Close()
@@ -727,11 +726,11 @@ func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
 		var number int
 		var at storepkg.SQLiteTime
 		if err := rows.Scan(&from, &to, &repo, &number, &reason, &at); err != nil {
-			log.Printf("observe: scan dispatch row: %v", err)
+			s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "scan_dispatch_row").Msg("observe row scan failed")
 			continue
 		}
 		if err := at.Err(); err != nil {
-			log.Printf("observe: parse dispatch timestamp: %v", err)
+			s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "parse_dispatch_timestamp").Msg("observe timestamp parse failed")
 			continue
 		}
 		key := from + "\x00" + to
@@ -813,7 +812,15 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 			te.ID, te.WorkspaceID, te.At.UTC().Format(time.RFC3339Nano), te.Repo, te.Kind, te.Number, te.Actor, string(payload),
 		)
 		if err != nil {
-			log.Printf("observe: persist event %s: %v", te.ID, err)
+			s.logger.Error().Err(err).
+				Str("workspace", te.WorkspaceID).
+				Str("repo", te.Repo).
+				Str("event_id", te.ID).
+				Str("event_kind", te.Kind).
+				Int("number", te.Number).
+				Str("actor", te.Actor).
+				Str("operation", "persist_event").
+				Msg("observe write failed")
 		}
 	}
 	if b, err := sseData(te); err == nil {
@@ -860,9 +867,9 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 		var buf bytes.Buffer
 		gw := gzip.NewWriter(&buf)
 		if _, err := gw.Write([]byte(in.Prompt)); err != nil {
-			log.Printf("observe: gzip prompt %s: %v", sp.SpanID, err)
+			s.logger.Error().Err(err).Str("span_id", sp.SpanID).Str("operation", "gzip_prompt").Msg("observe prompt compression failed")
 		} else if err := gw.Close(); err != nil {
-			log.Printf("observe: gzip flush prompt %s: %v", sp.SpanID, err)
+			s.logger.Error().Err(err).Str("span_id", sp.SpanID).Str("operation", "gzip_prompt_flush").Msg("observe prompt compression failed")
 		} else {
 			promptGz = buf.Bytes()
 		}
@@ -881,7 +888,15 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 			sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
 		)
 		if err != nil {
-			log.Printf("observe: persist trace %s: %v", sp.SpanID, err)
+			s.logger.Error().Err(err).
+				Str("workspace", sp.WorkspaceID).
+				Str("repo", sp.Repo).
+				Str("event_id", sp.RootEventID).
+				Str("span_id", sp.SpanID).
+				Str("agent", sp.Agent).
+				Str("backend", sp.Backend).
+				Str("operation", "persist_trace").
+				Msg("observe write failed")
 		}
 		s.recordRunAttribution(in, sp.StartedAt)
 	}
@@ -899,7 +914,14 @@ func (s *Store) RecordDispatch(workspaceID, from, to, repo string, number int, r
 			workspaceID, from, to, repo, number, reason,
 		)
 		if err != nil {
-			log.Printf("observe: persist dispatch %s->%s: %v", from, to, err)
+			s.logger.Error().Err(err).
+				Str("workspace", workspaceID).
+				Str("repo", repo).
+				Int("number", number).
+				Str("from_agent", from).
+				Str("to_agent", to).
+				Str("operation", "persist_dispatch").
+				Msg("observe write failed")
 		}
 	}
 }
@@ -916,14 +938,14 @@ func (s *Store) RecordStep(spanID string, step workflow.TraceStep) {
 	var idx int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM trace_steps WHERE span_id=?`, spanID).Scan(&idx)
 	if err != nil {
-		log.Printf("observe: count trace steps for %s: %v", spanID, err)
+		s.logger.Error().Err(err).Str("span_id", spanID).Str("operation", "count_trace_steps").Msg("observe query failed")
 	} else if idx < maxTraceSteps {
 		_, err = s.db.Exec(
 			`INSERT INTO trace_steps (span_id, step_index, kind, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?,?)`,
 			spanID, idx, step.Kind, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
 		)
 		if err != nil {
-			log.Printf("observe: insert trace step %d for %s: %v", idx, spanID, err)
+			s.logger.Error().Err(err).Str("span_id", spanID).Int("step_index", idx).Str("operation", "insert_trace_step").Msg("observe write failed")
 		} else {
 			inserted = true
 		}
@@ -947,7 +969,7 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 	defer s.stepMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
-		log.Printf("observe: begin trace steps tx for %s: %v", spanID, err)
+		s.logger.Error().Err(err).Str("span_id", spanID).Str("operation", "begin_trace_steps_tx").Msg("observe transaction failed")
 		return
 	}
 	for i, step := range steps {
@@ -962,11 +984,11 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 			`INSERT INTO trace_steps (span_id, step_index, kind, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?,?)`,
 			spanID, i, kind, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
 		); err != nil {
-			log.Printf("observe: insert trace step %d for %s: %v", i, spanID, err)
+			s.logger.Error().Err(err).Str("span_id", spanID).Int("step_index", i).Str("operation", "insert_trace_step").Msg("observe write failed")
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("observe: commit trace steps for %s: %v", spanID, err)
+		s.logger.Error().Err(err).Str("span_id", spanID).Str("operation", "commit_trace_steps").Msg("observe transaction failed")
 		_ = tx.Rollback()
 	}
 }
@@ -983,7 +1005,7 @@ func (s *Store) listSteps(spanID string) []workflow.TraceStep {
 		spanID,
 	)
 	if err != nil {
-		log.Printf("observe: list steps for %s: %v", spanID, err)
+		s.logger.Error().Err(err).Str("span_id", spanID).Str("operation", "list_trace_steps").Msg("observe query failed")
 		return nil
 	}
 	defer rows.Close()
@@ -991,7 +1013,7 @@ func (s *Store) listSteps(spanID string) []workflow.TraceStep {
 	for rows.Next() {
 		var step workflow.TraceStep
 		if err := rows.Scan(&step.Kind, &step.ToolName, &step.InputSummary, &step.OutputSummary, &step.DurationMs); err != nil {
-			log.Printf("observe: scan step for %s: %v", spanID, err)
+			s.logger.Error().Err(err).Str("span_id", spanID).Str("operation", "scan_trace_step").Msg("observe row scan failed")
 			continue
 		}
 		out = append(out, step)
