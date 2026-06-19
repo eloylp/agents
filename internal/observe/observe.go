@@ -533,7 +533,7 @@ func (s *Store) CountEventsForWorkspace(workspaceID string, since time.Time) int
 		)
 	}
 	if err := row.Scan(&n); err != nil {
-		log.Printf("observe: count events: %v", err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "count_events").Msg("observe query failed")
 		return 0
 	}
 	return n
@@ -578,7 +578,7 @@ func (s *Store) CountTracesForWorkspace(workspaceID string) int {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM traces WHERE workspace_id = ?`, workspaceID).Scan(&n); err != nil {
-		log.Printf("observe: count traces: %v", err)
+		s.logger.Error().Err(err).Str("workspace", workspaceID).Str("operation", "count_traces").Msg("observe query failed")
 		return 0
 	}
 	return n
