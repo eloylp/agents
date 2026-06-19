@@ -39,9 +39,13 @@ func fixtureConfig() *config.Config {
 			"testing":  {Prompt: "write good tests"},
 			"security": {Prompt: "audit inputs"},
 		},
+		Prompts: []fleet.Prompt{
+			{Name: "coder", Content: "code"},
+			{Name: "reviewer", Content: "review"},
+		},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Description: "writes code", AllowDispatch: true},
-			{Name: "reviewer", Backend: "claude", AllowDispatch: true, Description: "reviews code"},
+			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, PromptRef: "coder", Description: "writes code", AllowDispatch: true},
+			{Name: "reviewer", Backend: "claude", PromptRef: "reviewer", AllowDispatch: true, Description: "reviews code"},
 		},
 		Repos: []fleet.Repo{
 			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
