@@ -110,6 +110,9 @@ func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error
 		removeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := d.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+			if errdefs.IsNotFound(err) {
+				return
+			}
 			d.logger.Warn().Err(err).Str("container", containerID).Msg("remove runner container")
 		}
 	}
@@ -185,6 +188,7 @@ func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error
 func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	cfg := &container.HostConfig{
 		NetworkMode: container.NetworkMode(spec.Policy.NetworkMode),
+		AutoRemove:  true,
 	}
 	if spec.Policy.NetworkMode == "" {
 		cfg.NetworkMode = "bridge"

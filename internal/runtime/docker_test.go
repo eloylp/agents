@@ -23,6 +23,9 @@ func TestHostConfigAppliesRuntimeConstraints(t *testing.T) {
 	if cfg.NetworkMode != "none" {
 		t.Fatalf("NetworkMode = %q, want none", cfg.NetworkMode)
 	}
+	if !cfg.AutoRemove {
+		t.Fatal("AutoRemove = false, want true")
+	}
 	if cfg.Resources.NanoCPUs != 500_000_000 {
 		t.Fatalf("NanoCPUs = %d, want 500000000", cfg.Resources.NanoCPUs)
 	}
