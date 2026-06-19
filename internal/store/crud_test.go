@@ -572,6 +572,77 @@ func TestCreatePublishedCatalogVersionsRecordSourceMetadata(t *testing.T) {
 	}
 }
 
+func TestCatalogVersionSnapshotsUseExactRefBeforeDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	cfg := &config.Config{
+		Skills: map[string]fleet.Skill{
+			"skill_global_policy": {
+				Name:   "skill_global_policy",
+				Prompt: "global skill body",
+			},
+			"skill_workspace_policy": {
+				WorkspaceID: "default",
+				Name:        "skill_global_policy",
+				Prompt:      "workspace skill body",
+			},
+		},
+		Guardrails: []fleet.Guardrail{
+			{
+				ID:          "guardrail_global_policy",
+				Name:        "guardrail-global-policy",
+				Description: "global guardrail",
+				Content:     "global guardrail body",
+				Enabled:     true,
+				Position:    10,
+			},
+			{
+				ID:          "guardrail_workspace_policy",
+				WorkspaceID: "default",
+				Name:        "guardrail-global-policy",
+				Description: "workspace guardrail",
+				Content:     "workspace guardrail body",
+				Enabled:     true,
+				Position:    20,
+			},
+		},
+	}
+	if err := store.ImportConfigTx(tx, cfg, nil); err != nil {
+		t.Fatalf("import config: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	versions, err := store.ListSkillVersionSnapshots(db, "skill_global_policy")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	if got, want := len(versions), 1; got != want {
+		t.Fatalf("versions len = %d, want %d: %+v", got, want, versions)
+	}
+	if got, want := versions[0].Prompt, "global skill body"; got != want {
+		t.Fatalf("version prompt = %q, want %q", got, want)
+	}
+
+	guardrailVersions, err := store.ListGuardrailVersionSnapshots(db, "guardrail_global_policy")
+	if err != nil {
+		t.Fatalf("list guardrail versions: %v", err)
+	}
+	if got, want := len(guardrailVersions), 1; got != want {
+		t.Fatalf("guardrail versions len = %d, want %d: %+v", got, want, guardrailVersions)
+	}
+	if got, want := guardrailVersions[0].Content, "global guardrail body"; got != want {
+		t.Fatalf("guardrail version content = %q, want %q", got, want)
+	}
+}
+
 func TestCreatePublishedCatalogVersionRejectsInvalidMetadata(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

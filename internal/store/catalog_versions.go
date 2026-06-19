@@ -743,20 +743,45 @@ func promptInternalID(q querier, ref string) (string, error) {
 
 func skillInternalID(q querier, ref string) (string, error) {
 	ref = fleet.NormalizeSkillName(ref)
-	var id string
-	if err := q.QueryRow("SELECT id FROM skills WHERE id=? OR ref=? OR name=?", ref, ref, ref).Scan(&id); err != nil {
-		return "", catalogReadErr("skill", ref, err)
-	}
-	return id, nil
+	return catalogInternalID(q, "skills", "skill", ref)
 }
 
 func guardrailInternalID(q querier, ref string) (string, error) {
 	ref = fleet.NormalizeGuardrailName(ref)
+	return catalogInternalID(q, "guardrails", "guardrail", ref)
+}
+
+func catalogInternalID(q querier, table, kind, ref string) (string, error) {
 	var id string
-	if err := q.QueryRow("SELECT id FROM guardrails WHERE id=? OR ref=? OR name=?", ref, ref, ref).Scan(&id); err != nil {
-		return "", catalogReadErr("guardrail", ref, err)
+	if err := q.QueryRow("SELECT id FROM "+table+" WHERE id=? OR ref=?", ref, ref).Scan(&id); err == nil {
+		return id, nil
+	} else if err != sql.ErrNoRows {
+		return "", catalogReadErr(kind, ref, err)
 	}
-	return id, nil
+
+	rows, err := q.Query("SELECT id FROM "+table+" WHERE name=?", ref)
+	if err != nil {
+		return "", catalogReadErr(kind, ref, err)
+	}
+	defer rows.Close()
+	var matches []string
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return "", catalogReadErr(kind, ref, err)
+		}
+		matches = append(matches, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", catalogReadErr(kind, ref, err)
+	}
+	switch len(matches) {
+	case 0:
+		return "", catalogReadErr(kind, ref, sql.ErrNoRows)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", &ErrValidation{Msg: fmt.Sprintf("%s selector %q is ambiguous", kind, ref)}
+	}
 }
 
 func catalogReadErr(kind, ref string, err error) error {

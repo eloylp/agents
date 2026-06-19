@@ -390,29 +390,6 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list token budgets: %w", err)
 	}
-	for i := range cfg.Prompts {
-		versions, err := store.ListPromptVersionSnapshots(h.store.DB(), cfg.Prompts[i].ID)
-		if err != nil {
-			return nil, fmt.Errorf("list prompt %s versions: %w", cfg.Prompts[i].ID, err)
-		}
-		cfg.Prompts[i].Versions = scrubCatalogVersionAssetIDs(versions)
-	}
-	for id, skill := range cfg.Skills {
-		versions, err := store.ListSkillVersionSnapshots(h.store.DB(), id)
-		if err != nil {
-			return nil, fmt.Errorf("list skill %s versions: %w", id, err)
-		}
-		skill.Versions = scrubCatalogVersionAssetIDs(versions)
-		cfg.Skills[id] = skill
-	}
-	for i := range cfg.Guardrails {
-		versions, err := store.ListGuardrailVersionSnapshots(h.store.DB(), cfg.Guardrails[i].ID)
-		if err != nil {
-			return nil, fmt.Errorf("list guardrail %s versions: %w", cfg.Guardrails[i].ID, err)
-		}
-		cfg.Guardrails[i].Versions = scrubCatalogVersionAssetIDs(versions)
-	}
-
 	workspaces := make([]workspaceYAML, 0, len(cfg.Workspaces))
 	byWorkspace := make(map[string]int, len(cfg.Workspaces))
 	for _, w := range cfg.Workspaces {
@@ -477,13 +454,6 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 		return nil, fmt.Errorf("marshal yaml: %w", err)
 	}
 	return b, nil
-}
-
-func scrubCatalogVersionAssetIDs(versions []fleet.CatalogVersion) []fleet.CatalogVersion {
-	for i := range versions {
-		versions[i].AssetID = ""
-	}
-	return versions
 }
 
 // HandleImport serves POST /import, accepts a YAML body in the same format

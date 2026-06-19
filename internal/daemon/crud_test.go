@@ -2541,12 +2541,12 @@ workspaces:
 	if exported.Code != http.StatusOK {
 		t.Fatalf("export versioned catalog: got %d, %s", exported.Code, exported.Body.String())
 	}
-	for _, want := range []string{"versions:", "id: promptver_one", "id: skillver_two", "id: guardrailver_one"} {
+	for _, want := range []string{"content: current prompt", "prompt: current skill", "content: current guardrail"} {
 		if !strings.Contains(exported.Body.String(), want) {
 			t.Fatalf("export missing %q: %s", want, exported.Body.String())
 		}
 	}
-	for _, forbidden := range []string{"prompt_version_id:", "guardrail_version_id:", "imported-skill@"} {
+	for _, forbidden := range []string{"versions:", "base_version_id:", "prompt_version_id:", "guardrail_version_id:", "imported-skill@"} {
 		if strings.Contains(exported.Body.String(), forbidden) {
 			t.Fatalf("export contains removed live pin field %q: %s", forbidden, exported.Body.String())
 		}
