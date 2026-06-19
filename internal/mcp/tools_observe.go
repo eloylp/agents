@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
@@ -55,7 +56,10 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 			}
 		}
 		workspace, _ := trimmedStringOptional(req, "workspace")
-		return jsonResult(nilSafe(deps.Observe.ListEventsForWorkspace(workspace, since)))
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		rows := deps.Observe.ListEventsForWorkspacePage(workspace, since, page.Limit, page.Offset)
+		total := deps.Observe.CountEventsForWorkspace(workspace, since)
+		return jsonResult(pagination.NewPage(rows, total, page))
 	}
 }
 
@@ -66,11 +70,16 @@ func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 			workspace = store.SelfImprovementAllWorkspaces
 		}
 		status, _ := trimmedStringOptional(req, "status")
-		rows, err := deps.Store.ListSelfImprovementFeedback(workspace, status, 100)
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		rows, err := deps.Store.ListSelfImprovementFeedbackPage(workspace, status, page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement feedback", err), nil
 		}
-		return jsonResult(nilSafe(rows))
+		total, err := deps.Store.CountSelfImprovementFeedback(workspace, status)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count improvement feedback", err), nil
+		}
+		return jsonResult(pagination.NewPage(rows, total, page))
 	}
 }
 
@@ -81,11 +90,16 @@ func toolListImprovementRecommendations(deps Deps) server.ToolHandlerFunc {
 			workspace = store.SelfImprovementAllWorkspaces
 		}
 		status, _ := trimmedStringOptional(req, "status")
-		rows, err := deps.Improvements.ListRecommendations(workspace, status, 100)
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		rows, err := deps.Improvements.ListRecommendationsPage(workspace, status, page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations", err), nil
 		}
-		return jsonResult(nilSafe(rows))
+		total, err := deps.Improvements.CountRecommendations(workspace, status)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count improvement recommendations", err), nil
+		}
+		return jsonResult(pagination.NewPage(rows, total, page))
 	}
 }
 
@@ -375,11 +389,16 @@ func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandler
 		if !ok {
 			workspace = store.SelfImprovementAllWorkspaces
 		}
-		rows, err := deps.Improvements.ListRecommendationsWithBundles(workspace, 100)
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		rows, err := deps.Improvements.ListRecommendationsPage(workspace, "", page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with bundles", err), nil
 		}
-		return jsonResult(nilSafe(rows))
+		total, err := deps.Improvements.CountRecommendations(workspace, "")
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count improvement recommendations with bundles", err), nil
+		}
+		return jsonResult(pagination.NewPage(rows, total, page))
 	}
 }
 
@@ -389,7 +408,10 @@ func toolListImprovementRecommendationsWithBundles(deps Deps) server.ToolHandler
 func toolListTraces(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		workspace, _ := trimmedStringOptional(req, "workspace")
-		return jsonResult(nilSafe(deps.Observe.ListTracesForWorkspace(workspace)))
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		rows := deps.Observe.ListTracesForWorkspacePage(workspace, page.Limit, page.Offset)
+		total := deps.Observe.CountTracesForWorkspace(workspace)
+		return jsonResult(pagination.NewPage(rows, total, page))
 	}
 }
 

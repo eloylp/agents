@@ -19,7 +19,11 @@ func New(st *store.Store) *Service {
 }
 
 func (s *Service) ListRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
-	rows, err := s.store.ListSelfImprovementRecommendations(workspace, status, limit)
+	return s.ListRecommendationsPage(workspace, status, limit, 0)
+}
+
+func (s *Service) ListRecommendationsPage(workspace, status string, limit, offset int) ([]SelfImprovementRecommendation, error) {
+	rows, err := s.store.ListSelfImprovementRecommendationsPage(workspace, status, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -37,6 +41,10 @@ func (s *Service) ListRecommendations(workspace, status string, limit int) ([]Se
 		out = append(out, rec)
 	}
 	return out, nil
+}
+
+func (s *Service) CountRecommendations(workspace, status string) (int, error) {
+	return s.store.CountSelfImprovementRecommendations(workspace, status)
 }
 
 func (s *Service) GetRecommendation(id string) (SelfImprovementRecommendation, error) {

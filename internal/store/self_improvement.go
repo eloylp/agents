@@ -172,6 +172,14 @@ func (s *Store) ListSelfImprovementFeedback(workspace, status string, limit int)
 	return ListSelfImprovementFeedback(s.db, workspace, status, limit)
 }
 
+func (s *Store) ListSelfImprovementFeedbackPage(workspace, status string, limit, offset int) ([]SelfImprovementFeedback, error) {
+	return ListSelfImprovementFeedbackPage(s.db, workspace, status, limit, offset)
+}
+
+func (s *Store) CountSelfImprovementFeedback(workspace, status string) (int, error) {
+	return CountSelfImprovementFeedback(s.db, workspace, status)
+}
+
 func (s *Store) GetSelfImprovementFeedback(id int64) (SelfImprovementFeedback, error) {
 	return GetSelfImprovementFeedback(s.db, id)
 }
@@ -182,6 +190,14 @@ func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, f
 
 func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
 	return ListSelfImprovementRecommendations(s.db, workspace, status, limit)
+}
+
+func (s *Store) ListSelfImprovementRecommendationsPage(workspace, status string, limit, offset int) ([]SelfImprovementRecommendationRow, error) {
+	return ListSelfImprovementRecommendationsPage(s.db, workspace, status, limit, offset)
+}
+
+func (s *Store) CountSelfImprovementRecommendations(workspace, status string) (int, error) {
+	return CountSelfImprovementRecommendations(s.db, workspace, status)
 }
 
 func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendationRow, error) {
@@ -434,9 +450,12 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 }
 
 func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementFeedback, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
+	rows, err := ListSelfImprovementFeedbackPage(db, workspace, status, limit, 0)
+	return rows, err
+}
+
+func ListSelfImprovementFeedbackPage(db *sql.DB, workspace, status string, limit, offset int) ([]SelfImprovementFeedback, error) {
+	limit, offset = clampSelfImprovementPage(limit, offset)
 	allWorkspaces := selfImprovementAllWorkspaces(workspace)
 	workspaceID := fleet.NormalizeWorkspaceID(workspace)
 	status = strings.TrimSpace(status)
@@ -455,8 +474,8 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 				linked_agent_name, linked_prompt_version_id, linked_skill_version_ids,
 				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
 			FROM self_improvement_feedback
-			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
-			limit,
+			ORDER BY ingested_at DESC, id DESC LIMIT ? OFFSET ?`,
+			limit, offset,
 		)
 	case allWorkspaces:
 		rows, err = db.Query(
@@ -469,8 +488,8 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
 			FROM self_improvement_feedback
 			WHERE status=?
-			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
-			status, limit,
+			ORDER BY ingested_at DESC, id DESC LIMIT ? OFFSET ?`,
+			status, limit, offset,
 		)
 	case status == "":
 		rows, err = db.Query(
@@ -483,8 +502,8 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
 			FROM self_improvement_feedback
 			WHERE workspace_id=?
-			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
-			workspaceID, limit,
+			ORDER BY ingested_at DESC, id DESC LIMIT ? OFFSET ?`,
+			workspaceID, limit, offset,
 		)
 	default:
 		rows, err = db.Query(
@@ -497,8 +516,8 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 				linked_guardrail_version_ids, link_confidence, link_diagnostics, status
 			FROM self_improvement_feedback
 			WHERE workspace_id=? AND status=?
-			ORDER BY ingested_at DESC, id DESC LIMIT ?`,
-			workspaceID, status, limit,
+			ORDER BY ingested_at DESC, id DESC LIMIT ? OFFSET ?`,
+			workspaceID, status, limit, offset,
 		)
 	}
 	if err != nil {
@@ -514,6 +533,10 @@ func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int
 		out = append(out, ev)
 	}
 	return out, rows.Err()
+}
+
+func CountSelfImprovementFeedback(db *sql.DB, workspace, status string) (int, error) {
+	return countSelfImprovementRows(db, "self_improvement_feedback", "workspace_id", workspace, status)
 }
 
 func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, error) {
@@ -589,9 +612,11 @@ func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecomme
 }
 
 func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendationRow, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
+	return ListSelfImprovementRecommendationsPage(db, workspace, status, limit, 0)
+}
+
+func ListSelfImprovementRecommendationsPage(db *sql.DB, workspace, status string, limit, offset int) ([]SelfImprovementRecommendationRow, error) {
+	limit, offset = clampSelfImprovementPage(limit, offset)
 	allWorkspaces := selfImprovementAllWorkspaces(workspace)
 	workspaceID := fleet.NormalizeWorkspaceID(workspace)
 	status = strings.TrimSpace(status)
@@ -599,13 +624,13 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 	var err error
 	switch {
 	case allWorkspaces && status == "":
-		rows, err = db.Query(recommendationSelectSQL()+` ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, limit)
+		rows, err = db.Query(recommendationSelectSQL()+` ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?`, limit, offset)
 	case allWorkspaces:
-		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, status, limit)
+		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?`, status, limit, offset)
 	case status == "":
-		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, limit)
+		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?`, workspaceID, limit, offset)
 	default:
-		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, status, limit)
+		rows, err = db.Query(recommendationSelectSQL()+` WHERE r.workspace_id=? AND r.status=? ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?`, workspaceID, status, limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -620,6 +645,42 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func CountSelfImprovementRecommendations(db *sql.DB, workspace, status string) (int, error) {
+	return countSelfImprovementRows(db, "self_improvement_recommendations", "workspace_id", workspace, status)
+}
+
+func clampSelfImprovementPage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func countSelfImprovementRows(db *sql.DB, table, workspaceColumn, workspace, status string) (int, error) {
+	allWorkspaces := selfImprovementAllWorkspaces(workspace)
+	workspaceID := fleet.NormalizeWorkspaceID(workspace)
+	status = strings.TrimSpace(status)
+	var row *sql.Row
+	switch {
+	case allWorkspaces && status == "":
+		row = db.QueryRow(`SELECT COUNT(*) FROM ` + table)
+	case allWorkspaces:
+		row = db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE status=?`, status)
+	case status == "":
+		row = db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE `+workspaceColumn+`=?`, workspaceID)
+	default:
+		row = db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE `+workspaceColumn+`=? AND status=?`, workspaceID, status)
+	}
+	var total int
+	return total, row.Scan(&total)
 }
 
 func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendationRow, error) {

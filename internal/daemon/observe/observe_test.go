@@ -129,10 +129,13 @@ func waitForEvents(t *testing.T, h *Handler, path string, want int) []eventJSON 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("want 200, got %d", rec.Code)
 		}
-		events = nil
-		if err := json.NewDecoder(rec.Body).Decode(&events); err != nil {
+		var page struct {
+			Items []eventJSON `json:"items"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
+		events = page.Items
 		if len(events) == want {
 			return events
 		}
@@ -717,10 +720,13 @@ func TestHandleTracesReturnsStoredSpans(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var spans []map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&spans); err != nil {
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	spans := page.Items
 	if len(spans) != 2 {
 		t.Fatalf("want 2 spans, got %d", len(spans))
 	}

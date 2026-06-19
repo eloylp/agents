@@ -217,6 +217,19 @@ func decodeText(t *testing.T, res *mcpgo.CallToolResult, v any) {
 	}
 }
 
+func decodePageItems(t *testing.T, res *mcpgo.CallToolResult) []map[string]any {
+	t.Helper()
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeText(t, res, &page)
+	if page.Items == nil {
+		return []map[string]any{}
+	}
+	return page.Items
+}
+
 func textOf(t *testing.T, res *mcpgo.CallToolResult) string {
 	t.Helper()
 	if res == nil || len(res.Content) == 0 {
@@ -447,8 +460,7 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list recommendations with bundles: %v", err)
 	}
-	var linked []map[string]any
-	decodeText(t, res, &linked)
+	linked := decodePageItems(t, res)
 	if len(linked) != 1 || linked[0]["id"] != rec.ID {
 		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
 	}
@@ -1127,8 +1139,7 @@ func TestToolListEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 2 || got[0]["id"] != "e1" || got[1]["id"] != "e2" {
 		t.Fatalf("unexpected events payload: %+v", got)
 	}
@@ -1147,8 +1158,7 @@ func TestToolListEventsSinceFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 1 || got[0]["id"] != "new" {
 		t.Fatalf("since filter expected only new event, got %+v", got)
 	}
@@ -1160,7 +1170,7 @@ func TestToolListEventsSinceFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	decodeText(t, res, &got)
+	got = decodePageItems(t, res)
 	if len(got) != 2 {
 		t.Fatalf("unparseable since should fall back to no filter, got %+v", got)
 	}
@@ -1181,8 +1191,7 @@ func TestToolListEventsFiltersWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 1 || got[0]["id"] != "team-a-event" {
 		t.Fatalf("workspace filter expected only team-a event, got %+v", got)
 	}
@@ -1196,11 +1205,9 @@ func TestToolListEventsNilSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Nil slice from the store should serialise as [] not null, easier for
-	// LLM clients that don't distinguish the two.
-	got := textOf(t, res)
-	if got != "[]" {
-		t.Fatalf("expected []\\n, got %q", got)
+	got := decodePageItems(t, res)
+	if len(got) != 0 {
+		t.Fatalf("expected empty items, got %+v", got)
 	}
 }
 
@@ -1244,8 +1251,7 @@ func TestToolListImprovementFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 1 || got[0]["github_comment_id"] != float64(101) || got[0]["status"] != "new" {
 		t.Fatalf("feedback filter returned %+v, want only comment 101", got)
 	}
@@ -1262,8 +1268,7 @@ func TestToolListTraces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 traces, got %+v", got)
 	}
@@ -1285,8 +1290,7 @@ func TestToolListTracesFiltersWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got []map[string]any
-	decodeText(t, res, &got)
+	got := decodePageItems(t, res)
 	if len(got) != 1 || got[0]["span_id"] != "team-a-span" {
 		t.Fatalf("workspace filter expected only team-a span, got %+v", got)
 	}

@@ -201,13 +201,15 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	if deps.Observe != nil {
 		srv.AddTool(
 			mcpgo.NewTool("list_events",
-				mcpgo.WithDescription("List recent events (GitHub webhook deliveries, cron firings, on-demand runs, dispatches) for one workspace. Ordered oldest→newest, capped at 500. Omitted workspace defaults to default."),
+				mcpgo.WithDescription("List recent events (GitHub webhook deliveries, cron firings, on-demand runs, dispatches) for one workspace. Ordered oldest→newest. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",
 					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
 				),
 				mcpgo.WithString("since",
 					mcpgo.Description("Optional RFC3339 timestamp; return only events strictly after this time."),
 				),
+				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 			),
 			toolListEvents(deps),
 		)
@@ -220,6 +222,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("status",
 					mcpgo.Description("Optional status filter such as new or ignored."),
 				),
+				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 			),
 			toolListImprovementFeedback(deps),
 		)
@@ -232,6 +236,8 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("status",
 					mcpgo.Description("Optional status filter such as recommended, needs_user_input, clarifying, analyzing, rejected, or failed. recommended means ready for human review and may already include a proposal bundle."),
 				),
+				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 			),
 			toolListImprovementRecommendations(deps),
 		)
@@ -349,15 +355,19 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.NewTool("list_improvement_recommendations_with_bundles",
 				mcpgo.WithDescription("List self-improvement proposal records that already have linked proposal bundles."),
 				mcpgo.WithString("workspace", mcpgo.Description("Optional workspace id or display name to narrow the global proposal set.")),
+				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 			),
 			toolListImprovementRecommendationsWithBundles(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_traces",
-				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
+				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",
 					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
 				),
+				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 			),
 			toolListTraces(deps),
 		)
