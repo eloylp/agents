@@ -7,7 +7,7 @@ import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import PaginationControls from '@/components/PaginationControls'
-import { pageFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
@@ -185,6 +185,7 @@ export default function GuardrailsManager() {
   const { workspace, workspaces } = useSelectedWorkspace()
   const currentWorkspaceRef = useRef(workspace)
   const [guardrails, setGuardrails] = useState<Guardrail[]>([])
+  const [guardrailLookups, setGuardrailLookups] = useState<Guardrail[]>([])
   const [guardrailsTotal, setGuardrailsTotal] = useState(0)
   const [guardrailsLimit, setGuardrailsLimit] = useState(50)
   const [guardrailsOffset, setGuardrailsOffset] = useState(0)
@@ -212,15 +213,20 @@ export default function GuardrailsManager() {
         if (!r.ok) throw new Error(`load guardrails: ${r.status}`)
         return r.json()
       }),
+      fetch(selectorURL('/guardrails')).then(r => {
+        if (!r.ok) throw new Error(`load guardrail lookups: ${r.status}`)
+        return r.json()
+      }),
       fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`).then(r => {
         if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
         return r.json()
       }),
     ])
-      .then(([catalogRaw, refs]: [unknown, WorkspaceGuardrailRef[]]) => {
+      .then(([catalogRaw, lookupRaw, refs]: [unknown, unknown, WorkspaceGuardrailRef[]]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         const catalog = pageFromResponse<Guardrail>(catalogRaw, guardrailsLimit, guardrailsOffset)
         setGuardrails(catalog.items ?? [])
+        setGuardrailLookups(itemsFromResponse<Guardrail>(lookupRaw))
         setGuardrailsTotal(catalog.total)
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
@@ -250,7 +256,7 @@ export default function GuardrailsManager() {
   }
   const workspaceRefIDs = new Set(workspaceRefs.map(r => r.guardrail_name))
   const workspaceRefByID = new Map(workspaceRefs.map(r => [r.guardrail_name, r]))
-  const guardrailByID = new Map(guardrails.map(g => [guardrailID(g), g]))
+  const guardrailByID = new Map([...guardrails, ...guardrailLookups].map(g => [guardrailID(g), g]))
   const selectedWorkspaceRows = workspaceRefs.map((ref, index) => ({
     ref,
     index,

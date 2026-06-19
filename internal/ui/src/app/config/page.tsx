@@ -372,7 +372,7 @@ export default function ConfigPage() {
 
   const loadBackends = () => {
     setBackendsLoading(true)
-    Promise.all([fetch('/backends'), fetch('/backends/status'), fetch('/agents/orphans/status')])
+    Promise.all([fetch(selectorURL('/backends')), fetch('/backends/status'), fetch('/agents/orphans/status')])
       .then(async ([dbRes, diagRes, orphanRes]) => {
         if (!dbRes.ok) throw new Error((await dbRes.text()) || 'Failed to load backends from database')
         if (!diagRes.ok) throw new Error((await diagRes.text()) || 'Failed to load diagnostics')
@@ -808,7 +808,7 @@ export default function ConfigPage() {
 
   const loadBudgetScopeOptions = async () => {
     try {
-      const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(selectorURL(withWorkspace('/agents', workspace))), fetch(selectorURL(withWorkspace('/repos', workspace)))])
+      const [backendRes, agentRes, repoRes] = await Promise.all([fetch(selectorURL('/backends')), fetch(selectorURL(withWorkspace('/agents', workspace))), fetch(selectorURL(withWorkspace('/repos', workspace)))])
       if (backendRes.ok) {
         setBackends(sortBackends(itemsFromResponse<Backend>(await backendRes.json())))
       }

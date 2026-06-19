@@ -145,11 +145,11 @@ export default function FleetPage() {
 
   const loadRef = useRef(false)
   const loadLookups = () => {
-    fetch('/backends')
+    fetch(selectorURL('/backends'))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setBackendOptions(itemsFromResponse<BackendOption>(data).filter(b => b.detected !== false)))
       .catch(() => {})
-    fetch('/skills')
+    fetch(selectorURL('/skills'))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
@@ -157,7 +157,7 @@ export default function FleetPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
-    fetch('/prompts')
+    fetch(selectorURL('/prompts'))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setPromptOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
