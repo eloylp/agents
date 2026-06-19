@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Card from '@/components/Card'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { apiRoutes } from '@/lib/api-routes'
@@ -208,13 +208,6 @@ export default function EventsPage() {
             }}>{r}</button>
           ))}
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
-          <PaginationControls
-            total={total}
-            limit={limit}
-            offset={offset}
-            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
-            onOffsetChange={setOffset}
-          />
           <input
             placeholder="Filter..."
             value={filter}
@@ -241,6 +234,13 @@ export default function EventsPage() {
         </div>
       </Card>
 
+      <PaginatedDataSection
+        total={total}
+        limit={limit}
+        offset={offset}
+        onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+        onOffsetChange={setOffset}
+      >
       <Card title="Event Stream">
         <div style={{
           display: 'grid',
@@ -262,6 +262,7 @@ export default function EventsPage() {
           {filtered.map(e => <EventRow key={e.id + e.at} event={e} isNew={newIds.has(e.id)} />)}
         </div>
       </Card>
+      </PaginatedDataSection>
     </div>
   )
 }

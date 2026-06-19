@@ -140,13 +140,13 @@ describe('<ConfigPage /> backend pagination', () => {
     render(<ConfigPage />)
 
     expect(await screen.findByText('backend-001')).toBeInTheDocument()
-    expect(screen.getByText('1-50 of 75')).toBeInTheDocument()
+    expect(screen.getAllByText('1-50 of 75')).toHaveLength(2)
     expect(fetchMock).toHaveBeenCalledWith('/backends?limit=500&offset=0')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Next' })[0])
 
     expect(await screen.findByText('backend-051')).toBeInTheDocument()
-    expect(screen.getByText('51-75 of 75')).toBeInTheDocument()
+    expect(screen.getAllByText('51-75 of 75')).toHaveLength(2)
     expect(fetchMock).toHaveBeenCalledWith('/backends?limit=50&offset=50')
   })
 })

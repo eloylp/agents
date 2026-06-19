@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Card from '@/components/Card'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
@@ -453,13 +453,6 @@ function TracesContent() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
-          <PaginationControls
-            total={total}
-            limit={limit}
-            offset={offset}
-            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
-            onOffsetChange={setOffset}
-          />
           <input
             placeholder="Filter by agent, repo, or ID…"
             value={filter}
@@ -472,11 +465,19 @@ function TracesContent() {
         </div>
       </div>
 
-      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
-      {!loading && rootIds.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No traces yet.</p>}
-      {rootIds.map(id => (
-        <TraceListItem key={id} rootId={id} spans={grouped[id]} onSelect={handleSelect} />
-      ))}
+      <PaginatedDataSection
+        total={total}
+        limit={limit}
+        offset={offset}
+        onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+        onOffsetChange={setOffset}
+      >
+        {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+        {!loading && rootIds.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No traces yet.</p>}
+        {rootIds.map(id => (
+          <TraceListItem key={id} rootId={id} spans={grouped[id]} onSelect={handleSelect} />
+        ))}
+      </PaginatedDataSection>
     </div>
   )
 }

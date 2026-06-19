@@ -4,7 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
@@ -1296,22 +1296,20 @@ export default function ConfigPage() {
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
             <div style={{ flex: '2 1 540px', minWidth: 0 }}>
               <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>Backends</div>
-                  <PaginationControls
+                <PaginatedDataSection
                     total={backendsTotal}
                     limit={backendsLimit}
                     offset={backendsOffset}
                     onLimitChange={(next) => { setBackendsLimit(next); setBackendsOffset(0) }}
                     onOffsetChange={setBackendsOffset}
-                  />
-                </div>
-                {!backendsLoading && backends.length === 0 && (
-                  <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No backends configured.</p>
-                )}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                  {backends.map(b => (
-                    <div key={b.name} style={{ border: `1px solid ${b.healthy ? 'var(--border-subtle)' : 'var(--border-danger)'}`, borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
+                    topLeft={<div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>Backends</div>}
+                  >
+                  {!backendsLoading && backends.length === 0 && (
+                    <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No backends configured.</p>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    {backends.map(b => (
+                      <div key={b.name} style={{ border: `1px solid ${b.healthy ? 'var(--border-subtle)' : 'var(--border-danger)'}`, borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1372,9 +1370,10 @@ export default function ConfigPage() {
                           )}
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                      </div>
+                    ))}
+                  </div>
+                </PaginatedDataSection>
               </div>
             </div>
 
@@ -1565,23 +1564,21 @@ export default function ConfigPage() {
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
               Budgets enforce token caps over UTC calendar periods. Simple repo, agent, and backend scopes are global across workspaces; choose workspace + repo, workspace + agent, or workspace + backend for workspace-isolated caps. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
-            <div style={{ marginBottom: '0.75rem' }}>
-              <PaginationControls
+            <PaginatedDataSection
                 total={budgetsTotal}
                 limit={budgetsLimit}
                 offset={budgetsOffset}
                 onLimitChange={(next) => { setBudgetsLimit(next); setBudgetsOffset(0) }}
                 onOffsetChange={setBudgetsOffset}
-              />
-            </div>
-            {budgetsLoading ? (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
-            ) : budgets.length === 0 ? (
-              <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No token budgets configured. Add one to enforce token caps and receive alerts.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {budgets.map(b => (
-                  <div key={b.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem 0.75rem', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+              >
+              {budgetsLoading ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+              ) : budgets.length === 0 ? (
+                <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No token budgets configured. Add one to enforce token caps and receive alerts.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {budgets.map(b => (
+                    <div key={b.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem 0.75rem', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-heading)' }}>
                         {budgetScopeLabel(b)}
@@ -1621,10 +1618,11 @@ export default function ConfigPage() {
                         Delete
                       </button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </PaginatedDataSection>
             {budgetError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{budgetError}</p>}
           </div>
         </Card>

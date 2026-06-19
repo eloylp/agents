@@ -2,7 +2,7 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { pageFromResponse } from '@/lib/pagination'
@@ -960,30 +960,14 @@ export default function ImprovementsPage() {
         </div>
 	      </section>
 
-      <section aria-label="Improvement pagination" style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span>Proposals</span>
-          <PaginationControls
-            total={recommendationsTotal}
-            limit={recommendationsLimit}
-            offset={recommendationsOffset}
-            onLimitChange={(next) => { setRecommendationsLimit(next); setRecommendationsOffset(0) }}
-            onOffsetChange={setRecommendationsOffset}
-          />
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span>Feedback</span>
-          <PaginationControls
-            total={feedbackTotal}
-            limit={feedbackLimit}
-            offset={feedbackOffset}
-            onLimitChange={(next) => { setFeedbackLimit(next); setFeedbackOffset(0) }}
-            onOffsetChange={setFeedbackOffset}
-          />
-        </div>
-      </section>
-
       {(tab === 'proposals' || tab === 'history') && (
+        <PaginatedDataSection
+          total={recommendationsTotal}
+          limit={recommendationsLimit}
+          offset={recommendationsOffset}
+          onLimitChange={(next) => { setRecommendationsLimit(next); setRecommendationsOffset(0) }}
+          onOffsetChange={setRecommendationsOffset}
+        >
         <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '92px 92px minmax(260px, 1fr) 170px 130px 170px', gap: '0.75rem', padding: '0.65rem 0.8rem', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>
             <span>ID</span>
@@ -1076,6 +1060,7 @@ export default function ImprovementsPage() {
             <div style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No matching proposals.</div>
           )}
         </section>
+        </PaginatedDataSection>
       )}
 
       {reviewingProposal && (

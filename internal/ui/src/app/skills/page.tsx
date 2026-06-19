@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
@@ -390,56 +390,54 @@ export default function SkillsPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <PaginationControls
+      <PaginatedDataSection
           total={total}
           limit={limit}
           offset={offset}
           onLimitChange={(next) => { setLimit(next); setOffset(0) }}
           onOffsetChange={setOffset}
-        />
-      </div>
+        >
+        {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+        {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
+        {!loading && !error && skills.length === 0 && (
+          <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
+        )}
 
-      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
-      {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
-      {!loading && !error && skills.length === 0 && (
-        <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {visibleSkills.map(sk => (
-          <Card key={stableSkillID(sk) || sk.name}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  title={skillIdentityTooltip(sk)}
-                  style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}
-                >
-                  {skillDisplayLabel(sk)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {visibleSkills.map(sk => (
+            <Card key={stableSkillID(sk) || sk.name}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    title={skillIdentityTooltip(sk)}
+                    style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}
+                  >
+                    {skillDisplayLabel(sk)}
+                  </div>
+                  <div
+                    title={scopeLabel(sk)}
+                    style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}
+                  >
+                    {shortScopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
+                  </div>
+                  <pre style={{
+                    fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
+                    border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',
+                    maxHeight: '80px', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    fontFamily: 'inherit',
+                  }}>
+                    {sk.prompt ? sk.prompt.slice(0, 200) + (sk.prompt.length > 200 ? '…' : '') : '-'}
+                  </pre>
                 </div>
-                <div
-                  title={scopeLabel(sk)}
-                  style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}
-                >
-                  {shortScopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
+                <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                  <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
+                  <button onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
                 </div>
-                <pre style={{
-                  fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
-                  border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',
-                  maxHeight: '80px', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  fontFamily: 'inherit',
-                }}>
-                  {sk.prompt ? sk.prompt.slice(0, 200) + (sk.prompt.length > 200 ? '…' : '') : '-'}
-                </pre>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                <button onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+            </Card>
+          ))}
+        </div>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${skillDisplayLabel(selected)}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>

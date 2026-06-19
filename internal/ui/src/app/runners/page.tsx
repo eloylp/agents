@@ -5,7 +5,7 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { formatDateTime, formatTime } from '@/lib/datetime'
@@ -285,13 +285,6 @@ function RunnersInner() {
               padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{s || 'All'}</button>
           ))}
-          <PaginationControls
-            total={total}
-            limit={limit}
-            offset={offset}
-            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
-            onOffsetChange={setOffset}
-          />
         </div>
       </div>
 
@@ -327,6 +320,13 @@ function RunnersInner() {
         </Card>
       )}
 
+      <PaginatedDataSection
+        total={total}
+        limit={limit}
+        offset={offset}
+        onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+        onOffsetChange={setOffset}
+      >
       <Card title="Runner Rows">
         <div style={{
           display: 'grid',
@@ -539,6 +539,7 @@ function RunnersInner() {
           })}
         </div>
       </Card>
+      </PaginatedDataSection>
       {streamSpan && <LiveTraceModal span={streamSpan} onClose={() => setStreamSpan(null)} />}
       {dialog?.kind === 'confirm-delete' && (
         <Modal title={`Delete runner #${dialog.id}?`} onClose={() => setDialog(null)}>

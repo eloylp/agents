@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { pageFromResponse } from '@/lib/pagination'
@@ -264,27 +264,38 @@ export function AuthTokenSettings() {
               <h4 style={sectionTitleStyle}>Users</h4>
               <p style={sectionHelpStyle}>Admin users can create or remove dashboard users. Every user can manage daemon configuration and create their own API tokens.</p>
             </div>
-            <div style={{ display: 'grid', gap: '0.5rem' }}>
-              {users.map(user => (
-                <div key={user.id} style={rowStyle}>
-                  <div>
-                    <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{user.username}</strong>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
-                      created {formatDate(user.created_at)}
-                      {user.last_login_at ? ` · last login ${formatDate(user.last_login_at)}` : ''}
-                      {user.disabled_at ? ' · disabled' : ''}
-                    </p>
+            <PaginatedDataSection
+              total={usersTotal}
+              limit={usersLimit}
+              offset={usersOffset}
+              onLimitChange={limit => {
+                setUsersLimit(limit)
+                setUsersOffset(0)
+              }}
+              onOffsetChange={setUsersOffset}
+            >
+              <div style={{ display: 'grid', gap: '0.5rem' }}>
+                {users.map(user => (
+                  <div key={user.id} style={rowStyle}>
+                    <div>
+                      <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{user.username}</strong>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                        created {formatDate(user.created_at)}
+                        {user.last_login_at ? ` · last login ${formatDate(user.last_login_at)}` : ''}
+                        {user.disabled_at ? ' · disabled' : ''}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {user.is_admin && <span style={pillStyle}>admin</span>}
+                      {status.user?.username === user.username && <span style={pillStyle}>current</span>}
+                      {status.user?.is_admin && !user.is_admin && status.user?.username !== user.username && (
+                        <button type="button" onClick={() => deleteUser(user.id)} style={secondaryButtonStyle}>Remove</button>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    {user.is_admin && <span style={pillStyle}>admin</span>}
-                    {status.user?.username === user.username && <span style={pillStyle}>current</span>}
-                    {status.user?.is_admin && !user.is_admin && status.user?.username !== user.username && (
-                      <button type="button" onClick={() => deleteUser(user.id)} style={secondaryButtonStyle}>Remove</button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </PaginatedDataSection>
             {status.user?.is_admin ? (
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="Username" style={{ ...inputStyle, maxWidth: '220px' }} />
@@ -295,16 +306,6 @@ export function AuthTokenSettings() {
               <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Only the admin user can create or remove dashboard users.</p>
             )}
             {userError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{userError}</p>}
-            <PaginationControls
-              total={usersTotal}
-              limit={usersLimit}
-              offset={usersOffset}
-              onLimitChange={limit => {
-                setUsersLimit(limit)
-                setUsersOffset(0)
-              }}
-              onOffsetChange={setUsersOffset}
-            />
           </section>
 
           <section style={sectionStyle}>
@@ -322,18 +323,7 @@ export function AuthTokenSettings() {
                 {created}
               </code>
             )}
-            <div style={{ display: 'grid', gap: '0.5rem' }}>
-              {tokens.map(token => (
-                <div key={token.id} style={rowStyle}>
-                  <div>
-                    <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{token.name}</strong>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>{token.kind} · {token.prefix} · {token.revoked_at ? 'revoked' : 'active'}</p>
-                  </div>
-                  {!token.revoked_at && <button type="button" onClick={() => revoke(token.id)} style={secondaryButtonStyle}>Revoke</button>}
-                </div>
-              ))}
-            </div>
-            <PaginationControls
+            <PaginatedDataSection
               total={tokensTotal}
               limit={tokensLimit}
               offset={tokensOffset}
@@ -342,7 +332,19 @@ export function AuthTokenSettings() {
                 setTokensOffset(0)
               }}
               onOffsetChange={setTokensOffset}
-            />
+            >
+              <div style={{ display: 'grid', gap: '0.5rem' }}>
+                {tokens.map(token => (
+                  <div key={token.id} style={rowStyle}>
+                    <div>
+                      <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{token.name}</strong>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>{token.kind} · {token.prefix} · {token.revoked_at ? 'revoked' : 'active'}</p>
+                    </div>
+                    {!token.revoked_at && <button type="button" onClick={() => revoke(token.id)} style={secondaryButtonStyle}>Revoke</button>}
+                  </div>
+                ))}
+              </div>
+            </PaginatedDataSection>
           </section>
         </>
       )}

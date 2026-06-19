@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
@@ -219,39 +219,37 @@ export default function PromptsPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <PaginationControls
+      <PaginatedDataSection
           total={total}
           limit={limit}
           offset={offset}
           onLimitChange={(next) => { setLimit(next); setOffset(0) }}
           onOffsetChange={setOffset}
-        />
-      </div>
-
-      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
-      {!loading && prompts.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No prompts configured.</p>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-        {visiblePrompts.map(p => (
-          <Card key={p.id || p.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{p.name}</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: 2 }}>
-                {p.repo ? `${p.workspace_id || 'default'} / ${p.repo}` : p.workspace_id ? `${p.workspace_id} workspace` : 'Global'}
-                {p.version ? ` · v${p.version}` : ''}
+        >
+        {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
+        {!loading && prompts.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No prompts configured.</p>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          {visiblePrompts.map(p => (
+            <Card key={p.id || p.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{p.name}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: 2 }}>
+                  {p.repo ? `${p.workspace_id || 'default'} / ${p.repo}` : p.workspace_id ? `${p.workspace_id} workspace` : 'Global'}
+                  {p.version ? ` · v${p.version}` : ''}
+                </div>
+                {p.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 2 }}>{p.description}</div>}
               </div>
-              {p.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 2 }}>{p.description}</div>}
-            </div>
-            <pre style={{ whiteSpace: 'pre-wrap', overflow: 'hidden', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.4, maxHeight: 110, margin: 0 }}>
-              {p.content || '-'}
-            </pre>
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-              <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
-              <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
-            </div>
-          </Card>
-        ))}
-      </div>
+              <pre style={{ whiteSpace: 'pre-wrap', overflow: 'hidden', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.4, maxHeight: 110, margin: 0 }}>
+                {p.content || '-'}
+              </pre>
+              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
+                <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
+                <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'New prompt' : `Edit ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
