@@ -30,7 +30,8 @@ import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
-import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
+import { apiRoutes } from '@/lib/api-routes'
+import { useSelectedWorkspace, type CatalogItem } from '@/lib/workspace'
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
 import { graphPromptIdentifier, resolveGraphPrompt, type GraphPromptItem } from '@/lib/graph-prompt'
@@ -192,6 +193,11 @@ function repoPath(name: string): string {
   const [owner, ...rest] = name.split('/')
   const repo = rest.join('/')
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+}
+
+function repoParts(name: string): [string, string] {
+  const [owner, ...rest] = name.split('/')
+  return [owner, rest.join('/')]
 }
 
 function repoNodeID(repo: string): string {
@@ -468,19 +474,19 @@ export default function GraphPage() {
   }, [repos, bindingDraft.repo])
 
   const loadLookups = useCallback(() => {
-    fetch(selectorURL('/backends'))
+    fetch(selectorURL(apiRoutes.backends.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setBackendOptions(itemsFromResponse<BackendOption>(data).filter(b => b.detected !== false)))
       .catch(() => {})
-    fetch(selectorURL('/skills'))
+    fetch(selectorURL(apiRoutes.catalog.skills.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(selectorURL(withWorkspace('/agents', workspace)))
+    fetch(selectorURL(apiRoutes.agents.list({ workspace })))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
-    fetch(selectorURL('/prompts'))
+    fetch(selectorURL(apiRoutes.catalog.prompts.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => {
         setPromptOptions(itemsFromResponse<GraphPromptItem>(data))
@@ -493,10 +499,10 @@ export default function GraphPage() {
     if (!loadedOnce.current) setLoading(true)
     loadedOnce.current = true
     Promise.all([
-      fetch(withWorkspace('/graph', workspace)).then(r => r.json()),
-      fetch(selectorURL(withWorkspace('/agents', workspace))).then(r => r.json()),
-      fetch(withWorkspace('/graph/layout', workspace)).then(r => r.ok ? r.json() : { positions: [] }),
-      fetch(selectorURL(withWorkspace('/repos', workspace))).then(r => r.ok ? r.json() : []),
+      fetch(apiRoutes.graph.view({ workspace })).then(r => r.json()),
+      fetch(selectorURL(apiRoutes.agents.list({ workspace }))).then(r => r.json()),
+      fetch(apiRoutes.graph.layout({ workspace })).then(r => r.ok ? r.json() : { positions: [] }),
+      fetch(selectorURL(apiRoutes.repos.list({ workspace }))).then(r => r.ok ? r.json() : []),
     ]).then(([gd, ad, ld, rd]) => {
       setGraphData(gd)
       const agentItems = itemsFromResponse<AgentInfo>(ad)
@@ -522,7 +528,7 @@ export default function GraphPage() {
   const loadAgentActivity = useCallback(async (agentName: string) => {
     setAgentActivityLoading(true)
     try {
-      const res = await fetch(withWorkspace('/runners?limit=200', workspace), { cache: 'no-store' })
+      const res = await fetch(apiRoutes.runners.list({ workspace, limit: 200 }), { cache: 'no-store' })
       if (!res.ok) throw new Error(`runners ${res.status}`)
       const data = await res.json() as { runners?: RunnerRow[] }
       const rows = (data.runners ?? [])
@@ -777,7 +783,7 @@ export default function GraphPage() {
     const next = { x: node.position.x, y: node.position.y }
     setLayoutPositions(prev => ({ ...prev, [nodeID]: next }))
     if (nodeID.startsWith('repo-anchor:')) return
-    fetch(withWorkspace('/graph/layout', workspace), {
+    fetch(apiRoutes.graph.layout({ workspace }), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ positions: [{ node_id: nodeID, x: next.x, y: next.y }] }),
@@ -788,14 +794,14 @@ export default function GraphPage() {
   }, [workspace])
 
   const autoLayout = useCallback(() => {
-    fetch(withWorkspace('/graph/layout', workspace), { method: 'DELETE' }).finally(() => {
+    fetch(apiRoutes.graph.layout({ workspace }), { method: 'DELETE' }).finally(() => {
       setLayoutPositions({})
       load()
     })
   }, [load, workspace])
 
   const fetchStoreAgent = useCallback(async (name: string): Promise<StoreAgent> => {
-    const res = await fetch(withWorkspace(`/agents/${encodeURIComponent(name)}`, workspace))
+    const res = await fetch(apiRoutes.agents.one(name, { workspace }))
     if (!res.ok) throw new Error(`fetch ${name}: ${res.status}`)
     const data = await res.json() as Partial<StoreAgent>
     return storeAgentFromResponse(data, name)
@@ -828,7 +834,7 @@ export default function GraphPage() {
   }, [agentPanelTab, fetchStoreAgent, loadLookups, panelMode, selectedNodeName])
 
   const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
-    const res = await fetch(withWorkspace('/agents', workspace), {
+    const res = await fetch(apiRoutes.agents.list({ workspace }), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...a, workspace_id: workspace }),
@@ -955,7 +961,7 @@ export default function GraphPage() {
     setAgentSaving(true)
     setAgentSaveError('')
     try {
-      const res = await fetch(withWorkspace('/agents', workspace), {
+      const res = await fetch(apiRoutes.agents.list({ workspace }), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, workspace_id: workspace }),
@@ -1001,7 +1007,8 @@ export default function GraphPage() {
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(withWorkspace(`${repoPath(draft.repo)}/bindings`, workspace), {
+      const [owner, repo] = repoParts(draft.repo)
+      const res = await fetch(apiRoutes.repos.bindings(owner, repo, { workspace }), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bindingFromDraft(agent, draft)),
@@ -1024,7 +1031,8 @@ export default function GraphPage() {
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(withWorkspace(`${repoPath(repo)}/bindings/${binding.id}`, workspace), {
+      const [owner, repoName] = repoParts(repo)
+      const res = await fetch(apiRoutes.repos.binding(owner, repoName, binding.id, { workspace }), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...binding, enabled }),
@@ -1046,7 +1054,8 @@ export default function GraphPage() {
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(withWorkspace(`${repoPath(repo)}/bindings/${binding.id}`, workspace), { method: 'DELETE' })
+      const [owner, repoName] = repoParts(repo)
+      const res = await fetch(apiRoutes.repos.binding(owner, repoName, binding.id, { workspace }), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setBindingError((await res.text()) || 'Binding delete failed')
         return
@@ -1098,7 +1107,7 @@ export default function GraphPage() {
     setPromptSaving(true)
     setPromptSaveError('')
     try {
-      const res = await fetch(`/prompts/${encodeURIComponent(graphPromptIdentifier(selectedPrompt))}`, {
+      const res = await fetch(apiRoutes.catalog.prompts.one(graphPromptIdentifier(selectedPrompt)), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: selectedPrompt.description ?? '', content: promptDraft }),

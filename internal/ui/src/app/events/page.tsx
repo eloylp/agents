@@ -5,10 +5,11 @@ import Card from '@/components/Card'
 import PaginationControls from '@/components/PaginationControls'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatTime } from '@/lib/datetime'
 import { pageFromResponse } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Event {
   at: string
@@ -140,7 +141,7 @@ export default function EventsPage() {
     setLoading(true)
     const sinceMs = Date.now() - (timeRanges[timeRange] ?? 3600) * 1000
     const since = new Date(sinceMs).toISOString()
-    fetch(withWorkspace(`/events?since=${encodeURIComponent(since)}&limit=${limit}&offset=${offset}`, workspace))
+    fetch(apiRoutes.events.list({ workspace, since, limit, offset }))
       .then(r => r.json())
       .then(data => {
         const page = pageFromResponse<Event>(data, limit, offset)
@@ -156,7 +157,7 @@ export default function EventsPage() {
   useEffect(() => { setOffset(0) }, [timeRange, workspace])
 
   useEffect(() => {
-    const stream = openAuthenticatedSSE(withWorkspace('/events/stream', workspace), {
+    const stream = openAuthenticatedSSE(apiRoutes.events.stream({ workspace }), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse } from '@/lib/pagination'
 import { defaultWorkspaceID } from '@/lib/workspace'
 
@@ -120,7 +121,7 @@ export default function WorkspacesPage() {
   const load = () => {
     setLoading(true)
     setError('')
-    fetch(`/workspaces?limit=${limit}&offset=${offset}`, { cache: 'no-store' })
+    fetch(apiRoutes.workspaces.list({ limit, offset }), { cache: 'no-store' })
       .then(async res => {
         if (!res.ok) throw new Error((await res.text()) || 'Failed to load workspaces')
         return res.json()
@@ -165,7 +166,7 @@ export default function WorkspacesPage() {
     const body = isNew
       ? { id: workspace.id.trim(), name: workspace.name.trim(), description: (workspace.description ?? '').trim() }
       : { name: workspace.name.trim(), description: (workspace.description ?? '').trim() }
-    const url = isNew ? '/workspaces' : `/workspaces/${encodeURIComponent(selected.id)}`
+    const url = isNew ? apiRoutes.workspaces.list() : apiRoutes.workspaces.one(selected.id)
     try {
       const res = await fetch(url, {
         method: isNew ? 'POST' : 'PATCH',
@@ -189,7 +190,7 @@ export default function WorkspacesPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/workspaces/${encodeURIComponent(selected.id)}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.workspaces.one(selected.id), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

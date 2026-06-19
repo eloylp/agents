@@ -10,8 +10,9 @@ import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { formatDateTime, formatTime } from '@/lib/datetime'
 import { fmtDuration } from '@/lib/format'
+import { apiRoutes } from '@/lib/api-routes'
 import { newRunnerTimeoutTracker, observeRunnerTimeouts } from '@/lib/runner-timeouts'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface RunnerRow {
   id: number
@@ -125,7 +126,7 @@ function RunnersInner() {
 
   const load = async () => {
     try {
-      const url = withWorkspace(`/runners?limit=${limit}&offset=${offset}${status ? `&status=${status}` : ''}`, workspace)
+      const url = apiRoutes.runners.list({ workspace, limit, offset, status })
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
@@ -205,7 +206,7 @@ function RunnersInner() {
     setDialog(null)
     setPendingId(id)
     try {
-      const res = await fetch(`/runners/${id}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.runners.one(id), { method: 'DELETE' })
       if (!res.ok && res.status !== 404) {
         const body = await res.text()
         setDialog({ kind: 'error', title: 'Delete failed', message: body || `HTTP ${res.status}` })
@@ -220,7 +221,7 @@ function RunnersInner() {
     setDialog(null)
     setPendingId(id)
     try {
-      const res = await fetch(`/runners/${id}/retry`, { method: 'POST' })
+      const res = await fetch(apiRoutes.runners.retry(id), { method: 'POST' })
       if (!res.ok) {
         const body = await res.text()
         setDialog({ kind: 'error', title: 'Retry failed', message: body || `HTTP ${res.status}` })

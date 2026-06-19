@@ -10,8 +10,9 @@ import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
 import { formatDateTime } from '@/lib/datetime'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
-import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
+import { useSelectedWorkspace, type CatalogItem } from '@/lib/workspace'
 
 interface Binding {
   repo: string
@@ -145,23 +146,23 @@ export default function FleetPage() {
 
   const loadRef = useRef(false)
   const loadLookups = () => {
-    fetch(selectorURL('/backends'))
+    fetch(selectorURL(apiRoutes.backends.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setBackendOptions(itemsFromResponse<BackendOption>(data).filter(b => b.detected !== false)))
       .catch(() => {})
-    fetch(selectorURL('/skills'))
+    fetch(selectorURL(apiRoutes.catalog.skills.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(selectorURL(withWorkspace('/agents', workspace)))
+    fetch(selectorURL(apiRoutes.agents.list({ workspace })))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
-    fetch(selectorURL('/prompts'))
+    fetch(selectorURL(apiRoutes.catalog.prompts.list()))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setPromptOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(selectorURL(withWorkspace('/repos', workspace)))
+    fetch(selectorURL(apiRoutes.repos.list({ workspace })))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepoNames(itemsFromResponse<{ name: string }>(data).map(r => r.name)))
       .catch(() => {})
@@ -170,7 +171,7 @@ export default function FleetPage() {
   const load = () => {
     if (!loadRef.current) setLoading(true)
     loadRef.current = true
-    fetch(withWorkspace(`/agents?limit=${limit}&offset=${offset}`, workspace))
+    fetch(apiRoutes.agents.list({ workspace, limit, offset }))
       .then(r => r.json())
       .then(data => {
         const page = pageFromResponse<Agent>(data, limit, offset)
@@ -213,7 +214,7 @@ export default function FleetPage() {
     })
     setModal('edit')
     try {
-      const res = await fetch(withWorkspace(`/agents/${encodeURIComponent(agentName)}`, workspace))
+      const res = await fetch(apiRoutes.agents.one(agentName, { workspace }))
       if (res.ok) {
         const data = await res.json() as Partial<StoreAgent>
         setSelected({
@@ -249,7 +250,7 @@ export default function FleetPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(withWorkspace('/agents', workspace), {
+      const res = await fetch(apiRoutes.agents.list({ workspace }), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, workspace_id: workspace }),
@@ -280,7 +281,7 @@ export default function FleetPage() {
     setSaving(true)
     try {
       const cascade = deleteTarget.bindings.length > 0
-      const url = withWorkspace(`/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`, workspace)
+      const url = apiRoutes.agents.one(deleteTarget.name, cascade ? { workspace, cascade: true } : { workspace })
       const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()

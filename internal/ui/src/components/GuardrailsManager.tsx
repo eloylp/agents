@@ -7,6 +7,7 @@ import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import PaginationControls from '@/components/PaginationControls'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
@@ -209,15 +210,15 @@ export default function GuardrailsManager() {
     setLoading(true)
     setLoadError('')
     Promise.all([
-      fetch(`/guardrails?limit=${guardrailsLimit}&offset=${guardrailsOffset}`).then(r => {
+      fetch(apiRoutes.catalog.guardrails.list({ limit: guardrailsLimit, offset: guardrailsOffset })).then(r => {
         if (!r.ok) throw new Error(`load guardrails: ${r.status}`)
         return r.json()
       }),
-      fetch(selectorURL('/guardrails')).then(r => {
+      fetch(selectorURL(apiRoutes.catalog.guardrails.list())).then(r => {
         if (!r.ok) throw new Error(`load guardrail lookups: ${r.status}`)
         return r.json()
       }),
-      fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`).then(r => {
+      fetch(apiRoutes.workspaces.guardrails(workspace)).then(r => {
         if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
         return r.json()
       }),
@@ -274,7 +275,7 @@ export default function GuardrailsManager() {
         position: index,
         enabled: ref.enabled,
       }))
-      const res = await fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`, {
+      const res = await fetch(apiRoutes.workspaces.guardrails(workspace), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -327,7 +328,7 @@ export default function GuardrailsManager() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const url = isNew ? '/guardrails' : `/guardrails/${encodeURIComponent(guardrailID(g))}`
+      const url = isNew ? apiRoutes.catalog.guardrails.list() : apiRoutes.catalog.guardrails.one(guardrailID(g))
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
         ? { name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
@@ -363,7 +364,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}`, {
+      const res = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(selected)), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -389,7 +390,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}/reset`, { method: 'POST' })
+      const res = await fetch(apiRoutes.catalog.guardrails.reset(guardrailID(selected)), { method: 'POST' })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Reset failed')
         setSaving(false)
@@ -408,7 +409,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(selected)), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

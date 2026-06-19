@@ -8,11 +8,12 @@ import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { fmtDuration } from '@/lib/format'
 import { pageFromResponse } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 type TraceStep = PersistedStep
 
@@ -74,7 +75,7 @@ function PromptPanel({ span }: { span: Span }) {
   const toggle = () => {
     if (!open && text === null) {
       setLoading(true)
-      fetch(`/traces/${encodeURIComponent(span.span_id)}/prompt`)
+      fetch(apiRoutes.traces.prompt(span.span_id))
         .then(async r => {
           if (r.status === 404) { setText(''); return }
           if (!r.ok) throw new Error(`status ${r.status}`)
@@ -191,7 +192,7 @@ function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: num
   const toggle = () => {
     if (!open && steps === null) {
       setLoading(true)
-      fetch(`/traces/${encodeURIComponent(spanId)}/steps`)
+      fetch(apiRoutes.traces.steps(spanId))
         .then(r => r.json())
         .then((data: TraceStep[]) => { setSteps(data ?? []); setLoading(false) })
         .catch(() => { setSteps([]); setLoading(false) })
@@ -390,7 +391,7 @@ function TracesContent() {
 
   const load = () => {
     setLoading(true)
-    fetch(withWorkspace(`/traces?limit=${limit}&offset=${offset}`, workspace))
+    fetch(apiRoutes.traces.list({ workspace, limit, offset }))
       .then(r => r.json())
       .then(data => {
         const page = pageFromResponse<Span>(data, limit, offset)
@@ -403,7 +404,7 @@ function TracesContent() {
 
   useEffect(() => {
     load()
-    const stream = openAuthenticatedSSE(withWorkspace('/traces/stream', workspace), {
+    const stream = openAuthenticatedSSE(apiRoutes.traces.stream({ workspace }), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {

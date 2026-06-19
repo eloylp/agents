@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, selectorURL } from '@/lib/pagination'
-import { withWorkspace } from '@/lib/workspace'
 
 const STORAGE_KEY = 'agents_repo_filter'
 
@@ -28,7 +28,7 @@ export default function RepoFilter({ selected, onChange, workspace }: { selected
 
   useEffect(() => {
     setLoaded(false)
-    fetch(selectorURL(workspace ? withWorkspace('/repos', workspace) : '/repos'))
+    fetch(selectorURL(apiRoutes.repos.list(workspace ? { workspace } : undefined)))
       .then(r => r.ok ? r.json() : [])
       .then((data) => {
         setRepos(itemsFromResponse<{ name: string }>(data).map(r => r.name))

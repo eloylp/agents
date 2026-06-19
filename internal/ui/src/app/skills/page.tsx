@@ -5,6 +5,7 @@ import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
@@ -83,7 +84,7 @@ function SkillForm({
       setRepoOptions([])
       return
     }
-    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.repos.list({ workspace: form.workspace_id })), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepoOptions(itemsFromResponse<Repo>(data)))
       .catch(() => setRepoOptions([]))
@@ -214,7 +215,7 @@ export default function SkillsPage() {
 
   const load = () => {
     setLoading(true)
-    fetch(`/skills?limit=${limit}&offset=${offset}`)
+    fetch(apiRoutes.catalog.skills.list({ limit, offset }))
       .then(r => r.json())
       .then((data) => {
         const page = pageFromResponse<Skill>(data, limit, offset)
@@ -227,7 +228,7 @@ export default function SkillsPage() {
 
   useEffect(() => {
     load()
-    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.workspaces.list()), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
@@ -238,7 +239,7 @@ export default function SkillsPage() {
       setFilterRepos([])
       return
     }
-    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.repos.list({ workspace: filterWorkspace })), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))
@@ -261,7 +262,7 @@ export default function SkillsPage() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const res = await fetch(isNew ? '/skills' : `/skills/${encodeURIComponent(stableSkillID(form))}`, {
+      const res = await fetch(isNew ? apiRoutes.catalog.skills.list() : apiRoutes.catalog.skills.one(stableSkillID(form)), {
         method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isNew ? {
@@ -294,7 +295,7 @@ export default function SkillsPage() {
     if (!deleteTarget) return
     setSaving(true)
     try {
-      const res = await fetch(`/skills/${encodeURIComponent(stableSkillID(deleteTarget))}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.catalog.skills.one(stableSkillID(deleteTarget)), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

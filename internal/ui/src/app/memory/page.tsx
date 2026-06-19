@@ -2,10 +2,11 @@
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { itemsFromResponse, selectorURL } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Agent {
   name: string
@@ -28,7 +29,7 @@ export default function MemoryPage() {
   const { workspace } = useSelectedWorkspace()
 
   useEffect(() => {
-    fetch(selectorURL(withWorkspace('/agents', workspace)))
+    fetch(selectorURL(apiRoutes.agents.list({ workspace })))
       .then(r => r.json())
       .then(data => setAgents(itemsFromResponse<Agent>(data)))
       .catch(() => {})
@@ -41,7 +42,7 @@ export default function MemoryPage() {
 
   // Watch memory stream for change notifications
   useEffect(() => {
-    const stream = openAuthenticatedSSE(withWorkspace('/memory/stream', workspace), {
+    const stream = openAuthenticatedSSE(apiRoutes.memory.stream({ workspace }), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {
@@ -58,7 +59,7 @@ export default function MemoryPage() {
 
   const loadFile = (agent: string, repoKey: string) => {
     setLoading(true)
-    fetch(withWorkspace(`/memory/${encodeURIComponent(agent)}/${encodeURIComponent(repoKey)}`, workspace))
+    fetch(apiRoutes.memory.one(agent, repoKey, { workspace }))
       .then(async r => {
         if (!r.ok) throw new Error(`${r.status}`)
         const text = await r.text()
