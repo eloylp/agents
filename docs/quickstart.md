@@ -10,7 +10,7 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/quickstart.sh | bash
 ```
 
-The script will download the docker-compose file and help you configure the .env file in an interactive way. Note that at least codex or claude should be configured for the agent runs. It ends up bringing up 
+The script downloads the Compose file, walks through `.env` creation, and starts the daemon. Configure at least one backend credential path (Claude or Codex) before expecting agent runs to succeed.
 
 This requires Bash, `curl`, Docker, and Docker Compose v2.
 
@@ -25,6 +25,13 @@ Verify the daemon is healthy:
 ```bash
 curl -s http://localhost:8080/status | jq
 ```
+
+Configure each GitHub repository webhook to send **all events** to
+`https://<your-daemon-host>/webhooks/github` with the generated
+`GITHUB_WEBHOOK_SECRET`. Label-triggered agents only need labeled issue/PR
+events to start, but observability and self-improvement attribution depend on
+the surrounding GitHub event stream, including `push`, `pull_request`,
+`pull_request_review`, `pull_request_review_comment`, and `issue_comment`.
 
 ## Credential reference
 

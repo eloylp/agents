@@ -106,7 +106,7 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | `link_improvement_proposal_bundle_item` | Resolve one create-new item as already covered by an existing catalog asset, without attaching that asset to agents. |
 | `publish_improvement_proposal_bundle` | Atomically publish accepted bundle items into catalog versions. |
 | `discard_improvement_proposal_bundle` | Discard a pending proposal bundle. |
-| `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint, not an MCP tool, since it can be many KB. |
+| `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is intentionally not included in listings; fetch it separately with `get_trace_prompt` or `GET /traces/{span_id}/prompt` when needed. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
 | `get_trace_prompt` | Composed prompt the daemon sent to the AI CLI for one span (gzipped on disk; decompressed on the fly). The "what did the agent see" debug artefact. Errors when no prompt is recorded (pre-009-migration spans). |

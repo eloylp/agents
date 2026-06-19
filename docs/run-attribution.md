@@ -102,6 +102,8 @@ metadata is logged and ignored for exact attribution. Authorized feedback can
 still be captured, but untrusted span, agent, prompt, skill, or guardrail fields
 are not passed through as exact attribution.
 
-Catalog version ids are nullable on deployments that do not yet have immutable
-catalog versioning. Once versioned prompts, skills, and guardrails are available,
-the same snapshot fields should carry exact version ids.
+Catalog version ids are nullable because older spans and some unresolved
+contexts may not have an exact prompt, skill, or guardrail version. For current
+runs, the daemon records the catalog version ids available at prompt
+composition time so self-improvement analysis can inspect the exact catalog
+content the agent saw instead of the latest mutable display names.

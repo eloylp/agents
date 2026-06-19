@@ -45,6 +45,12 @@ Supported webhook sources:
 - pull request review comments
 - pull request reviews
 
+For setup, configure the GitHub webhook to send all events to the daemon, not
+only the comment or review event that contains `/agents improve`. Attribution
+resolution uses surrounding context such as push commits, pull request updates,
+PR review submissions, review comments, and issue comments to connect feedback
+back to signed agent artifacts.
+
 The marker match is exact and case-sensitive. Fenced code blocks are ignored so
 examples do not create feedback records accidentally.
 

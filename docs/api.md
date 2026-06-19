@@ -53,7 +53,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/improvements/recommendations` | Review-only proposal candidates. Global by default; query params: optional `workspace`, optional proposal candidate `status`. |
 | `GET` | `/improvements/recommendations/{id}` | One proposal candidate with linked feedback evidence. |
 | `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the proposal candidate for one feedback event. |
-| `POST` | `/improvements/recommendations/{id}/status` | Reject a proposal candidate. Rejected decisions are terminal. Body: `{ "status": "rejected", "reason": "optional" }`. |
+| `POST/PATCH` | `/improvements/recommendations/{id}/status` | Reject a proposal candidate. Rejected decisions are terminal. Body: `{ "status": "rejected", "reason": "optional" }`. |
 | `POST/PATCH` | `/improvements/recommendations/{id}/clarification` | Replace the proposal candidate's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Also retries failed clarification runs with the stored/latest clarification body. Body: `{ "body": "...", "author": "optional" }`. |
 | `GET` | `/improvements/recommendations/{id}/proposal-bundle` | Editable proposal bundle attached to a ready proposal candidate. Returns `{}` when no bundle exists. |
 | `PATCH` | `/improvements/proposal-bundles/{id}/items/{item_id}` | Edit one pending proposal bundle item before publishing. |

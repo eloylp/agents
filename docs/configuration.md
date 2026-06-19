@@ -208,7 +208,7 @@ workspaces:
         enabled: true
         use:
           - agent: coder
-            labels: ["ai:ready"]
+            labels: ["ai ready"]
     token_budgets:
       - scope_kind: workspace+agent
         agent: coder
@@ -285,7 +285,7 @@ Each `use` entry binds one agent to one trigger. An agent can appear multiple ti
 
 ### Label architecture
 
-Labels are plain strings matched against each binding's `labels` list. There is **no magic format**; you choose the labels. Convention across the example config is `ai:review:<agent-name>`, but any string works.
+Labels are plain strings matched against each binding's `labels` list. There is **no magic format**; you choose the labels. The autonomous fleet examples use `ai ready` for maintainer-approved implementation work and `ai:review:<agent-name>` for reviewer routing, but any string works.
 
 ```yaml
 repos:
