@@ -5,10 +5,11 @@ import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import PaginationControls from '@/components/PaginationControls'
+import { apiRoutes } from '@/lib/api-routes'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
-import { defaultWorkspaceID, useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { defaultWorkspaceID, useSelectedWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
 
@@ -349,7 +350,7 @@ export default function ConfigPage() {
   }
 
   useEffect(() => {
-    fetch('/config')
+    fetch(apiRoutes.config())
       .then(r => r.json())
       .then(data => { setConfig(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -376,7 +377,12 @@ export default function ConfigPage() {
 
   const loadBackends = () => {
     setBackendsLoading(true)
-    Promise.all([fetch(`/backends?limit=${backendsLimit}&offset=${backendsOffset}`), fetch(selectorURL('/backends')), fetch('/backends/status'), fetch('/agents/orphans/status')])
+    Promise.all([
+      fetch(apiRoutes.backends.list({ limit: backendsLimit, offset: backendsOffset })),
+      fetch(selectorURL(apiRoutes.backends.list())),
+      fetch(apiRoutes.backends.status()),
+      fetch(apiRoutes.agents.orphansStatus()),
+    ])
       .then(async ([dbRes, selectorRes, diagRes, orphanRes]) => {
         if (!dbRes.ok) throw new Error((await dbRes.text()) || 'Failed to load backends from database')
         if (!selectorRes.ok) throw new Error((await selectorRes.text()) || 'Failed to load backend selector options')
@@ -458,7 +464,7 @@ export default function ConfigPage() {
   const loadRuntime = () => {
     setRuntimeLoading(true)
     setRuntimeError('')
-    fetch('/runtime')
+    fetch(apiRoutes.runtime())
       .then(async r => {
         if (!r.ok) throw new Error((await r.text()) || 'Failed to load runtime settings')
         return r.json()
@@ -514,7 +520,7 @@ export default function ConfigPage() {
     setRuntimeSaving(true)
     setRuntimeError('')
     setRuntimeStatus('')
-    fetch('/runtime', {
+    fetch(apiRoutes.runtime(), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(runtimeForm),
@@ -540,7 +546,7 @@ export default function ConfigPage() {
     setRuntimeSaving(true)
     setRuntimeError('')
     setRuntimeStatus('')
-    fetch(`/workspaces/${encodeURIComponent(selectedRuntimeWorkspace)}/runtime`, {
+    fetch(apiRoutes.workspaces.runtime(selectedRuntimeWorkspace), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runner_image: workspaceRunnerImage }),
@@ -576,7 +582,7 @@ export default function ConfigPage() {
     setDiscoveryRunning(true)
     setSaveError('')
     try {
-      const res = await fetch('/backends/discover', { method: 'POST' })
+      const res = await fetch(apiRoutes.backends.discover(), { method: 'POST' })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Discovery failed')
         return
@@ -593,7 +599,7 @@ export default function ConfigPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/backends/local', {
+      const res = await fetch(apiRoutes.backends.local(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: localBackendName, url: localBackendURL }),
@@ -616,7 +622,7 @@ export default function ConfigPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/backends/${encodeURIComponent(deleteTarget.name)}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.backends.one(deleteTarget.name), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Remove failed')
         setSaving(false)
@@ -653,7 +659,7 @@ export default function ConfigPage() {
     setSaveError('')
     try {
       if (isLocalBackend) {
-        const localRes = await fetch('/backends/local', {
+        const localRes = await fetch(apiRoutes.backends.local(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -667,7 +673,7 @@ export default function ConfigPage() {
           return
         }
       }
-      const res = await fetch(`/backends/${encodeURIComponent(settingsTarget.name)}`, {
+      const res = await fetch(apiRoutes.backends.one(settingsTarget.name), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -690,7 +696,7 @@ export default function ConfigPage() {
 
   const upsertAgentModel = async (orphan: OrphanedAgent, model: string) => {
     const targetWorkspace = orphan.workspace_id || 'default'
-    const readRes = await fetch(withWorkspace(`/agents/${encodeURIComponent(orphan.name)}`, targetWorkspace))
+    const readRes = await fetch(apiRoutes.agents.one(orphan.name, { workspace: targetWorkspace }))
     if (!readRes.ok) {
       throw new Error((await readRes.text()) || `Failed to load agent ${orphan.name} in ${targetWorkspace}`)
     }
@@ -698,7 +704,7 @@ export default function ConfigPage() {
     agent.model = model
     agent.workspace_id = targetWorkspace
 
-    const writeRes = await fetch(withWorkspace('/agents', targetWorkspace), {
+    const writeRes = await fetch(apiRoutes.agents.list({ workspace: targetWorkspace }), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(agent),
@@ -755,7 +761,7 @@ export default function ConfigPage() {
   }
 
   const handleExport = async () => {
-    const res = await fetch('/export')
+    const res = await fetch(apiRoutes.exportConfig())
     if (!res.ok) {
       setErrorDialog({ title: 'Export failed', message: (await res.text()).trim() || `HTTP ${res.status}` })
       return
@@ -773,7 +779,7 @@ export default function ConfigPage() {
     setImportStatus('')
     setImportError('')
     const text = await file.text()
-    const url = importMode === 'replace' ? '/import?mode=replace' : '/import'
+    const url = apiRoutes.importConfig(importMode === 'replace' ? { mode: 'replace' } : undefined)
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-yaml' },
@@ -791,7 +797,7 @@ export default function ConfigPage() {
     setBudgetsLoading(true)
     setBudgetError('')
     try {
-      const res = await fetch(`/token_budgets?limit=${budgetsLimit}&offset=${budgetsOffset}`)
+      const res = await fetch(apiRoutes.tokenBudgets.list({ limit: budgetsLimit, offset: budgetsOffset }))
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load budgets')
       const page = pageFromResponse<TokenBudget>(await res.json(), budgetsLimit, budgetsOffset)
       setBudgets(page.items)
@@ -805,9 +811,7 @@ export default function ConfigPage() {
   const loadLeaderboard = async (period: string, repo: string) => {
     setLbLoading(true)
     try {
-      const params = new URLSearchParams({ period })
-      if (repo) params.set('repo', repo)
-      const res = await fetch(withWorkspace(`/token_leaderboard?${params}`, workspace))
+      const res = await fetch(apiRoutes.tokenBudgets.leaderboard({ workspace, period, repo }))
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load leaderboard')
       const data = await res.json() as LeaderboardEntry[] | null
       setLeaderboard(data ?? [])
@@ -819,7 +823,11 @@ export default function ConfigPage() {
 
   const loadBudgetScopeOptions = async () => {
     try {
-      const [backendRes, agentRes, repoRes] = await Promise.all([fetch(selectorURL('/backends')), fetch(selectorURL(withWorkspace('/agents', workspace))), fetch(selectorURL(withWorkspace('/repos', workspace)))])
+      const [backendRes, agentRes, repoRes] = await Promise.all([
+        fetch(selectorURL(apiRoutes.backends.list())),
+        fetch(selectorURL(apiRoutes.agents.list({ workspace }))),
+        fetch(selectorURL(apiRoutes.repos.list({ workspace }))),
+      ])
       if (backendRes.ok) {
         setBackendOptions(sortBackends(itemsFromResponse<Backend>(await backendRes.json())))
       }
@@ -850,13 +858,13 @@ export default function ConfigPage() {
       })
       let res: Response
       if (editBudget) {
-        res = await fetch(`/token_budgets/${editBudget.id}`, {
+        res = await fetch(apiRoutes.tokenBudgets.one(editBudget.id), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body,
         })
       } else {
-        res = await fetch('/token_budgets', {
+        res = await fetch(apiRoutes.tokenBudgets.list(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body,
@@ -878,7 +886,7 @@ export default function ConfigPage() {
     setBudgetSaving(true)
     setBudgetError('')
     try {
-      const res = await fetch(`/token_budgets/${deleteBudgetTarget.id}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.tokenBudgets.one(deleteBudgetTarget.id), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) throw new Error((await res.text()) || 'Failed to delete budget')
       setDeleteBudgetTarget(null)
       await loadBudgets()

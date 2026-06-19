@@ -6,9 +6,10 @@ import PaginationControls from '@/components/PaginationControls'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { apiRoutes } from '@/lib/api-routes'
 import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Repo {
   name: string
@@ -396,7 +397,7 @@ export default function ReposPage() {
 
   const load = useCallback(() => {
     setLoading(true)
-    fetch(withWorkspace(`/repos?limit=${limit}&offset=${offset}`, workspace))
+    fetch(apiRoutes.repos.list({ workspace, limit, offset }))
       .then(r => r.json())
       .then((data) => {
         const page = pageFromResponse<Repo>(data, limit, offset)
@@ -413,7 +414,7 @@ export default function ReposPage() {
 
   useEffect(() => {
     load()
-    fetch(selectorURL(withWorkspace('/agents', workspace)))
+    fetch(selectorURL(apiRoutes.agents.list({ workspace })))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => { /* store not configured, no-op */ })
@@ -449,7 +450,7 @@ export default function ReposPage() {
     try {
       const isNew = !repos.some(r => r.name === form.name)
       if (isNew) {
-        const res = await fetch(withWorkspace('/repos', workspace), {
+        const res = await fetch(apiRoutes.repos.list({ workspace }), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...form, workspace_id: workspace }),
@@ -470,35 +471,37 @@ export default function ReposPage() {
         }
         const seenIDs = new Set<number>()
         const ops: Promise<Response>[] = []
-        const encRepo = (n: string) => {
+        const repoParts = (n: string): [string, string] => {
           const [o, r] = n.split('/')
-          return `/repos/${encodeURIComponent(o)}/${encodeURIComponent(r)}`
+          return [o, r]
         }
         for (const b of form.bindings) {
+          const [owner, repo] = repoParts(form.name)
           if (typeof b.id === 'number' && originalById.has(b.id)) {
             seenIDs.add(b.id)
             if (!bindingsEqual(originalById.get(b.id)!, b)) {
-              ops.push(fetch(withWorkspace(`${encRepo(form.name)}/bindings/${b.id}`, workspace), {
+              ops.push(fetch(apiRoutes.repos.binding(owner, repo, b.id, { workspace }), {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(b),
               }))
             }
           } else {
-            ops.push(fetch(withWorkspace(`${encRepo(form.name)}/bindings`, workspace), {
+            ops.push(fetch(apiRoutes.repos.bindings(owner, repo, { workspace }), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(b),
             }))
           }
         }
+        const [owner, repo] = repoParts(form.name)
         for (const b of original.bindings) {
           if (typeof b.id === 'number' && !seenIDs.has(b.id)) {
-            ops.push(fetch(withWorkspace(`${encRepo(form.name)}/bindings/${b.id}`, workspace), { method: 'DELETE' }))
+            ops.push(fetch(apiRoutes.repos.binding(owner, repo, b.id, { workspace }), { method: 'DELETE' }))
           }
         }
         if (form.enabled !== original.enabled) {
-          ops.push(fetch(withWorkspace(encRepo(form.name), workspace), {
+          ops.push(fetch(apiRoutes.repos.one(owner, repo, { workspace }), {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: form.enabled }),
@@ -525,7 +528,7 @@ export default function ReposPage() {
     setSaving(true)
     const [owner, repo] = deleteTarget.split('/')
     try {
-      const res = await fetch(withWorkspace(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, workspace), { method: 'DELETE' })
+      const res = await fetch(apiRoutes.repos.one(owner, repo, { workspace }), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

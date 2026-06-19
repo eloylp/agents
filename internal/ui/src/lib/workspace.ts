@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { itemsFromResponse, selectorURL } from './pagination'
+import { apiRoutes } from './api-routes'
+import { defaultWorkspaceID } from './workspace-constants'
+export { withWorkspace, workspaceQuery } from './api-routes'
+export { defaultWorkspaceID } from './workspace-constants'
 
 export interface Workspace {
   id: string
@@ -18,17 +22,6 @@ export interface CatalogItem {
 }
 
 const storageKey = 'agents.workspace'
-export const defaultWorkspaceID = 'default'
-
-export function workspaceQuery(workspace: string): string {
-  const id = workspace.trim() || defaultWorkspaceID
-  return `workspace=${encodeURIComponent(id)}`
-}
-
-export function withWorkspace(path: string, workspace: string): string {
-  const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}${workspaceQuery(workspace)}`
-}
 
 export function visibleCatalogItems<T extends CatalogItem>(items: T[], workspace: string, repo = ''): T[] {
   const workspaceID = (workspace || defaultWorkspaceID).trim()
@@ -70,7 +63,7 @@ export function useSelectedWorkspace() {
 
   useEffect(() => {
     let cancelled = false
-    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.workspaces.list()), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => {
         if (cancelled) return

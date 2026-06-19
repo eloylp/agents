@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { apiRoutes } from '@/lib/api-routes'
 import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import { useTheme } from '@/lib/theme'
 
@@ -38,7 +39,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
   const signOut = async () => {
-    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    await fetch(apiRoutes.auth.logout(), { method: 'POST', credentials: 'same-origin' })
     window.location.replace('/')
   }
 
@@ -77,7 +78,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     let cancelled = false
     const load = async () => {
       try {
-        const res = await fetch('/status', { cache: 'no-store' })
+        const res = await fetch(apiRoutes.status(), { cache: 'no-store' })
         if (!res.ok) return
         const data = await res.json() as { orphaned_agents?: { count?: number } }
         if (!cancelled) setOrphanCount(Number(data.orphaned_agents?.count ?? 0))
@@ -97,7 +98,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     let cancelled = false
     const load = async () => {
       try {
-        const res = await fetch('/token_budgets/alerts', { cache: 'no-store' })
+        const res = await fetch(apiRoutes.tokenBudgets.alerts(), { cache: 'no-store' })
         if (!res.ok) return
         const data = await res.json() as { count?: number }
         if (!cancelled) setBudgetAlertCount(Number(data.count ?? 0))

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 
 type AssetType = 'prompt' | 'skill' | 'guardrail'
@@ -34,10 +35,10 @@ interface CatalogVersionReference {
 
 const panelBorder = '1px solid var(--border)'
 
-function assetPath(type: AssetType) {
-  if (type === 'prompt') return 'prompts'
-  if (type === 'skill') return 'skills'
-  return 'guardrails'
+function assetRoutes(type: AssetType) {
+  if (type === 'prompt') return apiRoutes.catalog.prompts
+  if (type === 'skill') return apiRoutes.catalog.skills
+  return apiRoutes.catalog.guardrails
 }
 
 function versionBody(type: AssetType, version: CatalogVersion) {
@@ -175,7 +176,7 @@ export default function CatalogVersionsPanel({
   const load = useCallback((signal?: AbortSignal) => {
     if (!assetID) return
     setError('')
-    fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions`, { cache: 'no-store', signal })
+    fetch(assetRoutes(type).versions(assetID), { cache: 'no-store', signal })
       .then(r => {
         if (!r.ok) throw new Error(`load versions: ${r.status}`)
         return r.json()
@@ -185,7 +186,7 @@ export default function CatalogVersionsPanel({
         setVersions(next)
         setExpanded(e => e || next[0]?.id || '')
         return Promise.all(next.map(v =>
-          fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(v.id)}/references`, { cache: 'no-store', signal })
+          fetch(assetRoutes(type).versionReferences(assetID, v.id), { cache: 'no-store', signal })
             .then(r => {
               if (!r.ok) throw new Error(`load references: ${r.status}`)
               return r.json()

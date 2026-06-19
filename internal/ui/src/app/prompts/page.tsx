@@ -6,6 +6,7 @@ import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
+import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Prompt {
@@ -56,7 +57,7 @@ export default function PromptsPage() {
 
   const load = () => {
     setLoading(true)
-    fetch(`/prompts?limit=${limit}&offset=${offset}`, { cache: 'no-store' })
+    fetch(apiRoutes.catalog.prompts.list({ limit, offset }), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => {
         const page = pageFromResponse<Prompt>(data, limit, offset)
@@ -69,7 +70,7 @@ export default function PromptsPage() {
 
   useEffect(() => {
     load()
-    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.workspaces.list()), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
@@ -80,7 +81,7 @@ export default function PromptsPage() {
       setRepos([])
       return
     }
-    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(selected.workspace_id)}`), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.repos.list({ workspace: selected.workspace_id })), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setRepos([]))
@@ -91,7 +92,7 @@ export default function PromptsPage() {
       setFilterRepos([])
       return
     }
-    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`), { cache: 'no-store' })
+    fetch(selectorURL(apiRoutes.repos.list({ workspace: filterWorkspace })), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))
@@ -101,7 +102,7 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     const isNew = modal === 'create'
-    const url = isNew ? '/prompts' : `/prompts/${encodeURIComponent(selected.id || selected.name)}`
+    const url = isNew ? apiRoutes.catalog.prompts.list() : apiRoutes.catalog.prompts.one(selected.id || selected.name)
     const body = isNew
       ? {
           ...selected,
@@ -132,7 +133,7 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     try {
-      const res = await fetch(`/prompts/${encodeURIComponent(selected.id || selected.name)}`, { method: 'DELETE' })
+      const res = await fetch(apiRoutes.catalog.prompts.one(selected.id || selected.name), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setError(await res.text() || 'Delete failed')
         setSaving(false)

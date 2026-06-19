@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
+import { apiRoutes } from '@/lib/api-routes'
 import { openAuthenticatedSSE } from '@/lib/sse'
 
 export interface LiveTraceSpan {
@@ -21,10 +22,10 @@ export default function LiveTraceModal({ span, onClose }: { span: LiveTraceSpan;
   const stuckToBottom = useRef(true)
   const [hasNewWhileDetached, setHasNewWhileDetached] = useState(false)
   const visibleEntries = entries.filter(e => visibleKinds.has(e.kind))
-  const traceHref = `/traces/?id=${encodeURIComponent(span.rootEventId || span.id)}`
+  const traceHref = `${apiRoutes.traces.list()}?id=${encodeURIComponent(span.rootEventId || span.id)}`
 
   useEffect(() => {
-    const stream = openAuthenticatedSSE(`/traces/${encodeURIComponent(span.id)}/stream`, {
+    const stream = openAuthenticatedSSE(apiRoutes.traces.spanStream(span.id), {
       onOpen: () => setStatus('live'),
       onMessage: data => {
         try {

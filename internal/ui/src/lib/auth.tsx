@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import PaginationControls from '@/components/PaginationControls'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { pageFromResponse } from '@/lib/pagination'
 
@@ -72,7 +73,7 @@ function patchFetch() {
 
 async function loadAuthStatus(): Promise<AuthStatus | null> {
   try {
-    const res = await fetch('/auth/status', { cache: 'no-store' })
+    const res = await fetch(apiRoutes.auth.status(), { cache: 'no-store' })
     if (!res.ok) return null
     return await res.json() as AuthStatus
   } catch {
@@ -134,8 +135,8 @@ export function AuthTokenSettings() {
     setStatus(next)
     if (!next?.authenticated) return
     const [usersRes, tokensRes] = await Promise.all([
-      fetch(pageURL('/auth/users', usersLimit, usersOffset), { cache: 'no-store' }),
-      fetch(pageURL('/auth/tokens', tokensLimit, tokensOffset), { cache: 'no-store' }),
+      fetch(apiRoutes.auth.users({ limit: usersLimit, offset: usersOffset }), { cache: 'no-store' }),
+      fetch(apiRoutes.auth.tokens({ limit: tokensLimit, offset: tokensOffset }), { cache: 'no-store' }),
     ])
     if (usersRes.ok) {
       const page = pageFromResponse<AuthUser>(await usersRes.json(), usersLimit, usersOffset)
@@ -160,7 +161,7 @@ export function AuthTokenSettings() {
   const create = async () => {
     setCreated('')
     setTokenError('')
-    const res = await fetch('/auth/tokens', {
+    const res = await fetch(apiRoutes.auth.tokens(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -176,7 +177,7 @@ export function AuthTokenSettings() {
 
   const createUser = async () => {
     setUserError('')
-    const res = await fetch('/auth/users', {
+    const res = await fetch(apiRoutes.auth.users(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: newUsername, password: newPassword }),
@@ -193,7 +194,7 @@ export function AuthTokenSettings() {
 
   const deleteUser = async (id: number) => {
     setUserError('')
-    const res = await fetch(`/auth/users/${id}`, { method: 'DELETE' })
+    const res = await fetch(apiRoutes.auth.user(id), { method: 'DELETE' })
     if (!res.ok) {
       const text = await res.text()
       setUserError(text.trim() || 'Could not remove user.')
@@ -209,7 +210,7 @@ export function AuthTokenSettings() {
       setPasswordError('New passwords do not match.')
       return
     }
-    const res = await fetch('/auth/me/password', {
+    const res = await fetch(apiRoutes.auth.password(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ current_password: currentPassword, new_password: ownNewPassword }),
@@ -227,7 +228,7 @@ export function AuthTokenSettings() {
   }
 
   const revoke = async (id: number) => {
-    const res = await fetch(`/auth/tokens/${id}`, { method: 'DELETE' })
+    const res = await fetch(apiRoutes.auth.token(id), { method: 'DELETE' })
     if (res.ok) await refresh()
   }
 
@@ -367,10 +368,6 @@ function AuthRedirectScreen({ loading }: { loading: boolean }) {
 
 function formatDate(value: string) {
   return formatDateTime(value) || 'unknown'
-}
-
-function pageURL(path: string, limit: number, offset: number): string {
-  return `${path}?limit=${limit}&offset=${offset}`
 }
 
 const sectionStyle: React.CSSProperties = {

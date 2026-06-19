@@ -3,9 +3,9 @@ import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, us
 import MarkdownEditor from '@/components/MarkdownEditor'
 import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
+import { apiRoutes } from '@/lib/api-routes'
 import { formatDateTime } from '@/lib/datetime'
 import { pageFromResponse } from '@/lib/pagination'
-import { withWorkspace } from '@/lib/workspace'
 
 interface FeedbackEvent {
   id: number
@@ -238,10 +238,9 @@ function diffLines(oldText: string, newText: string) {
 }
 
 function catalogAssetEndpoint(type: string, id: string) {
-  const encoded = encodeURIComponent(id)
-  if (type === 'prompt') return `/prompts/${encoded}`
-  if (type === 'skill') return `/skills/${encoded}`
-  if (type === 'guardrail') return `/guardrails/${encoded}`
+  if (type === 'prompt') return apiRoutes.catalog.prompts.one(id)
+  if (type === 'skill') return apiRoutes.catalog.skills.one(id)
+  if (type === 'guardrail') return apiRoutes.catalog.guardrails.one(id)
   return ''
 }
 
@@ -508,9 +507,9 @@ function catalogTargetLabel(assetType: string | undefined, assetID: string | und
 }
 
 function catalogEndpointForType(assetType: string) {
-  if (assetType === 'prompt') return '/prompts'
-  if (assetType === 'skill') return '/skills'
-  if (assetType === 'guardrail') return '/guardrails'
+  if (assetType === 'prompt') return apiRoutes.catalog.prompts.list()
+  if (assetType === 'skill') return apiRoutes.catalog.skills.list()
+  if (assetType === 'guardrail') return apiRoutes.catalog.guardrails.list()
   return ''
 }
 
@@ -553,10 +552,9 @@ export default function ImprovementsPage() {
 
   const load = useCallback((showLoading = true) => {
     if (showLoading) setLoading(true)
-    const statusParam = status ? `&status=${encodeURIComponent(status)}` : ''
     Promise.all([
-      fetch(`/improvements/feedback?limit=${feedbackLimit}&offset=${feedbackOffset}${statusParam}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
-      fetch(`/improvements/recommendations?limit=${recommendationsLimit}&offset=${recommendationsOffset}${statusParam}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(apiRoutes.improvements.feedback({ limit: feedbackLimit, offset: feedbackOffset, status }), { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(apiRoutes.improvements.recommendations({ limit: recommendationsLimit, offset: recommendationsOffset, status }), { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
     ])
       .then(([feedbackRows, recommendationRows]) => {
         const feedbackPage = pageFromResponse<FeedbackEvent>(feedbackRows, feedbackLimit, feedbackOffset)
@@ -645,7 +643,7 @@ export default function ImprovementsPage() {
   }, {}), [recommendations])
 
   const updateStatus = async (id: string, next: string, reason = '') => {
-    const res = await fetch(`/improvements/recommendations/${encodeURIComponent(id)}/status`, {
+    const res = await fetch(apiRoutes.improvements.recommendationStatus(id), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: next, reason }),
@@ -673,7 +671,7 @@ export default function ImprovementsPage() {
   const openClarification = async (row: Recommendation) => {
     setClarifying(row)
     setClarificationBody(row.clarification?.body ?? '')
-    const res = await fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}`, { cache: 'no-store' })
+    const res = await fetch(apiRoutes.improvements.recommendation(row.id), { cache: 'no-store' })
     if (!res.ok) return
     const detail = await res.json()
     setClarifying(detail)
@@ -683,7 +681,7 @@ export default function ImprovementsPage() {
   const submitClarification = async () => {
     if (!clarifying || clarificationSaving) return
     setClarificationSaving(true)
-    const res = await fetch(`/improvements/recommendations/${encodeURIComponent(clarifying.id)}/clarification`, {
+    const res = await fetch(apiRoutes.improvements.clarification(clarifying.id), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body: clarificationBody }),
@@ -698,7 +696,7 @@ export default function ImprovementsPage() {
 
   const reanalyzeRecommendation = async (row: Recommendation) => {
     setActionMessage(null)
-    const res = await fetch(`/improvements/feedback/${row.feedback_event_id}/analyze`, { method: 'POST' })
+    const res = await fetch(apiRoutes.improvements.analyzeFeedback(row.feedback_event_id), { method: 'POST' })
     if (res.ok) {
       setActionMessage('Re-analysis queued.')
       load()
@@ -715,7 +713,7 @@ export default function ImprovementsPage() {
       await reanalyzeRecommendation(row)
       return
     }
-    const res = await fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}/clarification`, {
+    const res = await fetch(apiRoutes.improvements.clarification(row.id), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body }),
@@ -732,7 +730,7 @@ export default function ImprovementsPage() {
   const editBundleItem = async (bundleID: string, item: ProposalBundleItem) => {
     const draft = bundleItemDraft(item, itemDrafts)
     const proposedScope = item.operation === 'create_new' && reviewingProposal ? resolvedBundleScopeValue(draft.proposed_scope, reviewingProposal) : draft.proposed_scope
-    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(item.id)}`, {
+    const res = await fetch(apiRoutes.improvements.bundleItem(bundleID, item.id), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -793,7 +791,7 @@ export default function ImprovementsPage() {
     if (!bundleDecision || bundleDecisionSaving) return
     setBundleDecisionSaving(true)
     if (bundleDecision.kind === 'reject') {
-      const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleDecision.bundleID)}/items/${encodeURIComponent(bundleDecision.itemID)}/reject`, {
+      const res = await fetch(apiRoutes.improvements.rejectBundleItem(bundleDecision.bundleID, bundleDecision.itemID), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: bundleDecision.reason }),
@@ -812,7 +810,7 @@ export default function ImprovementsPage() {
       setBundleDecisionSaving(false)
       return
     }
-    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleDecision.bundleID)}/items/${encodeURIComponent(bundleDecision.itemID)}/link-existing`, {
+    const res = await fetch(apiRoutes.improvements.linkExistingBundleItem(bundleDecision.bundleID, bundleDecision.itemID), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asset_id: assetID, reason: bundleDecision.reason }),
@@ -825,7 +823,8 @@ export default function ImprovementsPage() {
   }
 
   const postBundleAction = async (bundleID: string, action: 'publish' | 'discard') => {
-    const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/${action}`, { method: 'POST' })
+    const route = action === 'publish' ? apiRoutes.improvements.publishBundle(bundleID) : apiRoutes.improvements.discardBundle(bundleID)
+    const res = await fetch(route, { method: 'POST' })
     if (res.ok) {
       load()
       return
@@ -870,7 +869,7 @@ export default function ImprovementsPage() {
     setLinkingSkillItem(item.id)
     setActionMessage(null)
     try {
-      const url = withWorkspace(`/agents/${encodeURIComponent(agentName)}`, targetWorkspace)
+      const url = apiRoutes.agents.one(agentName, { workspace: targetWorkspace })
       const read = await fetch(url, { cache: 'no-store' })
       if (!read.ok) throw new Error(`read agent returned HTTP ${read.status}`)
       const agent = await read.json()

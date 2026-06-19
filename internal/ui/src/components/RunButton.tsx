@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { apiRoutes } from '@/lib/api-routes'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 const ALL_REPOS = '__all__'
@@ -39,7 +40,7 @@ export default function RunButton({ agent, repos }: { agent: string; repos: stri
     setStatusMsg('')
     const results = await Promise.all(targets.map(async (repo) => {
       try {
-        const res = await fetch('/run', {
+        const res = await fetch(apiRoutes.run(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent, repo, workspace }),
