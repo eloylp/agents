@@ -193,31 +193,35 @@ func catalogCandidatesInScope(q querier, table, selector, workspaceID, repo stri
 		SELECT id, ref, name, COALESCE(workspace_id, ''), COALESCE(repo, '')
 		FROM ` + table + `
 		WHERE (id = ? OR ref = ? OR name = ?)
-		  AND workspace_id IS ?
-		  AND repo IS ?`
-	var workspaceArg, repoArg any
+		  AND workspace_id ` + catalogScopePredicate(workspaceID) + `
+		  AND repo ` + catalogScopePredicate(repo)
+	args := []any{selector, selector, selector}
 	if workspaceID != "" {
-		query = strings.Replace(query, "workspace_id IS ?", "workspace_id = ?", 1)
-		workspaceArg = workspaceID
+		args = append(args, workspaceID)
 	}
 	if repo != "" {
-		query = strings.Replace(query, "repo IS ?", "repo = ?", 1)
-		repoArg = repo
+		args = append(args, repo)
 	}
 	if mode == catalogScopeWorkspace {
 		query = `
 		SELECT id, ref, name, COALESCE(workspace_id, ''), ''
 		FROM ` + table + `
 		WHERE (id = ? OR ref = ? OR name = ?)
-		  AND workspace_id IS ?`
-		workspaceArg = nil
+		  AND workspace_id ` + catalogScopePredicate(workspaceID)
+		args = []any{selector, selector, selector}
 		if workspaceID != "" {
-			query = strings.Replace(query, "workspace_id IS ?", "workspace_id = ?", 1)
-			workspaceArg = workspaceID
+			args = append(args, workspaceID)
 		}
-		return scanCatalogCandidates(q, query, selector, selector, selector, workspaceArg)
+		return scanCatalogCandidates(q, query, args...)
 	}
-	return scanCatalogCandidates(q, query, selector, selector, selector, workspaceArg, repoArg)
+	return scanCatalogCandidates(q, query, args...)
+}
+
+func catalogScopePredicate(value string) string {
+	if value == "" {
+		return "IS NULL"
+	}
+	return "= ?"
 }
 
 func scanCatalogCandidates(q querier, query string, args ...any) ([]catalogCandidate, error) {
