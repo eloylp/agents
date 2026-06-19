@@ -7,7 +7,7 @@ import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
-import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface Repo {
@@ -413,7 +413,7 @@ export default function ReposPage() {
 
   useEffect(() => {
     load()
-    fetch(withWorkspace('/agents', workspace))
+    fetch(selectorURL(withWorkspace('/agents', workspace)))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => { /* store not configured, no-op */ })

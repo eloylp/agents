@@ -10,7 +10,7 @@ import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
 import { formatDateTime } from '@/lib/datetime'
-import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 
 interface Binding {
@@ -153,7 +153,7 @@ export default function FleetPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(withWorkspace('/agents', workspace))
+    fetch(selectorURL(withWorkspace('/agents', workspace)))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
@@ -161,7 +161,7 @@ export default function FleetPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setPromptOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(withWorkspace('/repos', workspace))
+    fetch(selectorURL(withWorkspace('/repos', workspace)))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepoNames(itemsFromResponse<{ name: string }>(data).map(r => r.name)))
       .catch(() => {})

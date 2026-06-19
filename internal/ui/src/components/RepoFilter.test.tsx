@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RepoFilter, { useRepoFilter } from './RepoFilter'
 
 const STORAGE_KEY = 'agents_repo_filter'
+const REPOS_SELECTOR_URL = '/repos?limit=500&offset=0'
 
 describe('useRepoFilter', () => {
   beforeEach(() => {
@@ -64,7 +65,7 @@ describe('<RepoFilter />', () => {
     mockReposResponse([])
     const onChange = vi.fn()
     const { container } = render(<RepoFilter selected="" onChange={onChange} />)
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/repos'))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(REPOS_SELECTOR_URL))
     expect(container).toBeEmptyDOMElement()
   })
 
@@ -79,7 +80,7 @@ describe('<RepoFilter />', () => {
     mockReposResponse(['owner/solo'])
     const onChange = vi.fn()
     const { container } = render(<RepoFilter selected="" onChange={onChange} />)
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/repos'))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(REPOS_SELECTOR_URL))
     // Give React a tick to run effects after fetch resolves.
     await act(async () => {})
     expect(container).toBeEmptyDOMElement()

@@ -4,9 +4,10 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import PaginationControls from '@/components/PaginationControls'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
-import { itemsFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { defaultWorkspaceID, useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
@@ -315,6 +316,9 @@ export default function ConfigPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [budgets, setBudgets] = useState<TokenBudget[]>([])
+  const [budgetsTotal, setBudgetsTotal] = useState(0)
+  const [budgetsLimit, setBudgetsLimit] = useState(50)
+  const [budgetsOffset, setBudgetsOffset] = useState(0)
   const [budgetsLoading, setBudgetsLoading] = useState(false)
   const [budgetError, setBudgetError] = useState('')
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
@@ -776,9 +780,11 @@ export default function ConfigPage() {
     setBudgetsLoading(true)
     setBudgetError('')
     try {
-      const res = await fetch('/token_budgets')
+      const res = await fetch(`/token_budgets?limit=${budgetsLimit}&offset=${budgetsOffset}`)
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load budgets')
-      setBudgets(itemsFromResponse<TokenBudget>(await res.json()))
+      const page = pageFromResponse<TokenBudget>(await res.json(), budgetsLimit, budgetsOffset)
+      setBudgets(page.items)
+      setBudgetsTotal(page.total)
     } catch (e) {
       setBudgetError(String(e))
     }
@@ -802,7 +808,7 @@ export default function ConfigPage() {
 
   const loadBudgetScopeOptions = async () => {
     try {
-      const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(withWorkspace('/agents', workspace)), fetch(withWorkspace('/repos', workspace))])
+      const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(selectorURL(withWorkspace('/agents', workspace))), fetch(selectorURL(withWorkspace('/repos', workspace)))])
       if (backendRes.ok) {
         setBackends(sortBackends(itemsFromResponse<Backend>(await backendRes.json())))
       }
@@ -877,7 +883,11 @@ export default function ConfigPage() {
       loadLeaderboard(lbPeriod, lbRepo)
       loadBudgetScopeOptions()
     }
-  }, [tab, workspace])
+  }, [tab, workspace, budgetsLimit, budgetsOffset])
+
+  useEffect(() => {
+    setBudgetsOffset(0)
+  }, [workspace])
 
   useEffect(() => {
     if (tab === 'tokens') loadLeaderboard(lbPeriod, lbRepo)
@@ -1527,6 +1537,15 @@ export default function ConfigPage() {
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
               Budgets enforce token caps over UTC calendar periods. Simple repo, agent, and backend scopes are global across workspaces; choose workspace + repo, workspace + agent, or workspace + backend for workspace-isolated caps. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
+            <div style={{ marginBottom: '0.75rem' }}>
+              <PaginationControls
+                total={budgetsTotal}
+                limit={budgetsLimit}
+                offset={budgetsOffset}
+                onLimitChange={(next) => { setBudgetsLimit(next); setBudgetsOffset(0) }}
+                onOffsetChange={setBudgetsOffset}
+              />
+            </div>
             {budgetsLoading ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
             ) : budgets.length === 0 ? (

@@ -24,7 +24,7 @@ import dagre from 'dagre'
 import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import { formatDateTime } from '@/lib/datetime'
-import { itemsFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, selectorURL } from '@/lib/pagination'
 import BadgePicker from '@/components/BadgePicker'
 import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
@@ -476,7 +476,7 @@ export default function GraphPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setSkillOptions(itemsFromResponse<CatalogItem>(data)))
       .catch(() => {})
-    fetch(withWorkspace('/agents', workspace))
+    fetch(selectorURL(withWorkspace('/agents', workspace)))
       .then(r => r.ok ? r.json() : [])
       .then((data) => setAgentNames(itemsFromResponse<{ name: string }>(data).map(a => a.name)))
       .catch(() => {})
@@ -494,9 +494,9 @@ export default function GraphPage() {
     loadedOnce.current = true
     Promise.all([
       fetch(withWorkspace('/graph', workspace)).then(r => r.json()),
-      fetch(withWorkspace('/agents', workspace)).then(r => r.json()),
+      fetch(selectorURL(withWorkspace('/agents', workspace))).then(r => r.json()),
       fetch(withWorkspace('/graph/layout', workspace)).then(r => r.ok ? r.json() : { positions: [] }),
-      fetch(withWorkspace('/repos', workspace)).then(r => r.ok ? r.json() : []),
+      fetch(selectorURL(withWorkspace('/repos', workspace))).then(r => r.ok ? r.json() : []),
     ]).then(([gd, ad, ld, rd]) => {
       setGraphData(gd)
       const agentItems = itemsFromResponse<AgentInfo>(ad)

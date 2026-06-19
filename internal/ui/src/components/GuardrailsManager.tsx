@@ -6,7 +6,8 @@ import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
-import { itemsFromResponse } from '@/lib/pagination'
+import PaginationControls from '@/components/PaginationControls'
+import { pageFromResponse } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
@@ -184,6 +185,9 @@ export default function GuardrailsManager() {
   const { workspace, workspaces } = useSelectedWorkspace()
   const currentWorkspaceRef = useRef(workspace)
   const [guardrails, setGuardrails] = useState<Guardrail[]>([])
+  const [guardrailsTotal, setGuardrailsTotal] = useState(0)
+  const [guardrailsLimit, setGuardrailsLimit] = useState(50)
+  const [guardrailsOffset, setGuardrailsOffset] = useState(0)
   const [workspaceRefs, setWorkspaceRefs] = useState<WorkspaceGuardrailRef[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -204,7 +208,7 @@ export default function GuardrailsManager() {
     setLoading(true)
     setLoadError('')
     Promise.all([
-      fetch('/guardrails').then(r => {
+      fetch(`/guardrails?limit=${guardrailsLimit}&offset=${guardrailsOffset}`).then(r => {
         if (!r.ok) throw new Error(`load guardrails: ${r.status}`)
         return r.json()
       }),
@@ -215,8 +219,9 @@ export default function GuardrailsManager() {
     ])
       .then(([catalogRaw, refs]: [unknown, WorkspaceGuardrailRef[]]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
-        const catalog = itemsFromResponse<Guardrail>(catalogRaw)
-        setGuardrails(catalog ?? [])
+        const catalog = pageFromResponse<Guardrail>(catalogRaw, guardrailsLimit, guardrailsOffset)
+        setGuardrails(catalog.items ?? [])
+        setGuardrailsTotal(catalog.total)
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
       })
@@ -230,6 +235,10 @@ export default function GuardrailsManager() {
     let cancelled = false
     load(() => cancelled)
     return () => { cancelled = true }
+  }, [workspace, guardrailsLimit, guardrailsOffset])
+
+  useEffect(() => {
+    setGuardrailsOffset(0)
   }, [workspace])
 
   const selectedWorkspace = workspaces.find(w => w.id === workspace)
@@ -520,7 +529,7 @@ export default function GuardrailsManager() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          {guardrails.length} guardrail catalog entr{guardrails.length === 1 ? 'y' : 'ies'}.
+          {guardrailsTotal} guardrail catalog entr{guardrailsTotal === 1 ? 'y' : 'ies'}.
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
@@ -528,6 +537,16 @@ export default function GuardrailsManager() {
         >
           New guardrail
         </button>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <PaginationControls
+          total={guardrailsTotal}
+          limit={guardrailsLimit}
+          offset={guardrailsOffset}
+          onLimitChange={(next) => { setGuardrailsLimit(next); setGuardrailsOffset(0) }}
+          onOffsetChange={setGuardrailsOffset}
+        />
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

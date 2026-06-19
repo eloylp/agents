@@ -5,6 +5,13 @@ export interface PaginatedResponse<T> {
   offset: number
 }
 
+export const selectorLimit = 500
+
+export function selectorURL(path: string): string {
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}limit=${selectorLimit}&offset=0`
+}
+
 export function itemsFromResponse<T>(value: unknown): T[] {
 	if (!value) return []
 	if (Array.isArray(value)) return value as T[]
