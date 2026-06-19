@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
@@ -2048,7 +2049,7 @@ func TestAgentSkillDisplayNamePrefersRepoOverWorkspaceAndGlobal(t *testing.T) {
 	}
 }
 
-func TestAgentSkillDisplayNameBeatsLessSpecificRef(t *testing.T) {
+func TestAgentSkillExactRefBeatsMoreSpecificDisplayName(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
@@ -2070,8 +2071,118 @@ func TestAgentSkillDisplayNameBeatsLessSpecificRef(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("team-a coder agent not found after load")
 	}
-	if !slices.Contains(out.Agents[idx].Skills, "skill_team_go_api") {
-		t.Fatalf("coder skills = %v, want workspace-scoped skill ref", out.Agents[idx].Skills)
+	if !slices.Contains(out.Agents[idx].Skills, "go-api") {
+		t.Fatalf("coder skills = %v, want exact skill ref", out.Agents[idx].Skills)
+	}
+	if slices.Contains(out.Agents[idx].Skills, "skill_team_go_api") {
+		t.Fatalf("coder skills = %v, unexpectedly selected display-name collision", out.Agents[idx].Skills)
+	}
+}
+
+func TestAgentPromptRefExactIDBeatsMoreSpecificDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global prompt"},
+		{ID: "prompt_team_collision", WorkspaceID: "team-a", Name: "prompt_global_shared", Content: "team collision prompt"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptRef = "prompt_global_shared"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if out.Agents[idx].PromptRef != "shared" {
+		t.Fatalf("resolved prompt ref = %q, want shared", out.Agents[idx].PromptRef)
+	}
+	promptIdx := slices.IndexFunc(out.Prompts, func(p fleet.Prompt) bool { return p.ID == "prompt_global_shared" })
+	if promptIdx < 0 || out.Prompts[promptIdx].Content != "global prompt" {
+		t.Fatalf("selected prompt = %+v, want global prompt", out.Prompts)
+	}
+}
+
+func TestAgentPromptDisplayNamePrefersRepoOverWorkspaceAndGlobal(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global prompt"},
+		{ID: "prompt_team_shared", WorkspaceID: "default", Name: "shared", Content: "workspace prompt"},
+		{ID: "prompt_repo_shared", WorkspaceID: "default", Repo: "owner/repo", Name: "shared", Content: "repo prompt"},
+	}
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[0].PromptRef = "shared"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Prompts, func(p fleet.Prompt) bool { return p.ID == "prompt_repo_shared" })
+	if idx < 0 || out.Prompts[idx].Content != "repo prompt" {
+		t.Fatalf("prompts = %+v, want repo prompt selected in catalog", out.Prompts)
+	}
+	agentIdx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if agentIdx < 0 || out.Agents[agentIdx].PromptRef != "shared" || out.Agents[agentIdx].PromptScope != "default/owner/repo" {
+		t.Fatalf("agent prompt = (%q, %q), want shared/default/owner/repo",
+			out.Agents[agentIdx].PromptRef, out.Agents[agentIdx].PromptScope)
+	}
+}
+
+func TestRuntimePromptUsesResolvedScopedCatalogBodies(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global prompt"},
+		{ID: "prompt_repo_shared", WorkspaceID: "default", Repo: "owner/repo", Name: "shared", Content: "repo prompt"},
+	}
+	cfg.Skills["skill_global_shared"] = fleet.Skill{Name: "shared", Prompt: "global skill"}
+	cfg.Skills["skill_repo_shared"] = fleet.Skill{WorkspaceID: "default", Repo: "owner/repo", Name: "shared", Prompt: "repo skill"}
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Skills = []string{"shared"}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	agentIdx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if agentIdx < 0 {
+		t.Fatal("coder agent not found after load")
+	}
+	promptIdx := slices.IndexFunc(out.Prompts, func(p fleet.Prompt) bool { return p.ID == "prompt_repo_shared" })
+	if promptIdx < 0 {
+		t.Fatal("repo prompt not found after load")
+	}
+	rendered, err := ai.RenderAgentPrompt(out.Agents[agentIdx], out.Prompts[promptIdx].Content, out.Skills, nil, ai.PromptContext{})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	if !strings.Contains(rendered.System, "repo skill") || !strings.Contains(rendered.System, "repo prompt") {
+		t.Fatalf("rendered system = %q, want resolved repo skill and prompt", rendered.System)
+	}
+	if strings.Contains(rendered.System, "global skill") || strings.Contains(rendered.System, "global prompt") {
+		t.Fatalf("rendered system = %q, unexpectedly used global catalog body", rendered.System)
 	}
 }
 
@@ -2110,6 +2221,41 @@ func TestWorkspaceGuardrailReferenceCanUseVisibleDisplayName(t *testing.T) {
 	}
 	if guardrails[0].ID != "guardrail_team_policy" || guardrails[0].Name != "team-policy" {
 		t.Fatalf("guardrail = %+v, want scoped team policy", guardrails[0])
+	}
+}
+
+func TestWorkspaceGuardrailExactRefBeatsWorkspaceDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{
+		ID:   "team-a",
+		Name: "Team A",
+		Guardrails: []fleet.WorkspaceGuardrailRef{{
+			GuardrailName: "guardrail_global_policy",
+			Enabled:       true,
+		}},
+	}}
+	cfg.Guardrails = []fleet.Guardrail{
+		{ID: "guardrail_global_policy", Name: "global-policy", Content: "Global policy.", Enabled: true},
+		{ID: "guardrail_team_collision", WorkspaceID: "team-a", Name: "guardrail_global_policy", Content: "Team collision.", Enabled: true},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 {
+		t.Fatalf("guardrails len = %d, want 1: %+v", len(guardrails), guardrails)
+	}
+	if guardrails[0].ID != "guardrail_global_policy" || guardrails[0].Content != "Global policy." {
+		t.Fatalf("guardrail = %+v, want exact global policy", guardrails[0])
 	}
 }
 

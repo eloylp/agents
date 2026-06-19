@@ -104,7 +104,7 @@ func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType str
 		if err != nil {
 			return nil, fmt.Errorf("store import: agent %s skill %q: %w", a.Name, raw, err)
 		}
-		id, err := resolveVisibleCatalogRef(tx, "skills", ref, workspaceID, repo)
+		id, err := resolveVisibleCatalogRef(tx, "skills", "skill", "skill id", ref, workspaceID, repo, catalogScopeRepo)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				if skill, ok, readErr := readSkillScopeByID(tx, ref); readErr != nil {
