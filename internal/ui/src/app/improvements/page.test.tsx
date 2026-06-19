@@ -27,6 +27,10 @@ function catalogEndpointResponse(url: string) {
   return Promise.resolve({ ok: true, json: () => Promise.resolve(catalogEndpointRows[url]) } as Response)
 }
 
+function matchesEndpoint(url: string, path: string) {
+  return url === path || url.startsWith(`${path}?`)
+}
+
 describe('<ImprovementsPage />', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -41,10 +45,10 @@ describe('<ImprovementsPage />', () => {
       }
       const catalogResponse = catalogEndpointResponse(url)
       if (catalogResponse) return catalogResponse
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -176,8 +180,8 @@ describe('<ImprovementsPage />', () => {
       if (url === '/workspaces') return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'default', name: 'Default' }]) } as Response)
       const catalogResponse = catalogEndpointResponse(url)
       if (catalogResponse) return catalogResponse
-      if (url === '/improvements/feedback') return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
-      if (url === '/improvements/recommendations') return Promise.resolve({ ok: true, json: () => Promise.resolve(recommendations) } as Response)
+      if (matchesEndpoint(url, '/improvements/feedback')) return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      if (matchesEndpoint(url, '/improvements/recommendations')) return Promise.resolve({ ok: true, json: () => Promise.resolve(recommendations) } as Response)
       if (url === '/skills/go-api') return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'go-api', version_id: 'skillver-base' }) } as Response)
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
     })
@@ -202,10 +206,10 @@ describe('<ImprovementsPage />', () => {
       }
       const catalogResponse = catalogEndpointResponse(url)
       if (catalogResponse) return catalogResponse
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -388,10 +392,10 @@ describe('<ImprovementsPage />', () => {
   it('links a published create-new skill to the attributed agent', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -477,10 +481,10 @@ describe('<ImprovementsPage />', () => {
   it('does not mark published history bundles as stale or actionable', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -550,10 +554,10 @@ describe('<ImprovementsPage />', () => {
   it('shows resolved bundles as terminal history', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -615,10 +619,10 @@ describe('<ImprovementsPage />', () => {
       if (url === '/workspaces') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'lab', name: 'Lab' }]) } as Response)
       }
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -677,10 +681,10 @@ describe('<ImprovementsPage />', () => {
   it('blocks finalizing stale proposal bundles in the review modal', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -738,10 +742,10 @@ describe('<ImprovementsPage />', () => {
   it('preflights stale recommendation targets and offers re-analysis instead of bundle review', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -791,10 +795,10 @@ describe('<ImprovementsPage />', () => {
     let resolveSkill: ((value: Response) => void) | undefined
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -848,10 +852,10 @@ describe('<ImprovementsPage />', () => {
   it('limits needs-input actions and loads full clarification context', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/improvements/feedback') {
+      if (matchesEndpoint(url, '/improvements/feedback')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
       }
-      if (url === '/improvements/recommendations') {
+      if (matchesEndpoint(url, '/improvements/recommendations')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([

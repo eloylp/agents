@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse } from '@/lib/pagination'
 import { defaultWorkspaceID } from '@/lib/workspace'
@@ -218,16 +218,14 @@ export default function WorkspacesPage() {
         </button>
       </div>
 
+      <PaginatedDataSection
+        total={total}
+        limit={limit}
+        offset={offset}
+        onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+        onOffsetChange={setOffset}
+      >
       <Card>
-        <div style={{ marginBottom: '1rem' }}>
-          <PaginationControls
-            total={total}
-            limit={limit}
-            offset={offset}
-            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
-            onOffsetChange={setOffset}
-          />
-        </div>
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
         {error && <p style={{ color: 'var(--text-danger)' }}>{error}</p>}
         {!loading && !error && workspaces.length === 0 && (
@@ -275,6 +273,7 @@ export default function WorkspacesPage() {
           </div>
         )}
       </Card>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Add Workspace' : `Edit ${selected.name || selected.id}`} onClose={() => setModal(null)}>

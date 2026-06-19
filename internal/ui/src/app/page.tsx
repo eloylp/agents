@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import RunButton from '@/components/RunButton'
@@ -337,32 +337,30 @@ export default function FleetPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <PaginationControls
+      <PaginatedDataSection
           total={total}
           limit={limit}
           offset={offset}
           onLimitChange={(next) => { setLimit(next); setOffset(0) }}
           onOffsetChange={setOffset}
-        />
-      </div>
+        >
+        {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+        {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
+        {!loading && !error && visibleAgents.length === 0 && (
+          <p style={{ color: 'var(--text-muted)' }}>No agents configured.</p>
+        )}
 
-      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
-      {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
-      {!loading && !error && visibleAgents.length === 0 && (
-        <p style={{ color: 'var(--text-muted)' }}>No agents configured.</p>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {visibleAgents.map(a => (
-          <AgentCard
-            key={a.name}
-            agent={a}
-            onEdit={() => openEdit(a.name)}
-            onDelete={() => confirmDelete(a.name)}
-          />
-        ))}
-      </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {visibleAgents.map(a => (
+            <AgentCard
+              key={a.name}
+              agent={a}
+              onEdit={() => openEdit(a.name)}
+              onDelete={() => confirmDelete(a.name)}
+            />
+          ))}
+        </div>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Create agent' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>

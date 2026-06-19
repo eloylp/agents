@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
@@ -565,59 +565,56 @@ export default function ReposPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <PaginationControls
-          total={total}
-          limit={limit}
-          offset={offset}
-          onLimitChange={(next) => { setLimit(next); setOffset(0) }}
-          onOffsetChange={setOffset}
-        />
-      </div>
+      <PaginatedDataSection
+        total={total}
+        limit={limit}
+        offset={offset}
+        onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+        onOffsetChange={setOffset}
+      >
+        {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+        {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
+        {!loading && !error && repos.length === 0 && (
+          <p style={{ color: 'var(--text-muted)' }}>No repos configured.</p>
+        )}
 
-      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
-      {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
-      {!loading && !error && repos.length === 0 && (
-        <p style={{ color: 'var(--text-muted)' }}>No repos configured.</p>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {repos.map(repo => {
-          const activeBindings = repo.bindings.filter(b => b.enabled !== false)
-          const disabledBindings = repo.bindings.filter(b => b.enabled === false)
-          const activeGroups = groupByAgent(activeBindings)
-          const disabledGroups = groupByAgent(disabledBindings)
-          const cardMuted = !repo.enabled
-          return (
-            <Card key={repo.name} style={{ opacity: cardMuted ? 0.65 : 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: 'var(--text-heading)', fontSize: '1rem' }}>{repo.name}</div>
-                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '3px', flexWrap: 'wrap' }}>
-                    <span style={{
-                      display: 'inline-block', fontSize: '0.75rem', fontWeight: 700,
-                      padding: '2px 9px', borderRadius: '10px',
-                      background: repo.enabled ? 'var(--success-bg)' : 'rgba(100,116,139,0.2)',
-                      color: repo.enabled ? 'var(--success)' : 'var(--text-muted)',
-                      border: `1px solid ${repo.enabled ? 'var(--success-border)' : 'var(--border-subtle)'}`,
-                      textTransform: 'uppercase', letterSpacing: '0.03em',
-                    }}>
-                      {repo.enabled ? 'enabled' : 'disabled'}
-                    </span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {activeBindings.length} active{disabledBindings.length > 0 ? `, ${disabledBindings.length} disabled` : ''}
-                    </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {repos.map(repo => {
+            const activeBindings = repo.bindings.filter(b => b.enabled !== false)
+            const disabledBindings = repo.bindings.filter(b => b.enabled === false)
+            const activeGroups = groupByAgent(activeBindings)
+            const disabledGroups = groupByAgent(disabledBindings)
+            const cardMuted = !repo.enabled
+            return (
+              <Card key={repo.name} style={{ opacity: cardMuted ? 0.65 : 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: 'var(--text-heading)', fontSize: '1rem' }}>{repo.name}</div>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '3px', flexWrap: 'wrap' }}>
+                      <span style={{
+                        display: 'inline-block', fontSize: '0.75rem', fontWeight: 700,
+                        padding: '2px 9px', borderRadius: '10px',
+                        background: repo.enabled ? 'var(--success-bg)' : 'rgba(100,116,139,0.2)',
+                        color: repo.enabled ? 'var(--success)' : 'var(--text-muted)',
+                        border: `1px solid ${repo.enabled ? 'var(--success-border)' : 'var(--border-subtle)'}`,
+                        textTransform: 'uppercase', letterSpacing: '0.03em',
+                      }}>
+                        {repo.enabled ? 'enabled' : 'disabled'}
+                      </span>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        {activeBindings.length} active{disabledBindings.length > 0 ? `, ${disabledBindings.length} disabled` : ''}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-input)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
+                    <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-input)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                  <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
-                </div>
-              </div>
 
-              {repo.bindings.length === 0 && (
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No bindings.</p>
-              )}
+                {repo.bindings.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No bindings.</p>
+                )}
 
               {activeGroups.map(([agent, bindings]) => (
                 <div key={`active-${agent}`} style={{ marginBottom: '0.5rem' }}>
@@ -661,7 +658,8 @@ export default function ReposPage() {
             </Card>
           )
         })}
-      </div>
+        </div>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Add repo' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>

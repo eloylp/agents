@@ -143,20 +143,20 @@ describe('AuthTokenSettings', () => {
 
     expect(await screen.findByText('operator')).toBeInTheDocument()
     expect(await screen.findByText('first token')).toBeInTheDocument()
-    expect(screen.getByText('1-50 of 75')).toBeInTheDocument()
-    expect(screen.getByText('1-50 of 120')).toBeInTheDocument()
+    expect(screen.getAllByText('1-50 of 75')).toHaveLength(2)
+    expect(screen.getAllByText('1-50 of 120')).toHaveLength(2)
 
     const nextButtons = screen.getAllByRole('button', { name: 'Next' })
     fireEvent.click(nextButtons[0])
 
     expect(await screen.findByText('viewer')).toBeInTheDocument()
-    expect(screen.getByText('51-75 of 75')).toBeInTheDocument()
+    expect(screen.getAllByText('51-75 of 75')).toHaveLength(2)
     expect(fetchMock).toHaveBeenCalledWith('/auth/users?limit=50&offset=50', { cache: 'no-store' })
 
-    fireEvent.click(nextButtons[1])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Next' })[2])
 
     expect(await screen.findByText('second token')).toBeInTheDocument()
-    expect(screen.getByText('51-100 of 120')).toBeInTheDocument()
+    expect(screen.getAllByText('51-100 of 120')).toHaveLength(2)
     expect(fetchMock).toHaveBeenCalledWith('/auth/tokens?limit=50&offset=50', { cache: 'no-store' })
   })
 })

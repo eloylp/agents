@@ -6,7 +6,7 @@ import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
-import PaginationControls from '@/components/PaginationControls'
+import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
@@ -546,56 +546,54 @@ export default function GuardrailsManager() {
         </button>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <PaginationControls
+      <PaginatedDataSection
           total={guardrailsTotal}
           limit={guardrailsLimit}
           offset={guardrailsOffset}
           onLimitChange={(next) => { setGuardrailsLimit(next); setGuardrailsOffset(0) }}
           onOffsetChange={setGuardrailsOffset}
-        />
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        {guardrails.map(g => (
-          <div
-            key={guardrailID(g)}
-            onClick={() => { setSelected(g); setModal('edit') }}
-            style={{
-              background: 'var(--bg-card)', border: '1px solid var(--border)',
-              borderRadius: '8px', padding: '1rem',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>{g.name}</span>
-                {workspaceRefByID.has(guardrailID(g)) && (
-                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--text-muted)', border: `1px solid ${workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--border)'}` }}>
-                    {workspaceRefByID.get(guardrailID(g))?.enabled ? 'selected' : 'selected (disabled)'}
-                  </span>
+        >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {guardrails.map(g => (
+            <div
+              key={guardrailID(g)}
+              onClick={() => { setSelected(g); setModal('edit') }}
+              style={{
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: '8px', padding: '1rem',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>{g.name}</span>
+                  {workspaceRefByID.has(guardrailID(g)) && (
+                    <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--text-muted)', border: `1px solid ${workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--border)'}` }}>
+                      {workspaceRefByID.get(guardrailID(g))?.enabled ? 'selected' : 'selected (disabled)'}
+                    </span>
+                  )}
+                  {g.is_builtin && (
+                    <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: 'var(--bg-card)' }}>built-in</span>
+                  )}
+                  {!g.enabled && (
+                    <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-danger)', border: '1px solid var(--text-danger)' }}>disabled</span>
+                  )}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>position {g.position}</span>
+                  {g.version && <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>v{g.version}</span>}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>{guardrailScope(g)}</span>
+                </div>
+                {g.description && (
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>
                 )}
-                {g.is_builtin && (
-                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: 'var(--bg-card)' }}>built-in</span>
-                )}
-                {!g.enabled && (
-                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-danger)', border: '1px solid var(--text-danger)' }}>disabled</span>
-                )}
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>position {g.position}</span>
-                {g.version && <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>v{g.version}</span>}
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>{guardrailScope(g)}</span>
               </div>
-              {g.description && (
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>
-              )}
+              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>edit →</span>
             </div>
-            <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>edit →</span>
-          </div>
-        ))}
-        {guardrails.length === 0 && (
-          <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No guardrails yet. The 'security' default should ship with the daemon, check that migrations applied.</p>
-        )}
-      </div>
+          ))}
+          {guardrails.length === 0 && (
+            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No guardrails yet. The 'security' default should ship with the daemon, check that migrations applied.</p>
+          )}
+        </div>
+      </PaginatedDataSection>
 
       {(modal === 'create' || modal === 'edit') && (
         <FullscreenModal
