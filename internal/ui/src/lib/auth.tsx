@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import PaginationControls from '@/components/PaginationControls'
 import { formatDateTime } from '@/lib/datetime'
+import { pageFromResponse } from '@/lib/pagination'
 
 const openAuthModalEvent = 'agents-auth-token-request'
 
@@ -109,6 +111,12 @@ export function AuthTokenSettings() {
   const [status, setStatus] = useState<AuthStatus | null>(null)
   const [users, setUsers] = useState<AuthUser[]>([])
   const [tokens, setTokens] = useState<AuthToken[]>([])
+  const [usersTotal, setUsersTotal] = useState(0)
+  const [usersLimit, setUsersLimit] = useState(50)
+  const [usersOffset, setUsersOffset] = useState(0)
+  const [tokensTotal, setTokensTotal] = useState(0)
+  const [tokensLimit, setTokensLimit] = useState(50)
+  const [tokensOffset, setTokensOffset] = useState(0)
   const [name, setName] = useState('Codex MCP')
   const [created, setCreated] = useState('')
   const [newUsername, setNewUsername] = useState('')
@@ -126,16 +134,28 @@ export function AuthTokenSettings() {
     setStatus(next)
     if (!next?.authenticated) return
     const [usersRes, tokensRes] = await Promise.all([
-      fetch('/auth/users', { cache: 'no-store' }),
-      fetch('/auth/tokens', { cache: 'no-store' }),
+      fetch(pageURL('/auth/users', usersLimit, usersOffset), { cache: 'no-store' }),
+      fetch(pageURL('/auth/tokens', tokensLimit, tokensOffset), { cache: 'no-store' }),
     ])
-    if (usersRes.ok) setUsers(await usersRes.json() as AuthUser[])
-    if (tokensRes.ok) setTokens(await tokensRes.json() as AuthToken[])
+    if (usersRes.ok) {
+      const page = pageFromResponse<AuthUser>(await usersRes.json(), usersLimit, usersOffset)
+      setUsers(page.items)
+      setUsersTotal(page.total)
+      setUsersLimit(page.limit)
+      setUsersOffset(page.offset)
+    }
+    if (tokensRes.ok) {
+      const page = pageFromResponse<AuthToken>(await tokensRes.json(), tokensLimit, tokensOffset)
+      setTokens(page.items)
+      setTokensTotal(page.total)
+      setTokensLimit(page.limit)
+      setTokensOffset(page.offset)
+    }
   }
 
   useEffect(() => {
     void refresh()
-  }, [])
+  }, [usersLimit, usersOffset, tokensLimit, tokensOffset])
 
   const create = async () => {
     setCreated('')
@@ -274,6 +294,16 @@ export function AuthTokenSettings() {
               <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Only the admin user can create or remove dashboard users.</p>
             )}
             {userError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{userError}</p>}
+            <PaginationControls
+              total={usersTotal}
+              limit={usersLimit}
+              offset={usersOffset}
+              onLimitChange={limit => {
+                setUsersLimit(limit)
+                setUsersOffset(0)
+              }}
+              onOffsetChange={setUsersOffset}
+            />
           </section>
 
           <section style={sectionStyle}>
@@ -302,6 +332,16 @@ export function AuthTokenSettings() {
                 </div>
               ))}
             </div>
+            <PaginationControls
+              total={tokensTotal}
+              limit={tokensLimit}
+              offset={tokensOffset}
+              onLimitChange={limit => {
+                setTokensLimit(limit)
+                setTokensOffset(0)
+              }}
+              onOffsetChange={setTokensOffset}
+            />
           </section>
         </>
       )}
@@ -327,6 +367,10 @@ function AuthRedirectScreen({ loading }: { loading: boolean }) {
 
 function formatDate(value: string) {
   return formatDateTime(value) || 'unknown'
+}
+
+function pageURL(path: string, limit: number, offset: number): string {
+  return `${path}?limit=${limit}&offset=${offset}`
 }
 
 const sectionStyle: React.CSSProperties = {

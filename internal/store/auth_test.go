@@ -49,6 +49,20 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if len(users) != 2 {
 		t.Fatalf("ListUsers() len = %d, want 2", len(users))
 	}
+	userPage, err := st.ListUsersPage(ctx, 1, 1)
+	if err != nil {
+		t.Fatalf("ListUsersPage() error = %v", err)
+	}
+	if len(userPage) != 1 || userPage[0].Username != "other" {
+		t.Fatalf("ListUsersPage() = %+v, want other", userPage)
+	}
+	userCount, err := st.UserCount(ctx)
+	if err != nil {
+		t.Fatalf("UserCount() error = %v", err)
+	}
+	if userCount != 2 {
+		t.Fatalf("UserCount() = %d, want 2", userCount)
+	}
 	for _, user := range users {
 		if user.Username == "admin" && !user.IsAdmin {
 			t.Fatal("bootstrap user is not marked admin")
@@ -106,6 +120,20 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	}
 	if len(tokens) != 3 {
 		t.Fatalf("ListAuthTokens() len = %d, want 3", len(tokens))
+	}
+	tokenPage, err := st.ListAuthTokensPage(ctx, identity.User.ID, 2, 1)
+	if err != nil {
+		t.Fatalf("ListAuthTokensPage() error = %v", err)
+	}
+	if len(tokenPage) != 2 {
+		t.Fatalf("ListAuthTokensPage() len = %d, want 2", len(tokenPage))
+	}
+	tokenCount, err := st.AuthTokenCount(ctx, identity.User.ID)
+	if err != nil {
+		t.Fatalf("AuthTokenCount() error = %v", err)
+	}
+	if tokenCount != 3 {
+		t.Fatalf("AuthTokenCount() = %d, want 3", tokenCount)
 	}
 	for _, token := range tokens {
 		if token.Prefix == api.Token {

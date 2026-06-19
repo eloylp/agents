@@ -51,8 +51,8 @@ describe('AuthTokenSettings', () => {
       if (url === '/auth/status') {
         return jsonResponse({ authenticated: true, bootstrap_required: false, user: { username: 'operator', is_admin: false } })
       }
-      if (url === '/auth/users') return jsonResponse([])
-      if (url === '/auth/tokens') return jsonResponse([])
+      if (url === '/auth/users?limit=50&offset=0') return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 })
+      if (url === '/auth/tokens?limit=50&offset=0') return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 })
       if (url === '/auth/me/password' && init?.method === 'POST') return jsonResponse({ ok: true })
       return new Response('not found', { status: 404 })
     })
@@ -82,8 +82,8 @@ describe('AuthTokenSettings', () => {
       if (url === '/auth/status') {
         return jsonResponse({ authenticated: true, bootstrap_required: false, user: { username: 'operator', is_admin: false } })
       }
-      if (url === '/auth/users') return jsonResponse([])
-      if (url === '/auth/tokens') return jsonResponse([])
+      if (url === '/auth/users?limit=50&offset=0') return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 })
+      if (url === '/auth/tokens?limit=50&offset=0') return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 })
       return new Response('not found', { status: 404 })
     })
 
@@ -97,5 +97,66 @@ describe('AuthTokenSettings', () => {
 
     await screen.findByText('New passwords do not match.')
     await waitFor(() => expect(fetchMock).not.toHaveBeenCalled())
+  })
+
+  it('paginates users and API tokens independently', async () => {
+    const fetchMock = mockFetch(url => {
+      if (url === '/auth/status') {
+        return jsonResponse({ authenticated: true, bootstrap_required: false, user: { username: 'operator', is_admin: true } })
+      }
+      if (url === '/auth/users?limit=50&offset=0') {
+        return jsonResponse({
+          items: [{ id: 1, username: 'operator', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', is_admin: true }],
+          total: 75,
+          limit: 50,
+          offset: 0,
+        })
+      }
+      if (url === '/auth/users?limit=50&offset=50') {
+        return jsonResponse({
+          items: [{ id: 2, username: 'viewer', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', is_admin: false }],
+          total: 75,
+          limit: 50,
+          offset: 50,
+        })
+      }
+      if (url === '/auth/tokens?limit=50&offset=0') {
+        return jsonResponse({
+          items: [{ id: 10, kind: 'api', name: 'first token', prefix: 'agt_abc', created_at: '2026-01-01T00:00:00Z' }],
+          total: 120,
+          limit: 50,
+          offset: 0,
+        })
+      }
+      if (url === '/auth/tokens?limit=50&offset=50') {
+        return jsonResponse({
+          items: [{ id: 11, kind: 'api', name: 'second token', prefix: 'agt_def', created_at: '2026-01-01T00:00:00Z' }],
+          total: 120,
+          limit: 50,
+          offset: 50,
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    render(<AuthTokenSettings />)
+
+    expect(await screen.findByText('operator')).toBeInTheDocument()
+    expect(await screen.findByText('first token')).toBeInTheDocument()
+    expect(screen.getByText('1-50 of 75')).toBeInTheDocument()
+    expect(screen.getByText('1-50 of 120')).toBeInTheDocument()
+
+    const nextButtons = screen.getAllByRole('button', { name: 'Next' })
+    fireEvent.click(nextButtons[0])
+
+    expect(await screen.findByText('viewer')).toBeInTheDocument()
+    expect(screen.getByText('51-75 of 75')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/auth/users?limit=50&offset=50', { cache: 'no-store' })
+
+    fireEvent.click(nextButtons[1])
+
+    expect(await screen.findByText('second token')).toBeInTheDocument()
+    expect(screen.getByText('51-100 of 120')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/auth/tokens?limit=50&offset=50', { cache: 'no-store' })
   })
 })
