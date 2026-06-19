@@ -267,6 +267,82 @@ func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 	return cfg.Agents, nil
 }
 
+// ListWorkspaceAgents returns one deterministic page of agents in a workspace.
+func ListWorkspaceAgents(db *sql.DB, workspaceID string, limit, offset int) ([]fleet.Agent, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query(`
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,COALESCE(p.ref, ''),COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.description,a.allow_memory
+		FROM agents a
+		LEFT JOIN prompts p ON p.id = a.prompt_id
+		WHERE a.workspace_id=?
+		ORDER BY a.name
+		LIMIT ? OFFSET ?`, workspaceID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list agents: %w", err)
+	}
+	defer rows.Close()
+	var agents []fleet.Agent
+	var agentIDs []string
+	for rows.Next() {
+		var id, rowWorkspace, name, backend, model, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, description string
+		var allowPRs, allowDispatch, allowMemory int
+		if err := rows.Scan(
+			&id, &rowWorkspace, &name, &backend, &model, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
+			&allowPRs, &allowDispatch, &description, &allowMemory,
+		); err != nil {
+			return nil, fmt.Errorf("store: list agents: scan: %w", err)
+		}
+		allowMem := intToBool(allowMemory)
+		promptScope := ""
+		if promptID != "" {
+			promptScope = fleet.CatalogScopePath(promptWorkspace, promptRepo)
+		}
+		agents = append(agents, fleet.Agent{
+			ID:            id,
+			WorkspaceID:   rowWorkspace,
+			Name:          name,
+			Backend:       backend,
+			Model:         model,
+			PromptID:      promptID,
+			PromptRef:     promptRef,
+			PromptScope:   promptScope,
+			ScopeType:     scopeType,
+			ScopeRepo:     scopeRepo,
+			AllowPRs:      intToBool(allowPRs),
+			AllowDispatch: intToBool(allowDispatch),
+			Description:   description,
+			AllowMemory:   &allowMem,
+		})
+		agentIDs = append(agentIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list agents: iterate: %w", err)
+	}
+	for i, id := range agentIDs {
+		skills, _, err := loadAgentSkillRefs(db, id)
+		if err != nil {
+			return nil, fmt.Errorf("store: list agents: load %s skills: %w", agents[i].Name, err)
+		}
+		canDispatch, err := loadAgentDispatchRefs(db, id)
+		if err != nil {
+			return nil, fmt.Errorf("store: list agents: load %s can_dispatch: %w", agents[i].Name, err)
+		}
+		agents[i].Skills = skills
+		agents[i].CanDispatch = canDispatch
+	}
+	return agents, nil
+}
+
+func CountWorkspaceAgents(db *sql.DB, workspaceID string) (int, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM agents WHERE workspace_id=?", workspaceID).Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count agents: %w", err)
+	}
+	return total, nil
+}
+
 // UpsertAgent inserts or replaces a single agent definition.
 //
 // This non-Tx wrapper is retained for compatibility with store-level tests and

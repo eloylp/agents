@@ -32,8 +32,12 @@ vi.mock('@/components/MarkdownEditor', () => ({
 
 const catalog = [
   { name: 'a', description: '', content: 'A', default_content: 'A', is_builtin: true, enabled: true, position: 0 },
-  { name: 'b', description: '', content: 'B', default_content: 'B', is_builtin: true, enabled: true, position: 1 },
   { name: 'c', description: '', content: 'C', default_content: 'C', is_builtin: true, enabled: true, position: 2 },
+]
+
+const lookupCatalog = [
+  ...catalog,
+  { name: 'b', description: '', content: 'B', default_content: 'B', is_builtin: true, enabled: true, position: 1 },
 ]
 
 const workspaceRefs = [
@@ -48,8 +52,11 @@ describe('<GuardrailsManager />', () => {
 
   it('renders selected workspace guardrails in workspace position order', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/guardrails') {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(catalog) } as Response)
+      if (url === '/guardrails?limit=50&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: catalog, total: 3, limit: 50, offset: 0 }) } as Response)
+      }
+      if (url === '/guardrails?limit=500&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: lookupCatalog, total: 3, limit: 500, offset: 0 }) } as Response)
       }
       if (url === '/workspaces/team-a/guardrails') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(workspaceRefs) } as Response)

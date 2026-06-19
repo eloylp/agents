@@ -145,6 +145,44 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 	return cfg.Skills, nil
 }
 
+type SkillRecord struct {
+	ID    string
+	Skill fleet.Skill
+}
+
+func ListSkills(db *sql.DB, limit, offset int) ([]SkillRecord, error) {
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id
+		ORDER BY COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list skills: %w", err)
+	}
+	defer rows.Close()
+	var out []SkillRecord
+	for rows.Next() {
+		var rec SkillRecord
+		if err := rows.Scan(&rec.ID, &rec.Skill.WorkspaceID, &rec.Skill.Repo, &rec.Skill.Name, &rec.Skill.Prompt, &rec.Skill.VersionID, &rec.Skill.Version); err != nil {
+			return nil, fmt.Errorf("store: list skills: %w", err)
+		}
+		rec.Skill.ID = rec.ID
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func CountSkills(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM skills").Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count skills: %w", err)
+	}
+	return total, nil
+}
+
 // UpsertSkill inserts or replaces a single skill.
 // The skill name is normalized (lowercase, trimmed) and Skill.Prompt is
 // trimmed before writing, matching the normalization startup applies in

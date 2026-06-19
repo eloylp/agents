@@ -25,6 +25,7 @@ import (
 
 	"github.com/eloylp/agents/internal/backends"
 	agentconfig "github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
@@ -492,17 +493,23 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleSkillsList(w http.ResponseWriter, _ *http.Request) {
-	skills, err := h.store.ReadSkills()
+func (h *Handler) handleSkillsList(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	skills, err := h.store.ListSkills(page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
 		return
 	}
-	out := make([]storeSkillJSON, 0, len(skills))
-	for id, sk := range skills {
-		out = append(out, skillToStoreJSON(id, sk))
+	total, err := h.store.CountSkills()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count skills: %v", err), http.StatusInternalServerError)
+		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out := make([]storeSkillJSON, 0, len(skills))
+	for _, rec := range skills {
+		out = append(out, skillToStoreJSON(rec.ID, rec.Skill))
+	}
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
@@ -730,17 +737,23 @@ func (j storePromptJSON) toConfig() fleet.Prompt {
 	}
 }
 
-func (h *Handler) handlePromptsList(w http.ResponseWriter, _ *http.Request) {
-	prompts, err := h.store.ReadPrompts()
+func (h *Handler) handlePromptsList(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	prompts, err := h.store.ListPrompts(page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
+		return
+	}
+	total, err := h.store.CountPrompts()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count prompts: %v", err), http.StatusInternalServerError)
 		return
 	}
 	out := make([]storePromptJSON, 0, len(prompts))
 	for _, p := range prompts {
 		out = append(out, promptToStoreJSON(p))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handlePromptCreate(w http.ResponseWriter, r *http.Request) {
@@ -955,17 +968,23 @@ func (j storeBackendJSON) toConfig() fleet.Backend {
 
 // ── Backend handlers ────────────────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleBackendsList(w http.ResponseWriter, _ *http.Request) {
-	all, err := h.store.ReadBackends()
+func (h *Handler) handleBackendsList(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	all, err := h.store.ListBackends(page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
 	}
-	out := make([]storeBackendJSON, 0, len(all))
-	for name, b := range all {
-		out = append(out, backendToStoreJSON(name, b))
+	total, err := h.store.CountBackends()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count backends: %v", err), http.StatusInternalServerError)
+		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out := make([]storeBackendJSON, 0, len(all))
+	for _, rec := range all {
+		out = append(out, backendToStoreJSON(rec.Name, rec.Backend))
+	}
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handleBackendCreate(w http.ResponseWriter, r *http.Request) {

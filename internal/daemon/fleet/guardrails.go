@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -79,17 +80,23 @@ func (p GuardrailPatch) apply(g *fleet.Guardrail) {
 
 // ── Guardrail handlers ───────────────────────────────────────────────────────
 
-func (h *Handler) handleGuardrailsList(w http.ResponseWriter, _ *http.Request) {
-	gs, err := h.store.ReadAllGuardrails()
+func (h *Handler) handleGuardrailsList(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	gs, err := h.store.ListAllGuardrails(page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read guardrails: %v", err), http.StatusInternalServerError)
+		return
+	}
+	total, err := h.store.CountAllGuardrails()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count guardrails: %v", err), http.StatusInternalServerError)
 		return
 	}
 	out := make([]storeGuardrailJSON, 0, len(gs))
 	for _, g := range gs {
 		out = append(out, guardrailToJSON(g))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handleGuardrailCreate(w http.ResponseWriter, r *http.Request) {

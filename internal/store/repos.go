@@ -151,6 +151,48 @@ func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 	return cfg.Repos, nil
 }
 
+func ListWorkspaceRepos(db *sql.DB, workspaceID string, limit, offset int) ([]fleet.Repo, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query("SELECT workspace_id,name,enabled FROM repos WHERE workspace_id=? ORDER BY name LIMIT ? OFFSET ?", workspaceID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: list repos: %w", err)
+	}
+	var repos []fleet.Repo
+	for rows.Next() {
+		var r fleet.Repo
+		var enabled int
+		if err := rows.Scan(&r.WorkspaceID, &r.Name, &enabled); err != nil {
+			return nil, fmt.Errorf("store: list repos: scan: %w", err)
+		}
+		r.Enabled = intToBool(enabled)
+		repos = append(repos, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list repos: iterate: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("store: list repos: close: %w", err)
+	}
+	for i := range repos {
+		bindings, err := loadBindingsForRepo(db, repos[i].WorkspaceID, repos[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		repos[i].Use = bindings
+	}
+	return repos, nil
+}
+
+func CountWorkspaceRepos(db *sql.DB, workspaceID string) (int, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM repos WHERE workspace_id=?", workspaceID).Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: count repos: %w", err)
+	}
+	return total, nil
+}
+
 // UpsertRepo inserts or replaces a repo and its bindings. Bindings are
 // replaced wholesale: any existing bindings for the repo are removed before
 // the new list is written. The repo name and binding agents/events are

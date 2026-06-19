@@ -74,9 +74,19 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return s.ListUsersPage(ctx, 0, 0)
+}
+
+func (s *Store) ListUsersPage(ctx context.Context, limit, offset int) ([]User, error) {
+	query := `
 		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,is_admin
-		FROM users ORDER BY username ASC, id ASC`)
+		FROM users ORDER BY username ASC, id ASC`
+	args := []any{}
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("auth: list users: %w", err)
 	}
@@ -335,9 +345,19 @@ func (s *Store) CreateAPIToken(ctx context.Context, userID int64, name string, e
 }
 
 func (s *Store) ListAuthTokens(ctx context.Context, userID int64) ([]AuthToken, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return s.ListAuthTokensPage(ctx, userID, 0, 0)
+}
+
+func (s *Store) ListAuthTokensPage(ctx context.Context, userID int64, limit, offset int) ([]AuthToken, error) {
+	query := `
 		SELECT id,user_id,kind,name,prefix,created_at,expires_at,last_used_at,revoked_at
-		FROM auth_tokens WHERE user_id=? ORDER BY created_at DESC, id DESC`, userID)
+		FROM auth_tokens WHERE user_id=? ORDER BY created_at DESC, id DESC`
+	args := []any{userID}
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("auth: list tokens: %w", err)
 	}
@@ -354,6 +374,14 @@ func (s *Store) ListAuthTokens(ctx context.Context, userID int64) ([]AuthToken, 
 		return nil, fmt.Errorf("auth: list tokens rows: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Store) AuthTokenCount(ctx context.Context, userID int64) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM auth_tokens WHERE user_id=?", userID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("auth: count tokens: %w", err)
+	}
+	return count, nil
 }
 
 func (s *Store) RevokeAuthToken(ctx context.Context, userID, tokenID int64) error {

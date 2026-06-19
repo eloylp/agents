@@ -26,6 +26,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
@@ -149,7 +150,8 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
-	events := h.events.ListEventsForWorkspace(workspaceID, since)
+	page := pagination.Parse(r)
+	events := h.events.ListEventsForWorkspacePage(workspaceID, since, page.Limit, page.Offset)
 	out := make([]eventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, eventJSON{
@@ -165,40 +167,51 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(out, h.events.CountEventsForWorkspace(workspaceID, since), page))
 }
 
 // HandleImprovementFeedback serves GET /improvements/feedback, the durable
 // tagged feedback events that later recommendation runs consume.
 func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	rows, err := h.store.ListSelfImprovementFeedback(improvementWorkspaceFilter(r), r.URL.Query().Get("status"), limit)
+	page := pagination.Parse(r)
+	workspace := improvementWorkspaceFilter(r)
+	status := r.URL.Query().Get("status")
+	rows, err := h.store.ListSelfImprovementFeedbackPage(workspace, status, page.Limit, page.Offset)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement feedback")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if rows == nil {
-		rows = []store.SelfImprovementFeedback{}
+	total, err := h.store.CountSelfImprovementFeedback(workspace, status)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("count self-improvement feedback")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(rows, total, page))
 }
 
 // HandleImprovementRecommendations serves GET /improvements/recommendations,
 // the durable review inbox generated from stored feedback evidence.
 func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.improve.ListRecommendations(improvementWorkspaceFilter(r), r.URL.Query().Get("status"), 100)
+	page := pagination.Parse(r)
+	workspace := improvementWorkspaceFilter(r)
+	status := r.URL.Query().Get("status")
+	rows, err := h.improve.ListRecommendationsPage(workspace, status, page.Limit, page.Offset)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list self-improvement recommendations")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if rows == nil {
-		rows = []selfimprovement.SelfImprovementRecommendation{}
+	total, err := h.improve.CountRecommendations(workspace, status)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("count self-improvement recommendations")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(rows, total, page))
 }
 
 func improvementWorkspaceFilter(r *http.Request) string {
@@ -514,9 +527,11 @@ func agentsForEvent(s *obstore.Store, workspaceID, eventID string) []string {
 
 // HandleTraces serves GET /traces, the most recent agent run spans.
 func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
-	spans := h.events.ListTracesForWorkspace(r.URL.Query().Get("workspace"))
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	page := pagination.Parse(r)
+	spans := h.events.ListTracesForWorkspacePage(workspaceID, page.Limit, page.Offset)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(spans)
+	_ = json.NewEncoder(w).Encode(pagination.NewPage(spans, h.events.CountTracesForWorkspace(workspaceID), page))
 }
 
 // HandleTrace serves GET /traces/{root_event_id}, all spans for one root.

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Card from '@/components/Card'
+import PaginationControls from '@/components/PaginationControls'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
@@ -9,6 +10,7 @@ import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
 import { formatDateTime } from '@/lib/datetime'
 import { fmtDuration } from '@/lib/format'
+import { pageFromResponse } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -382,12 +384,20 @@ function TracesContent() {
   const [streaming, setStreaming] = useState(false)
   const [repoFilter, setRepoFilter] = useRepoFilter()
   const { workspace } = useSelectedWorkspace()
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
 
   const load = () => {
     setLoading(true)
-    fetch(withWorkspace('/traces', workspace))
+    fetch(withWorkspace(`/traces?limit=${limit}&offset=${offset}`, workspace))
       .then(r => r.json())
-      .then(data => { setSpans(data ?? []); setLoading(false) })
+      .then(data => {
+        const page = pageFromResponse<Span>(data, limit, offset)
+        setSpans(page.items)
+        setTotal(page.total)
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
@@ -404,7 +414,9 @@ function TracesContent() {
       onError: () => setStreaming(false),
     })
     return () => stream.close()
-  }, [workspace])
+  }, [workspace, limit, offset])
+
+  useEffect(() => { setOffset(0) }, [workspace])
 
   const handleSelect = (id: string) => {
     router.push(`/traces/?id=${encodeURIComponent(id)}`)
@@ -434,11 +446,19 @@ function TracesContent() {
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Traces</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
             {rootIds.length} trace{rootIds.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
+            {total > rootIds.length ? ` · ${total} spans total` : ''}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
+          <PaginationControls
+            total={total}
+            limit={limit}
+            offset={offset}
+            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+            onOffsetChange={setOffset}
+          />
           <input
             placeholder="Filter by agent, repo, or ID…"
             value={filter}

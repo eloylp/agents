@@ -465,13 +465,18 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 }
 
 func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []TimestampedEvent {
+	return s.ListEventsForWorkspacePage(workspaceID, since, 500, 0)
+}
+
+func (s *Store) ListEventsForWorkspacePage(workspaceID string, since time.Time, limit, offset int) []TimestampedEvent {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	limit, offset = clampObservePage(limit, offset)
 	var rows *sql.Rows
 	var err error
 	if since.IsZero() {
 		rows, err = s.db.Query(
-			`SELECT id, workspace_id, at, repo, kind, number, actor, payload FROM events WHERE workspace_id = ? ORDER BY at ASC LIMIT 500`,
-			workspaceID,
+			`SELECT id, workspace_id, at, repo, kind, number, actor, payload FROM events WHERE workspace_id = ? ORDER BY at ASC LIMIT ? OFFSET ?`,
+			workspaceID, limit, offset,
 		)
 	} else {
 		sinceTime := since.UTC()
@@ -480,8 +485,8 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 			FROM events
 			WHERE workspace_id = ?
 			  AND (at > ? OR replace(substr(at, 1, 19), 'T', ' ') > ?)
-			ORDER BY at ASC LIMIT 500`,
-			workspaceID, sinceTime.Format(time.RFC3339Nano), sinceTime.Format(time.DateTime),
+			ORDER BY at ASC LIMIT ? OFFSET ?`,
+			workspaceID, sinceTime.Format(time.RFC3339Nano), sinceTime.Format(time.DateTime), limit, offset,
 		)
 	}
 	if err != nil {
@@ -511,6 +516,30 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 	return out
 }
 
+func (s *Store) CountEventsForWorkspace(workspaceID string, since time.Time) int {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var (
+		row *sql.Row
+		n   int
+	)
+	if since.IsZero() {
+		row = s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE workspace_id = ?`, workspaceID)
+	} else {
+		sinceTime := since.UTC()
+		row = s.db.QueryRow(
+			`SELECT COUNT(*) FROM events
+			WHERE workspace_id = ?
+			  AND (at > ? OR replace(substr(at, 1, 19), 'T', ' ') > ?)`,
+			workspaceID, sinceTime.Format(time.RFC3339Nano), sinceTime.Format(time.DateTime),
+		)
+	}
+	if err := row.Scan(&n); err != nil {
+		log.Printf("observe: count events: %v", err)
+		return 0
+	}
+	return n
+}
+
 // spanColumns is the column list used by every read query, kept in
 // one place so adding a new column means editing one line. The
 // prompt_gz blob is intentionally excluded; bodies are fetched on
@@ -528,10 +557,15 @@ func (s *Store) ListTraces() []Span {
 }
 
 func (s *Store) ListTracesForWorkspace(workspaceID string) []Span {
+	return s.ListTracesForWorkspacePage(workspaceID, 200, 0)
+}
+
+func (s *Store) ListTracesForWorkspacePage(workspaceID string, limit, offset int) []Span {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	limit, offset = clampObservePage(limit, offset)
 	rows, err := s.db.Query(
-		`SELECT `+spanColumns+` FROM traces WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 200`,
-		workspaceID,
+		`SELECT `+spanColumns+` FROM traces WHERE workspace_id = ? ORDER BY started_at DESC LIMIT ? OFFSET ?`,
+		workspaceID, limit, offset,
 	)
 	if err != nil {
 		log.Printf("observe: list traces: %v", err)
@@ -539,6 +573,29 @@ func (s *Store) ListTracesForWorkspace(workspaceID string) []Span {
 	}
 	defer rows.Close()
 	return scanSpans(rows)
+}
+
+func (s *Store) CountTracesForWorkspace(workspaceID string) int {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM traces WHERE workspace_id = ?`, workspaceID).Scan(&n); err != nil {
+		log.Printf("observe: count traces: %v", err)
+		return 0
+	}
+	return n
+}
+
+func clampObservePage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
 
 // TracesByRootEventID returns all spans whose root_event_id matches id.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/fleet"
 )
 
@@ -69,17 +70,23 @@ func (j workspaceGuardrailJSON) toConfig(defaultPosition int) fleet.WorkspaceGua
 	}
 }
 
-func (h *Handler) handleWorkspacesList(w http.ResponseWriter, _ *http.Request) {
-	workspaces, err := h.store.ReadWorkspaces()
+func (h *Handler) handleWorkspacesList(w http.ResponseWriter, r *http.Request) {
+	page := pagination.Parse(r)
+	workspaces, err := h.store.ListWorkspaces(page.Limit, page.Offset)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read workspaces: %v", err), http.StatusInternalServerError)
+		return
+	}
+	total, err := h.store.CountWorkspaces()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("count workspaces: %v", err), http.StatusInternalServerError)
 		return
 	}
 	out := make([]storeWorkspaceJSON, 0, len(workspaces))
 	for _, workspace := range workspaces {
 		out = append(out, workspaceToStoreJSON(workspace))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, pagination.NewPage(out, total, page))
 }
 
 func (h *Handler) handleWorkspaceCreate(w http.ResponseWriter, r *http.Request) {

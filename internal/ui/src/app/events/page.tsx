@@ -2,9 +2,11 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Card from '@/components/Card'
+import PaginationControls from '@/components/PaginationControls'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { formatTime } from '@/lib/datetime'
+import { pageFromResponse } from '@/lib/pagination'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -128,6 +130,9 @@ export default function EventsPage() {
   const [timeRange, setTimeRange] = useState('1h')
   const [repoFilter, setRepoFilter] = useRepoFilter()
   const { workspace } = useSelectedWorkspace()
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
 
   const timeRanges: Record<string, number> = { '15m': 15 * 60, '1h': 3600, '6h': 6 * 3600, '24h': 24 * 3600 }
 
@@ -135,13 +140,20 @@ export default function EventsPage() {
     setLoading(true)
     const sinceMs = Date.now() - (timeRanges[timeRange] ?? 3600) * 1000
     const since = new Date(sinceMs).toISOString()
-    fetch(withWorkspace(`/events?since=${encodeURIComponent(since)}`, workspace))
+    fetch(withWorkspace(`/events?since=${encodeURIComponent(since)}&limit=${limit}&offset=${offset}`, workspace))
       .then(r => r.json())
-      .then(data => { setEvents((data ?? []).reverse()); setLoading(false) })
+      .then(data => {
+        const page = pageFromResponse<Event>(data, limit, offset)
+        setEvents(page.items.reverse())
+        setTotal(page.total)
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [timeRange, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [timeRange, workspace, limit, offset]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setOffset(0) }, [timeRange, workspace])
 
   useEffect(() => {
     const stream = openAuthenticatedSSE(withWorkspace('/events/stream', workspace), {
@@ -181,6 +193,7 @@ export default function EventsPage() {
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Events</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
             {filtered.length} event{filtered.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
+            {total > filtered.length ? ` · ${total} total` : ''}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -194,6 +207,13 @@ export default function EventsPage() {
             }}>{r}</button>
           ))}
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
+          <PaginationControls
+            total={total}
+            limit={limit}
+            offset={offset}
+            onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+            onOffsetChange={setOffset}
+          />
           <input
             placeholder="Filter..."
             value={filter}

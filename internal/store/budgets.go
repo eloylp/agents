@@ -290,6 +290,32 @@ func ListTokenBudgets(db *sql.DB) ([]TokenBudget, error) {
 	return out, rows.Err()
 }
 
+func ListTokenBudgetsPage(db *sql.DB, limit, offset int) ([]TokenBudget, error) {
+	limit, offset = clampPage(limit, offset)
+	rows, err := db.Query(`SELECT id, scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled FROM token_budgets ORDER BY scope_kind, workspace_id, repo, agent, backend, period LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenBudget
+	for rows.Next() {
+		b, err := scanTokenBudget(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func CountTokenBudgets(db *sql.DB) (int, error) {
+	var total int
+	if err := db.QueryRow("SELECT COUNT(*) FROM token_budgets").Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 // GetTokenBudget returns one budget by ID.
 func GetTokenBudget(db *sql.DB, id int64) (TokenBudget, error) {
 	return GetTokenBudgetFrom(db, id)

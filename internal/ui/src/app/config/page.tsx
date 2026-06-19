@@ -4,8 +4,10 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import PaginationControls from '@/components/PaginationControls'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { defaultWorkspaceID, useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
@@ -277,6 +279,10 @@ export default function ConfigPage() {
   const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'improvement-analyst' | 'backends' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
+  const [backendOptions, setBackendOptions] = useState<Backend[]>([])
+  const [backendsTotal, setBackendsTotal] = useState(0)
+  const [backendsLimit, setBackendsLimit] = useState(50)
+  const [backendsOffset, setBackendsOffset] = useState(0)
   const [tools, setTools] = useState<ToolStatus[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [repos, setRepos] = useState<Repo[]>([])
@@ -314,6 +320,9 @@ export default function ConfigPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [budgets, setBudgets] = useState<TokenBudget[]>([])
+  const [budgetsTotal, setBudgetsTotal] = useState(0)
+  const [budgetsLimit, setBudgetsLimit] = useState(50)
+  const [budgetsOffset, setBudgetsOffset] = useState(0)
   const [budgetsLoading, setBudgetsLoading] = useState(false)
   const [budgetError, setBudgetError] = useState('')
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
@@ -367,13 +376,16 @@ export default function ConfigPage() {
 
   const loadBackends = () => {
     setBackendsLoading(true)
-    Promise.all([fetch('/backends'), fetch('/backends/status'), fetch('/agents/orphans/status')])
-      .then(async ([dbRes, diagRes, orphanRes]) => {
+    Promise.all([fetch(`/backends?limit=${backendsLimit}&offset=${backendsOffset}`), fetch(selectorURL('/backends')), fetch('/backends/status'), fetch('/agents/orphans/status')])
+      .then(async ([dbRes, selectorRes, diagRes, orphanRes]) => {
         if (!dbRes.ok) throw new Error((await dbRes.text()) || 'Failed to load backends from database')
+        if (!selectorRes.ok) throw new Error((await selectorRes.text()) || 'Failed to load backend selector options')
         if (!diagRes.ok) throw new Error((await diagRes.text()) || 'Failed to load diagnostics')
         if (!orphanRes.ok) throw new Error((await orphanRes.text()) || 'Failed to load orphaned agents')
 
-        const dbData = sortBackends(await dbRes.json() as Backend[])
+        const dbPage = pageFromResponse<Backend>(await dbRes.json(), backendsLimit, backendsOffset)
+        const dbData = sortBackends(dbPage.items)
+        const optionData = sortBackends(itemsFromResponse<Backend>(await selectorRes.json()))
         const diagData = await diagRes.json() as BackendsDiscoveryResponse
         const diagBackends = sortBackends(diagData.backends ?? [])
         const diagTools = diagData.tools ?? (diagData.github_cli ? [diagData.github_cli] : [])
@@ -381,9 +393,11 @@ export default function ConfigPage() {
         const orphanAgents = orphanData.agents ?? []
 
         setBackends(dbData)
+        setBackendOptions(optionData)
+        setBackendsTotal(dbPage.total)
         setTools(diagTools)
         setBackendRuntime(diagData.runtime ?? null)
-        setBackendDriftWarnings(buildBackendDriftWarnings(dbData, diagBackends))
+        setBackendDriftWarnings(buildBackendDriftWarnings(optionData, diagBackends))
         setOrphanedAgents(orphanAgents)
         setOrphanModelSelection(prev => {
           const next: Record<string, string> = {}
@@ -401,6 +415,8 @@ export default function ConfigPage() {
         setOrphanedAgents([])
         setOrphanModelSelection({})
         setBackends([])
+        setBackendOptions([])
+        setBackendsTotal(0)
         setTools([])
         setBackendsLoading(false)
       })
@@ -408,7 +424,7 @@ export default function ConfigPage() {
 
   const configWorkspaces = ((config?.workspaces as WorkspaceRuntime[] | undefined) ?? [])
   const configBackends = sortBackends(Object.entries((config?.backends as Record<string, Omit<Backend, 'name'>> | undefined) ?? {}).map(([name, backend]) => ({ name, ...backend })))
-  const runtimeBackendOptions = backends.length > 0 ? backends : configBackends
+  const runtimeBackendOptions = backendOptions.length > 0 ? backendOptions : backends.length > 0 ? backends : configBackends
   const selectedAnalystBackend = runtimeBackendOptions.find(b => b.name === runtimeForm.self_improvement_analyst?.backend)
   const analystModelOptions = selectedAnalystBackend?.models ?? []
   const runtimeWorkspaces = configWorkspaces.length > 0 ? configWorkspaces : (workspaceCatalog as WorkspaceRuntime[])
@@ -554,7 +570,7 @@ export default function ConfigPage() {
 
   useEffect(() => {
     if (tab === 'backends') loadBackends()
-  }, [tab])
+  }, [tab, backendsLimit, backendsOffset])
 
   const runDiscovery = async () => {
     setDiscoveryRunning(true)
@@ -775,10 +791,11 @@ export default function ConfigPage() {
     setBudgetsLoading(true)
     setBudgetError('')
     try {
-      const res = await fetch('/token_budgets')
+      const res = await fetch(`/token_budgets?limit=${budgetsLimit}&offset=${budgetsOffset}`)
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load budgets')
-      const data = await res.json() as TokenBudget[] | null
-      setBudgets(data ?? [])
+      const page = pageFromResponse<TokenBudget>(await res.json(), budgetsLimit, budgetsOffset)
+      setBudgets(page.items)
+      setBudgetsTotal(page.total)
     } catch (e) {
       setBudgetError(String(e))
     }
@@ -802,18 +819,15 @@ export default function ConfigPage() {
 
   const loadBudgetScopeOptions = async () => {
     try {
-      const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(withWorkspace('/agents', workspace)), fetch(withWorkspace('/repos', workspace))])
+      const [backendRes, agentRes, repoRes] = await Promise.all([fetch(selectorURL('/backends')), fetch(selectorURL(withWorkspace('/agents', workspace))), fetch(selectorURL(withWorkspace('/repos', workspace)))])
       if (backendRes.ok) {
-        const backendData = await backendRes.json() as Backend[] | null
-        setBackends(sortBackends(backendData ?? []))
+        setBackendOptions(sortBackends(itemsFromResponse<Backend>(await backendRes.json())))
       }
       if (agentRes.ok) {
-        const agentData = await agentRes.json() as Agent[] | null
-        setAgents((agentData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+        setAgents(itemsFromResponse<Agent>(await agentRes.json()).slice().sort((a, b) => a.name.localeCompare(b.name)))
       }
       if (repoRes.ok) {
-        const repoData = await repoRes.json() as Repo[] | null
-        setRepos((repoData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+        setRepos(itemsFromResponse<Repo>(await repoRes.json()).slice().sort((a, b) => a.name.localeCompare(b.name)))
       }
     } catch {
       // Keep any already-loaded options; validation still happens server-side.
@@ -880,7 +894,11 @@ export default function ConfigPage() {
       loadLeaderboard(lbPeriod, lbRepo)
       loadBudgetScopeOptions()
     }
-  }, [tab, workspace])
+  }, [tab, workspace, budgetsLimit, budgetsOffset])
+
+  useEffect(() => {
+    setBudgetsOffset(0)
+  }, [workspace])
 
   useEffect(() => {
     if (tab === 'tokens') loadLeaderboard(lbPeriod, lbRepo)
@@ -901,7 +919,7 @@ export default function ConfigPage() {
   const budgetNeedsBackend = budgetForm.scope_kind.includes('backend')
   const repoNames = repos.map(r => r.name)
   const agentNames = agents.map(a => a.name)
-  const backendNames = backends.map(b => b.name)
+  const backendNames = (backendOptions.length > 0 ? backendOptions : backends).map(b => b.name)
   const repoOptionsWithCurrent = budgetForm.repo && !repoNames.includes(budgetForm.repo) ? [budgetForm.repo, ...repoNames] : repoNames
   const agentOptionsWithCurrent = budgetForm.agent && !agentNames.includes(budgetForm.agent) ? [budgetForm.agent, ...agentNames] : agentNames
   const backendOptionsWithCurrent = budgetForm.backend && !backendNames.includes(budgetForm.backend) ? [budgetForm.backend, ...backendNames] : backendNames
@@ -1150,7 +1168,7 @@ export default function ConfigPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
             <div style={{ display: 'grid', gap: '0.25rem' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                {backendsLoading ? 'Checking backend and tool diagnostics…' : `${backends.length} backend${backends.length !== 1 ? 's' : ''} configured`}
+                {backendsLoading ? 'Checking backend and tool diagnostics…' : `${backendsTotal} backend${backendsTotal !== 1 ? 's' : ''} configured`}
               </span>
               {backendsLoading && (
                 <span style={{ color: 'var(--text-faint)', fontSize: '0.78rem' }}>
@@ -1270,7 +1288,16 @@ export default function ConfigPage() {
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
             <div style={{ flex: '2 1 540px', minWidth: 0 }}>
               <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.4rem' }}>Backends</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem' }}>
+                  <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>Backends</div>
+                  <PaginationControls
+                    total={backendsTotal}
+                    limit={backendsLimit}
+                    offset={backendsOffset}
+                    onLimitChange={(next) => { setBackendsLimit(next); setBackendsOffset(0) }}
+                    onOffsetChange={setBackendsOffset}
+                  />
+                </div>
                 {!backendsLoading && backends.length === 0 && (
                   <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No backends configured.</p>
                 )}
@@ -1530,6 +1557,15 @@ export default function ConfigPage() {
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
               Budgets enforce token caps over UTC calendar periods. Simple repo, agent, and backend scopes are global across workspaces; choose workspace + repo, workspace + agent, or workspace + backend for workspace-isolated caps. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
+            <div style={{ marginBottom: '0.75rem' }}>
+              <PaginationControls
+                total={budgetsTotal}
+                limit={budgetsLimit}
+                offset={budgetsOffset}
+                onLimitChange={(next) => { setBudgetsLimit(next); setBudgetsOffset(0) }}
+                onOffsetChange={setBudgetsOffset}
+              />
+            </div>
             {budgetsLoading ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
             ) : budgets.length === 0 ? (

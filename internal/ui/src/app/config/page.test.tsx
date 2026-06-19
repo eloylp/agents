@@ -76,3 +76,77 @@ describe('<ConfigPage /> runtime workspace overrides', () => {
     expect(await screen.findByText('Workspace runner override saved for Team B.')).toBeInTheDocument()
   })
 })
+
+describe('<ConfigPage /> backend pagination', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('paginates the backend admin list while loading selector options separately', async () => {
+    window.history.replaceState(null, '', '/ui/config?tab=backends')
+
+    const backendPage = (offset: number) => ({
+      items: [{
+        name: offset === 0 ? 'backend-001' : 'backend-051',
+        command: 'codex',
+        healthy: true,
+        timeout_seconds: 600,
+        max_prompt_chars: 12000,
+      }],
+      total: 75,
+      limit: 50,
+      offset,
+    })
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/config') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+      }
+      if (url === '/backends?limit=50&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(backendPage(0)) } as Response)
+      }
+      if (url === '/backends?limit=50&offset=50') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(backendPage(50)) } as Response)
+      }
+      if (url === '/backends?limit=500&offset=0') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            items: [
+              backendPage(0).items[0],
+              backendPage(50).items[0],
+              { name: 'selector-only', command: 'claude', healthy: true, timeout_seconds: 600, max_prompt_chars: 12000 },
+            ],
+            total: 75,
+            limit: 500,
+            offset: 0,
+          }),
+        } as Response)
+      }
+      if (url === '/backends/status') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ backends: [], tools: [] }) } as Response)
+      }
+      if (url === '/agents/orphans/status') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ count: 0, agents: [] }) } as Response)
+      }
+      return Promise.resolve({
+        ok: false,
+        text: () => Promise.resolve(`unexpected request: ${url}`),
+        json: () => Promise.resolve({}),
+      } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ConfigPage />)
+
+    expect(await screen.findByText('backend-001')).toBeInTheDocument()
+    expect(screen.getByText('1-50 of 75')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/backends?limit=500&offset=0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(await screen.findByText('backend-051')).toBeInTheDocument()
+    expect(screen.getByText('51-75 of 75')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/backends?limit=50&offset=50')
+  })
+})

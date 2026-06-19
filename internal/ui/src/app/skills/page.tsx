@@ -2,8 +2,10 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
   id?: string
@@ -81,9 +83,9 @@ function SkillForm({
       setRepoOptions([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Repo[]) => setRepoOptions(data ?? []))
+      .then((data) => setRepoOptions(itemsFromResponse<Repo>(data)))
       .catch(() => setRepoOptions([]))
   }, [selectedScope, form.workspace_id])
 
@@ -193,6 +195,9 @@ function SkillForm({
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(50)
+  const [offset, setOffset] = useState(0)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [filterScope, setFilterScope] = useState<'all' | 'global' | 'workspace' | 'repo'>('all')
   const [filterWorkspace, setFilterWorkspace] = useState('')
@@ -209,10 +214,12 @@ export default function SkillsPage() {
 
   const load = () => {
     setLoading(true)
-    fetch('/skills')
+    fetch(`/skills?limit=${limit}&offset=${offset}`)
       .then(r => r.json())
-      .then((data: Skill[]) => {
-        setSkills((data ?? []).map(s => ({ ...s, id: stableSkillID(s) || s.name })))
+      .then((data) => {
+        const page = pageFromResponse<Skill>(data, limit, offset)
+        setSkills(page.items.map(s => ({ ...s, id: stableSkillID(s) || s.name })))
+        setTotal(page.total)
         setLoading(false)
       })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -220,20 +227,20 @@ export default function SkillsPage() {
 
   useEffect(() => {
     load()
-    fetch('/workspaces', { cache: 'no-store' })
+    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Workspace[]) => setWorkspaces(data ?? []))
+      .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
-  }, [])
+  }, [limit, offset])
 
   useEffect(() => {
     if (filterScope !== 'repo' || !filterWorkspace) {
       setFilterRepos([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
-      .then((data: Repo[]) => setFilterRepos(data ?? []))
+      .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))
   }, [filterScope, filterWorkspace])
 
@@ -380,6 +387,16 @@ export default function SkillsPage() {
             Refresh
           </button>
         </div>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <PaginationControls
+          total={total}
+          limit={limit}
+          offset={offset}
+          onLimitChange={(next) => { setLimit(next); setOffset(0) }}
+          onOffsetChange={setOffset}
+        />
       </div>
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}

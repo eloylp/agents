@@ -6,6 +6,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -16,6 +17,8 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
 		mcpgo.NewTool("list_token_budgets",
 			mcpgo.WithDescription("List all token budgets. Each budget caps token usage over a UTC calendar period: daily starts 00:00 UTC, weekly starts Sunday 00:00 UTC, and monthly starts on the first day at 00:00 UTC. Simple repo, agent, and backend scopes are global across workspaces; use workspace+repo, workspace+agent, or workspace+backend for workspace isolation."),
+			mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
+			mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
 		),
 		toolListTokenBudgets(deps),
 	)
@@ -118,15 +121,17 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 }
 
 func toolListTokenBudgets(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		budgets, err := deps.Store.ListTokenBudgets()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		page := pagination.Clamp(mcpInt(req, "limit", 0), mcpInt(req, "offset", 0))
+		budgets, err := deps.Store.ListTokenBudgetsPage(page.Limit, page.Offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list token budgets", err), nil
 		}
-		if budgets == nil {
-			budgets = []store.TokenBudget{}
+		total, err := deps.Store.CountTokenBudgets()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("count token budgets", err), nil
 		}
-		return jsonResult(budgets)
+		return jsonResult(pagination.NewPage(budgets, total, page))
 	}
 }
 

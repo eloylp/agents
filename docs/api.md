@@ -115,11 +115,19 @@ These routes are always mounted and backed by the SQLite database.
 
 Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Prompt and skill catalog rows expose `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility. Guardrail catalog rows expose only `workspace_id`: empty means global, set means workspace-scoped.
 
+Dashboard CRUD list routes are server-paginated. `GET /agents`, `/repos`, `/workspaces`, `/prompts`, `/skills`, `/backends`, `/guardrails`, and `/token_budgets` accept `limit` and `offset`, clamp missing or invalid values to `limit=50&offset=0`, and cap `limit` at `500`. They return:
+
+```json
+{ "items": [], "total": 0, "limit": 50, "offset": 0 }
+```
+
+`GET /runners` keeps its compatibility key (`runners` instead of `items`) because completed events can expand to multiple per-agent rows after the trace JOIN.
+
 Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agents track the latest published prompt and skill versions. To return to older catalog content, publish a rollback as a new current version.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/{resource}` | List all entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list. |
+| `GET` | `/{resource}` | List entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`) with `limit`, `offset`, `total`, and `items`. Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list, but uses the same paginated envelope. |
 | `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
 | `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. |
 | `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |

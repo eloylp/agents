@@ -2,7 +2,9 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import Modal from '@/components/Modal'
+import PaginationControls from '@/components/PaginationControls'
 import { formatDateTime } from '@/lib/datetime'
+import { pageFromResponse } from '@/lib/pagination'
 import { withWorkspace } from '@/lib/workspace'
 
 interface FeedbackEvent {
@@ -542,18 +544,28 @@ export default function ImprovementsPage() {
   const [confirming, setConfirming] = useState<ConfirmationModal | null>(null)
   const [confirmSaving, setConfirmSaving] = useState(false)
   const [reviewingProposal, setReviewingProposal] = useState<Recommendation | null>(null)
+  const [recommendationsLimit, setRecommendationsLimit] = useState(50)
+  const [recommendationsOffset, setRecommendationsOffset] = useState(0)
+  const [recommendationsTotal, setRecommendationsTotal] = useState(0)
+  const [feedbackLimit, setFeedbackLimit] = useState(50)
+  const [feedbackOffset, setFeedbackOffset] = useState(0)
+  const [feedbackTotal, setFeedbackTotal] = useState(0)
 
   const load = useCallback((showLoading = true) => {
     if (showLoading) setLoading(true)
-    const suffix = status ? `?status=${encodeURIComponent(status)}` : ''
+    const statusParam = status ? `&status=${encodeURIComponent(status)}` : ''
     Promise.all([
-      fetch(`/improvements/feedback${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
-      fetch(`/improvements/recommendations${suffix}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(`/improvements/feedback?limit=${feedbackLimit}&offset=${feedbackOffset}${statusParam}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
+      fetch(`/improvements/recommendations?limit=${recommendationsLimit}&offset=${recommendationsOffset}${statusParam}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []),
     ])
       .then(([feedbackRows, recommendationRows]) => {
-        setFeedback(feedbackRows ?? [])
-        const recs = sortRecommendationsByActivity(recommendationRows ?? [])
+        const feedbackPage = pageFromResponse<FeedbackEvent>(feedbackRows, feedbackLimit, feedbackOffset)
+        const recommendationPage = pageFromResponse<Recommendation>(recommendationRows, recommendationsLimit, recommendationsOffset)
+        setFeedback(feedbackPage.items)
+        setFeedbackTotal(feedbackPage.total)
+        const recs = sortRecommendationsByActivity(recommendationPage.items)
         setRecommendations(recs)
+        setRecommendationsTotal(recommendationPage.total)
         setBundles(Object.fromEntries(recs.map((row: Recommendation) => [row.id, row.proposal_bundle ?? {}])))
       })
       .catch(() => {
@@ -565,9 +577,14 @@ export default function ImprovementsPage() {
       .finally(() => {
         if (showLoading) setLoading(false)
       })
-  }, [status])
+  }, [status, feedbackLimit, feedbackOffset, recommendationsLimit, recommendationsOffset])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    setFeedbackOffset(0)
+    setRecommendationsOffset(0)
+  }, [status])
 
   useEffect(() => {
     let cancelled = false
@@ -904,6 +921,7 @@ export default function ImprovementsPage() {
 	          <h1 style={{ fontSize: '1.45rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Improvements</h1>
 	          <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
 	            {loading ? 'Loading' : `${shownRecommendations.length} proposals · ${feedback.length} feedback events`}
+	            {!loading ? ` · ${recommendationsTotal} proposal records · ${feedbackTotal} feedback records` : ''}
 	            {Object.keys(counts).length > 0 ? ` · ${Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(' · ')}` : ''}
 	          </div>
         </div>
@@ -942,6 +960,29 @@ export default function ImprovementsPage() {
           ))}
         </div>
 	      </section>
+
+      <section aria-label="Improvement pagination" style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>Proposals</span>
+          <PaginationControls
+            total={recommendationsTotal}
+            limit={recommendationsLimit}
+            offset={recommendationsOffset}
+            onLimitChange={(next) => { setRecommendationsLimit(next); setRecommendationsOffset(0) }}
+            onOffsetChange={setRecommendationsOffset}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>Feedback</span>
+          <PaginationControls
+            total={feedbackTotal}
+            limit={feedbackLimit}
+            offset={feedbackOffset}
+            onLimitChange={(next) => { setFeedbackLimit(next); setFeedbackOffset(0) }}
+            onOffsetChange={setFeedbackOffset}
+          />
+        </div>
+      </section>
 
       {(tab === 'proposals' || tab === 'history') && (
         <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>

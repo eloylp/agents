@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/daemon/pagination"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -259,13 +260,20 @@ func (d *Daemon) handleAuthUsersList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	users, err := d.store.ListUsers(r.Context())
+	page := pagination.Parse(r)
+	users, err := d.store.ListUsersPage(r.Context(), page.Limit, page.Offset)
 	if err != nil {
 		d.logger.Error().Err(err).Msg("auth users: list")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, users, http.StatusOK)
+	total, err := d.store.UserCount(r.Context())
+	if err != nil {
+		d.logger.Error().Err(err).Msg("auth users: count")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, pagination.NewPage(users, total, page), http.StatusOK)
 }
 
 func (d *Daemon) handleAuthUsersCreate(w http.ResponseWriter, r *http.Request) {
@@ -338,13 +346,20 @@ func (d *Daemon) handleAuthTokensList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	tokens, err := d.store.ListAuthTokens(r.Context(), identity.User.ID)
+	page := pagination.Parse(r)
+	tokens, err := d.store.ListAuthTokensPage(r.Context(), identity.User.ID, page.Limit, page.Offset)
 	if err != nil {
 		d.logger.Error().Err(err).Msg("auth tokens: list")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, tokens, http.StatusOK)
+	total, err := d.store.AuthTokenCount(r.Context(), identity.User.ID)
+	if err != nil {
+		d.logger.Error().Err(err).Msg("auth tokens: count")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, pagination.NewPage(tokens, total, page), http.StatusOK)
 }
 
 func (d *Daemon) handleAuthTokensCreate(w http.ResponseWriter, r *http.Request) {
