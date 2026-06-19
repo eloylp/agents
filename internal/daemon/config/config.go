@@ -439,6 +439,9 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 		idx := ensureWorkspace(a.WorkspaceID)
 		a.WorkspaceID = ""
 		a.PromptID = ""
+		if a.PromptScope == fleet.GlobalCatalogScope {
+			a.PromptScope = ""
+		}
 		workspaces[idx].Agents = append(workspaces[idx].Agents, a)
 	}
 	for _, r := range cfg.Repos {
