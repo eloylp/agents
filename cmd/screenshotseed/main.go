@@ -92,7 +92,7 @@ func run() error {
 
 	// Seed observability + an in-flight run AFTER daemon.New so we use
 	// the same observe.Store the HTTP handlers will read from.
-	seedActivity(d.Observe(), st)
+	seedActivity(d.Observe(), st, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -311,7 +311,7 @@ func buildFixtureConfig() *config.Config {
 // directly into the observe + queue tables so the relevant pages have
 // visible data. Also registers one ActiveRun in the in-memory registry
 // so the runners page shows a live row with a working ▶ Live button.
-func seedActivity(obs *observe.Store, st *store.Store) {
+func seedActivity(obs *observe.Store, st *store.Store, logger zerolog.Logger) {
 	now := time.Now()
 
 	// Recent events firehose
