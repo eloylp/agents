@@ -6,7 +6,7 @@ import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
-import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Prompt {
   id?: string
@@ -69,7 +69,7 @@ export default function PromptsPage() {
 
   useEffect(() => {
     load()
-    fetch('/workspaces', { cache: 'no-store' })
+    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
@@ -80,7 +80,7 @@ export default function PromptsPage() {
       setRepos([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(selected.workspace_id)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(selected.workspace_id)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setRepos([]))
@@ -91,7 +91,7 @@ export default function PromptsPage() {
       setFilterRepos([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))

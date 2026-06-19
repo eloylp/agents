@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { itemsFromResponse } from './pagination'
+import { itemsFromResponse, selectorURL } from './pagination'
 
 export interface Workspace {
   id: string
@@ -70,7 +70,7 @@ export function useSelectedWorkspace() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/workspaces', { cache: 'no-store' })
+    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => {
         if (cancelled) return

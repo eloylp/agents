@@ -23,7 +23,7 @@ describe('<SkillsPage />', () => {
   it('keeps long stable skill ids in tooltips instead of row labels', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/skills') {
+      if (url === '/skills?limit=50&offset=0') {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
@@ -44,7 +44,7 @@ describe('<SkillsPage />', () => {
           ]),
         } as Response)
       }
-      if (url === '/workspaces') {
+      if (url === '/workspaces?limit=500&offset=0') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'default', name: 'Default' }]) } as Response)
       }
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
@@ -54,6 +54,7 @@ describe('<SkillsPage />', () => {
     render(<SkillsPage />)
 
     expect(await screen.findByText('go api boundaries')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/workspaces?limit=500&offset=0', { cache: 'no-store' })
     expect(screen.getByText('testing')).toBeInTheDocument()
     expect(screen.queryByText('go-api · go api boundaries')).not.toBeInTheDocument()
     expect(screen.getByText('go api boundaries')).toHaveAttribute('title', 'go api boundaries · go-api')

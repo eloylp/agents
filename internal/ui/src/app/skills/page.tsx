@@ -5,7 +5,7 @@ import Modal from '@/components/Modal'
 import PaginationControls from '@/components/PaginationControls'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
-import { itemsFromResponse, pageFromResponse } from '@/lib/pagination'
+import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
   id?: string
@@ -83,7 +83,7 @@ function SkillForm({
       setRepoOptions([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setRepoOptions(itemsFromResponse<Repo>(data)))
       .catch(() => setRepoOptions([]))
@@ -227,7 +227,7 @@ export default function SkillsPage() {
 
   useEffect(() => {
     load()
-    fetch('/workspaces', { cache: 'no-store' })
+    fetch(selectorURL('/workspaces'), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
@@ -238,7 +238,7 @@ export default function SkillsPage() {
       setFilterRepos([])
       return
     }
-    fetch(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`, { cache: 'no-store' })
+    fetch(selectorURL(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then((data) => setFilterRepos(itemsFromResponse<Repo>(data)))
       .catch(() => setFilterRepos([]))
