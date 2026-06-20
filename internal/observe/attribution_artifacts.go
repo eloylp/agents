@@ -2,7 +2,6 @@ package observe
 
 import (
 	"encoding/json"
-	"log"
 
 	"github.com/eloylp/agents/internal/fleet"
 	storepkg "github.com/eloylp/agents/internal/store"
@@ -40,11 +39,26 @@ func (s *Store) CaptureArtifact(in RunAttributionArtifactInput, body, commitMess
 	for _, candidate := range metas {
 		meta := candidate.meta
 		if err := workflow.VerifyPublicRunAttribution(meta, s.attributionVerifier.SigningSecret, s.attributionVerifier.InstanceID); err != nil {
-			log.Printf("observe: artifact capture: ignore %s: %v", candidate.source, err)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", workspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("source_type", candidate.source).
+				Str("diagnostic", err.Error()).
+				Msg("ignore run attribution artifact metadata")
 			continue
 		}
 		if err := attributionMetadataMatchesQuery(meta, workspaceID, q); err != nil {
-			log.Printf("observe: artifact capture: ignore %s: %v", candidate.source, err)
+			s.logger.Warn().
+				Err(err).
+				Str("workspace", workspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", q.IssueOrPRNumber).
+				Str("span_id", meta.SpanID).
+				Str("source_type", candidate.source).
+				Str("diagnostic", err.Error()).
+				Msg("ignore run attribution artifact metadata")
 			continue
 		}
 		metaJSON := ""
@@ -56,7 +70,19 @@ func (s *Store) CaptureArtifact(in RunAttributionArtifactInput, body, commitMess
 		artifact.SpanID = meta.SpanID
 		artifact.MetadataJSON = metaJSON
 		if err := s.store.UpsertRunAttributionArtifact(artifact); err != nil {
-			log.Printf("observe: artifact capture: upsert %s span=%s: %v", candidate.source, meta.SpanID, err)
+			s.logger.Error().Err(err).
+				Str("workspace", artifact.WorkspaceID).
+				Str("repo", q.repoFullName()).
+				Int("number", artifact.IssueOrPRNumber).
+				Str("span_id", meta.SpanID).
+				Str("source_type", candidate.source).
+				Str("delivery_id", artifact.GitHubDeliveryID).
+				Str("artifact_source_type", artifact.SourceType).
+				Int64("github_comment_id", artifact.GitHubCommentID).
+				Int64("github_review_id", artifact.GitHubReviewID).
+				Int64("github_review_comment_id", artifact.GitHubReviewCommentID).
+				Str("operation", "upsert_run_attribution_artifact").
+				Msg("observe write failed")
 		}
 	}
 }

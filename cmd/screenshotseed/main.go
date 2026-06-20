@@ -16,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -93,7 +92,7 @@ func run() error {
 
 	// Seed observability + an in-flight run AFTER daemon.New so we use
 	// the same observe.Store the HTTP handlers will read from.
-	seedActivity(d.Observe(), st)
+	seedActivity(d.Observe(), st, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -312,7 +311,7 @@ func buildFixtureConfig() *config.Config {
 // directly into the observe + queue tables so the relevant pages have
 // visible data. Also registers one ActiveRun in the in-memory registry
 // so the runners page shows a live row with a working ▶ Live button.
-func seedActivity(obs *observe.Store, st *store.Store) {
+func seedActivity(obs *observe.Store, st *store.Store, logger zerolog.Logger) {
 	now := time.Now()
 
 	// Recent events firehose
@@ -406,7 +405,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		"# refactorer notes, acme/widgets\n\n## Recent sweeps\n\n- 2026-04-29: removed three unused helpers in `internal/checkout/`. PR #129 merged.\n- 2026-04-22: migrated 12 call sites off the deprecated `db.Tx{}` shape. PR #117 merged.\n\n## Known follow-ups\n\n- The `pricing.Strategy` interface has only one impl. Worth collapsing; not urgent.\n- `internal/audit/` has a `// TODO(coder): index by tenant` comment that's been there for two months.\n\n## Style decisions I've absorbed\n\n- Repo prefers concrete types over interfaces unless 2+ impls exist.\n- Tests next to code, not in `_test/` subdirs.\n- Error wrapping uses `fmt.Errorf(\"x: %w\", err)`, never `errors.Wrap`.\n",
 		now.UTC().Format(time.RFC3339Nano),
 	); err != nil {
-		log.Println("seed memory:", err)
+		logger.Warn().Err(err).Msg("seed memory")
 	}
 
 	// Event_queue rows so the runners view has both completed and
@@ -424,7 +423,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		blob, _ := json.Marshal(q.ev)
 		id, err := st.EnqueueEvent(string(blob))
 		if err != nil {
-			log.Println("seed queue:", err)
+			logger.Warn().Err(err).Msg("seed queue")
 			continue
 		}
 		if q.started != nil {
