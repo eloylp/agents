@@ -138,48 +138,7 @@ func replaceWorkspaceGuardrailsTx(tx *sql.Tx, workspaceID string, refs []fleet.W
 func resolveWorkspaceGuardrailRef(q querier, workspaceID, ref string) (string, error) {
 	ref = fleet.NormalizeGuardrailName(ref)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
-	rows, err := q.Query(`
-		SELECT id, ref, name
-		FROM guardrails
-		WHERE (id = ? OR ref = ? OR name = ?)
-		  AND (workspace_id IS NULL OR workspace_id = ?)
-		ORDER BY
-			CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END,
-			CASE WHEN workspace_id IS NULL THEN 0 ELSE 1 END`,
-		ref, ref, ref, workspaceID, ref, ref,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	type match struct {
-		id    string
-		ref   string
-		name  string
-		exact bool
-	}
-	var matches []match
-	for rows.Next() {
-		var m match
-		if err := rows.Scan(&m.id, &m.ref, &m.name); err != nil {
-			return "", err
-		}
-		m.exact = m.id == ref || m.ref == ref
-		matches = append(matches, m)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	if len(matches) == 0 {
-		return "", sql.ErrNoRows
-	}
-	if matches[0].exact {
-		return matches[0].id, nil
-	}
-	if len(matches) > 1 {
-		return "", fmt.Errorf("ambiguous guardrail %q in workspace %q; use guardrail id", ref, workspaceID)
-	}
-	return matches[0].id, nil
+	return resolveVisibleCatalogRef(q, "guardrails", "guardrail", "guardrail id", ref, workspaceID, "", catalogScopeWorkspace)
 }
 
 func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.Repo) error {
