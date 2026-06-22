@@ -81,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed runner container cleanup by enabling Docker auto-remove for ephemeral
   runner containers while keeping forced cleanup as a fallback, preventing
   stopped runner containers from accumulating Docker writable-layer storage.
+- Fixed the runner image release build after Alpine refreshed the
+  `ca-certificates` package within the pinned runner base image.
 - Fixed frontend table ergonomics, improvement modal layering, compact skill
   labels, 24-hour date display, stale proposal visibility, and confusing
   duplicate proposal actions.
