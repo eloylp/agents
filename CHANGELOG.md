@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-22
+
+### Added
+
+- Self-improvement workflow for the intelligence catalog. Maintainers can leave
+  `/agents improve` feedback on GitHub issues, PRs, and review comments; the
+  daemon ingests the feedback, resolves surrounding attribution context, invokes
+  the internal improvement analyst, and surfaces editable proposal bundles in
+  the dashboard.
+- Proposal bundles for catalog changes, including multi-item updates across
+  prompts, skills, and guardrails. Bundle items can update existing assets,
+  create new assets, link newly created skills to inferred agents, or resolve
+  to an existing asset when the analyst detects duplication.
+- A clarification loop for ambiguous improvement feedback. Proposals can move
+  into `needs_user_input`, accept maintainer clarification, re-run analysis, and
+  preserve the reviewed state without requiring a new GitHub comment.
+- Run attribution metadata and signed attribution trails. Agent-authored GitHub
+  artifacts now carry verifiable metadata that links feedback back to the
+  workspace, repo, span, agent, prompt version, skill versions, guardrail
+  versions, branch, and commit context that produced the original output.
+- GitHub artifact attribution storage for issue comments, PR reviews, review
+  comments, and commit/push artifacts, so diff-level maintainer feedback can be
+  resolved through the surrounding PR/commit ownership rather than expecting the
+  human comment itself to contain metadata.
+- Versioned prompt, skill, and guardrail history with dashboard timelines,
+  GitHub-style diffs, rollback-to-current editing, and REST/MCP parity for
+  catalog version references.
+- A dedicated Workspaces dashboard section and improved intelligence catalog
+  navigation, including guardrails under Intelligence.
+- Dashboard pagination for CRUD-heavy tables, reusable table pagination
+  controls, and a self-improvement demo video linked from the README gallery.
+
+### Changed
+
+- Catalog version pinning and draft publishing were removed from the live
+  intelligence model. Agents now resolve the current published catalog content
+  on each run, while history remains for audit, diff, and rollback workflows.
+- Fleet export now treats catalog history as non-portable audit data and exports
+  only the current/latest asset bodies and metadata.
+- Scoped prompt and skill resolution now consistently prefers exact stable refs
+  before display names, and display-name matches resolve by visibility from
+  repo to workspace to global. Guardrails remain workspace/global scoped.
+- The self-improvement dashboard was simplified around proposals and history:
+  proposal rows show stable numeric identifiers, refresh automatically, use
+  focused inspect/clarify modals, and move finalized proposals into read-only
+  history.
+- The improvement analyst runs through the normal runner pipeline, so internal
+  analyst runs appear in runners/traces/live transcript surfaces like regular
+  agent runs.
+- Proposal bundle business rules moved out of the store layer into the
+  self-improvement/service boundary; the store remains responsible for
+  persistence and transaction ownership.
+- Modal handling and frontend API route usage were centralized to reduce UI
+  drift across intelligence, improvements, runners, and configuration screens.
+
+### Fixed
+
+- Fixed scoped catalog collisions during agent runs, export/import, version
+  listing, and self-improvement target resolution.
+- Fixed stale self-improvement attribution context by providing both the
+  originally targeted version and the current catalog version to the analyst
+  when a target changed after feedback was collected.
+- Fixed proposal bundle state-machine gaps around stale targets, failed
+  analysis retry, one open proposal per catalog item, final read-only history,
+  single-item rejection, item decisions, linked-existing decisions, guardrail
+  metadata edits, and repo-scope validation.
+- Fixed live runner transcript access and initial SSE flushing so traces become
+  visible promptly for both regular agents and the internal improvement analyst.
+- Fixed malformed feedback migration cases, review-comment identity handling,
+  attribution artifact timestamp scanning, SQLite timestamp normalization, and
+  event-queue cleanup cutoff handling.
+- Fixed runner container cleanup by enabling Docker auto-remove for ephemeral
+  runner containers while keeping forced cleanup as a fallback, preventing
+  stopped runner containers from accumulating Docker writable-layer storage.
+- Fixed frontend table ergonomics, improvement modal layering, compact skill
+  labels, 24-hour date display, stale proposal visibility, and confusing
+  duplicate proposal actions.
+
+### Removed
+
+- Removed the legacy `#ai_improvement` trigger in favor of `/agents improve`.
+- Removed catalog draft state and historical-version pinning from runtime
+  catalog selection.
+- Removed self-improvement assistant memory from v1 to keep recommendation
+  behavior governed by the analyst prompt and explicit maintainer feedback.
+
 ## [0.3.0] - 2026-05-22
 
 ### Added
