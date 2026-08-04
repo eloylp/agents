@@ -234,6 +234,8 @@ func diagnoseToolsInRuntime(ctx context.Context, runner runtimeexec.Runner, sett
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "go", "go", []string{"version"}),
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "rustc", "rustc", []string{"--version"}),
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "cargo", "cargo", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "dart", "dart", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "flutter", "flutter", []string{"--version"}),
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "node", "node", []string{"--version"}),
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "npm", "npm", []string{"--version"}),
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "typescript", "tsc", []string{"--version"}),
@@ -797,7 +799,7 @@ func unavailableBackendStatuses(existing map[string]fleet.Backend, detail string
 }
 
 func unavailableToolStatuses(detail string) []ToolStatus {
-	tools := []string{"cargo", "git", "github_cli", "go", "node", "npm", "rustc", "typescript"}
+	tools := []string{"cargo", "dart", "flutter", "git", "github_cli", "go", "node", "npm", "rustc", "typescript"}
 	out := make([]ToolStatus, 0, len(tools))
 	for _, name := range tools {
 		command := name
