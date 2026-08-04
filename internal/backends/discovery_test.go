@@ -153,6 +153,83 @@ func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
 	}
 }
 
+func TestDiagnoseToolsInRuntimeIncludesFlutterAndDart(t *testing.T) {
+	setGitHubTokenFallbackEnv(t)
+
+	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
+		script := strings.Join(spec.Command, " ")
+		switch {
+		case strings.Contains(script, "command -v 'cargo'"):
+			return 0, "/usr/local/cargo/bin/cargo\n", "", nil
+		case strings.Contains(script, "'/usr/local/cargo/bin/cargo' '--version'"):
+			return 0, "cargo 1.91.1\n", "", nil
+		case strings.Contains(script, "command -v 'dart'"):
+			return 0, "/opt/flutter/bin/dart\n", "", nil
+		case strings.Contains(script, "'/opt/flutter/bin/dart' '--version'"):
+			return 0, "Dart SDK version: 3.10.3\n", "", nil
+		case strings.Contains(script, "command -v 'flutter'"):
+			return 0, "/opt/flutter/bin/flutter\n", "", nil
+		case strings.Contains(script, "'/opt/flutter/bin/flutter' '--version'"):
+			return 0, "Flutter 3.38.4\n", "", nil
+		case strings.Contains(script, "command -v 'gh'"):
+			return 0, "/usr/bin/gh\n", "", nil
+		case strings.Contains(script, "'/usr/bin/gh' '--version'"):
+			return 0, "gh version 2.71.0\n", "", nil
+		case strings.Contains(script, "'/usr/bin/gh' 'auth' 'status' '--hostname' 'github.com'"):
+			return 0, "Logged in to github.com\n", "", nil
+		case strings.Contains(script, "command -v 'git'"):
+			return 0, "/usr/bin/git\n", "", nil
+		case strings.Contains(script, "'/usr/bin/git' '--version'"):
+			return 0, "git version 2.52.0\n", "", nil
+		case strings.Contains(script, "command -v 'go'"):
+			return 0, "/usr/local/go/bin/go\n", "", nil
+		case strings.Contains(script, "'/usr/local/go/bin/go' 'version'"):
+			return 0, "go version go1.25.12 linux/amd64\n", "", nil
+		case strings.Contains(script, "command -v 'node'"):
+			return 0, "/usr/local/bin/node\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/node' '--version'"):
+			return 0, "v24.11.1\n", "", nil
+		case strings.Contains(script, "command -v 'npm'"):
+			return 0, "/usr/local/bin/npm\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/npm' '--version'"):
+			return 0, "11.6.2\n", "", nil
+		case strings.Contains(script, "command -v 'rustc'"):
+			return 0, "/usr/local/cargo/bin/rustc\n", "", nil
+		case strings.Contains(script, "'/usr/local/cargo/bin/rustc' '--version'"):
+			return 0, "rustc 1.91.1\n", "", nil
+		case strings.Contains(script, "command -v 'tsc'"):
+			return 0, "/usr/local/bin/tsc\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/tsc' '--version'"):
+			return 0, "Version 6.0.3\n", "", nil
+		default:
+			t.Fatalf("unexpected runner command: %v", spec.Command)
+			return 1, "", "", nil
+		}
+	}}
+
+	tools := diagnoseToolsInRuntime(context.Background(), runner, fleet.RuntimeSettings{RunnerImage: "runner:test"})
+	byName := make(map[string]ToolStatus, len(tools))
+	for _, tool := range tools {
+		byName[tool.Name] = tool
+	}
+
+	for _, name := range []string{"dart", "flutter"} {
+		status, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s status missing from diagnostics: %+v", name, tools)
+		}
+		if !status.Detected || !status.Healthy {
+			t.Fatalf("%s status = %+v, want detected and healthy", name, status)
+		}
+	}
+	if byName["dart"].Command != "/opt/flutter/bin/dart" {
+		t.Fatalf("dart command = %q, want /opt/flutter/bin/dart", byName["dart"].Command)
+	}
+	if byName["flutter"].Command != "/opt/flutter/bin/flutter" {
+		t.Fatalf("flutter command = %q, want /opt/flutter/bin/flutter", byName["flutter"].Command)
+	}
+}
+
 func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
 	setGitHubTokenFallbackEnv(t)
 

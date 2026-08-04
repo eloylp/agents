@@ -62,7 +62,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daemon image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The Dockerfile also builds `ghcr.io/eloylp/agents-runner`, which contains Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and runner tools. The daemon image is the minimal control plane. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daemon image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The Dockerfile also builds `ghcr.io/eloylp/agents-runner`, which contains Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, Flutter/Dart, and runner tools. The daemon image is the minimal control plane. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 - `/var/run/docker.sock` → `/var/run/docker.sock` so the daemon can create ephemeral runner containers. This is root-equivalent access to the Docker host and must be treated as a serious deployment boundary.
 

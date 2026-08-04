@@ -204,6 +204,8 @@ const healthBadgeStyle = (ok: boolean | undefined): React.CSSProperties => ({
 
 const toolDisplayName = (name: string) => {
   switch (name) {
+    case 'dart': return 'Dart'
+    case 'flutter': return 'Flutter'
     case 'github_cli': return 'GitHub CLI'
     case 'rustc': return 'Rust'
     case 'typescript': return 'TypeScript'
