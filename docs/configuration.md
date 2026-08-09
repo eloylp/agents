@@ -139,14 +139,16 @@ backends:
 
 ```yaml
 prompts:
-  - name: coder
+  - id: coder
+    name: coder
     description: Implements approved work
     content: |
       Implement the requested change end-to-end.
       Run focused tests before opening a pull request.
 ```
 
-Prompts are reusable assets. Empty `workspace_id` and `repo` make a prompt
+Prompts are reusable assets. `id` is the stable public prompt ref and is
+required for new prompt rows. Empty `workspace_id` and `repo` make a prompt
 globally visible; `workspace_id` with empty `repo` makes it visible only inside
 that workspace; `workspace_id` plus `repo` makes it visible only to repo-scoped
 agents for that repo. Agents use stable public `prompt_id` refs. Human-facing
@@ -176,7 +178,8 @@ skills:
       Avoid combined method-switch handlers; method policy should stay explicit and testable at the route boundary.
 ```
 
-Skills are keyed by stable public ref. For compatibility, agents may reference a visible
+Skills are keyed by explicit stable public ref. New skill rows require a
+non-empty map key. For compatibility, agents may reference a visible
 skill by display `name` when that name is unambiguous; import stores the stable
 ref so later duplicate names across global, workspace, and repo scopes remain
 deterministic. SQLite stores opaque internal IDs behind those refs for FK
@@ -347,7 +350,8 @@ guardrails:
     position: 0
 
   # Operator-added guardrails: any policy block you want prepended to every run.
-  - name: code-style
+  - id: code-style
+    name: code-style
     description: "Project coding conventions."
     content: |
       Always run `gofmt` before committing. Prefer `any` over `interface{}` in new
@@ -364,6 +368,7 @@ guardrail refs; imports may use a visible display name when it is unambiguous.
 
 Rules:
 
+- `id` is the stable public guardrail ref and is required for new guardrail rows. Omitting `id` is accepted only when importing over an existing same-scope/name row, so historical refs are preserved.
 - `name` is a stable identifier, normalised to lowercase + dash-joined.
 - `content` is the text the agent sees, prepended verbatim to the System portion of its prompt.
 - `enabled` on the catalog record stores the default state copied into new workspace references. The workspace reference's `enabled` flag controls whether that workspace renders it.

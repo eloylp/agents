@@ -157,8 +157,8 @@ func newTestEngine(t *testing.T, cfgMutator func(*config.Config)) (*Engine, *stu
 			{Name: "sec-reviewer", Backend: "claude", Skills: []string{"security"}, PromptRef: "sec-reviewer"},
 		},
 		Prompts: []fleet.Prompt{
-			{Name: "arch-reviewer", Content: "Review architecture."},
-			{Name: "sec-reviewer", Content: "Review security."},
+			{ID: "arch-reviewer", Name: "arch-reviewer", Content: "Review architecture."},
+			{ID: "sec-reviewer", Name: "sec-reviewer", Content: "Review security."},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -231,7 +231,7 @@ func TestHandleEventResolvesCatalogVersionsBeforeEachRun(t *testing.T) {
 			"architect": {Prompt: "skill v1"},
 		},
 		Guardrails: []fleet.Guardrail{{
-			Name: "policy", Content: "guardrail v1", Enabled: true, Position: 10,
+			ID: "policy", Name: "policy", Content: "guardrail v1", Enabled: true, Position: 10,
 		}},
 		Agents: []fleet.Agent{{
 			Name: "coder", Backend: "claude", PromptRef: "coder", Skills: []string{"architect"}, Description: "writes code",
@@ -783,6 +783,7 @@ func TestEnginePromptUsesWorkspaceGuardrailsAndBoundary(t *testing.T) {
 		c.Repos = append(c.Repos, fleet.Repo{Name: "owner/other", Enabled: true})
 	})
 	if err := e.store.UpsertGuardrail(fleet.Guardrail{
+		ID:       "workspace-only",
 		Name:     "workspace-only",
 		Content:  "STATIC_WORKSPACE_GUARDRAIL",
 		Enabled:  false,

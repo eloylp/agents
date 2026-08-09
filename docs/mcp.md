@@ -46,12 +46,12 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
 | `list_skills` | List all skill catalog entries with prompt content, including global, workspace-scoped, and repo-scoped skills. |
 | `get_skill` | Fetch one skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
-| `create_skill` | Create or update a skill catalog entry. |
+| `create_skill` | Create or update a skill catalog entry. New skills require an explicit stable public `id`; omitting `id` is accepted only when updating an existing same-scope/name skill. |
 | `update_skill` | Partially update a skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `delete_skill` | Delete a skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `list_prompts` | List all prompt catalog entries, including global, workspace-scoped, and repo-scoped prompts. |
 | `get_prompt` | Fetch one prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
-| `create_prompt` | Create or update a prompt catalog entry. |
+| `create_prompt` | Create or update a prompt catalog entry. New prompts require an explicit stable public `id`; omitting `id` is accepted only when updating an existing same-scope/name prompt. |
 | `update_prompt` | Partially update a prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `delete_prompt` | Delete a prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `list_workspaces` | List all workspaces. |

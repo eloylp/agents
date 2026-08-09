@@ -31,11 +31,7 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 			}
 		}
 		if g.ID == "" {
-			id, err := derivedCatalogID("guardrail_", g.WorkspaceID, "", g.Name)
-			if err != nil {
-				return fmt.Errorf("store import: guardrail %q: %w", g.Name, err)
-			}
-			g.ID = id
+			return fmt.Errorf("store import: guardrail %q requires explicit id", g.Name)
 		}
 		if g.Name == "" || g.Content == "" {
 			return fmt.Errorf("store import: guardrail requires name and content (got name=%q)", g.Name)

@@ -212,7 +212,7 @@ func TestRecommendationLifecycleOwnedByService(t *testing.T) {
 func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "bundle-prompt", Description: "desc", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "bundle-prompt", Name: "bundle-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		t.Fatalf("resolved status = %q, want resolved", resolved.Status)
 	}
 
-	discardPrompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "discard-bundle-prompt", Description: "desc", Content: "discard v1"})
+	discardPrompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "discard-bundle-prompt", Name: "discard-bundle-prompt", Description: "desc", Content: "discard v1"})
 	if err != nil {
 		t.Fatalf("seed discard prompt: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 		t.Fatal("UpdateRecommendationStatus after discard succeeded, want validation error")
 	}
 
-	rejectPrompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "reject-single-item-prompt", Description: "desc", Content: "reject v1"})
+	rejectPrompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "reject-single-item-prompt", Name: "reject-single-item-prompt", Description: "desc", Content: "reject v1"})
 	if err != nil {
 		t.Fatalf("seed reject prompt: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestProposalBundleBehaviorOwnedByService(t *testing.T) {
 func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "changed-source-prompt", Description: "desc", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "changed-source-prompt", Name: "changed-source-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *tes
 		t.Fatal("PublishProposalBundle after source recommendation changed succeeded, want validation error")
 	}
 
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "existing-guardrail", Description: "desc", Content: "body", Enabled: true, Position: 10}); err != nil {
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{ID: "existing-guardrail", Name: "existing-guardrail", Description: "desc", Content: "body", Enabled: true, Position: 10}); err != nil {
 		t.Fatalf("seed guardrail: %v", err)
 	}
 	guardFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683503)
@@ -483,7 +483,7 @@ func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *tes
 func TestProposalBundleNoopEditDoesNotRecordEditEvent(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "noop-bundle-prompt", Description: "desc", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "noop-bundle-prompt", Name: "noop-bundle-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestProposalBundleNoopEditDoesNotRecordEditEvent(t *testing.T) {
 func TestRecommendedPatchOnlyRecommendationNeedsInputInsteadOfDeadEnd(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "patch-only-prompt", Description: "desc", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "patch-only-prompt", Name: "patch-only-prompt", Description: "desc", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}

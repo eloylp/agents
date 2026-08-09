@@ -518,9 +518,6 @@ func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := req.ID
-	if id == "" && req.WorkspaceID == "" && req.Repo == "" {
-		id = req.Name
-	}
 	name, sk, err := h.UpsertSkill(id, fleet.Skill{ID: id, WorkspaceID: req.WorkspaceID, Repo: req.Repo, Name: req.Name, Prompt: req.Prompt})
 	if err != nil {
 		h.writeErr(w, err, "skill upsert or cron reload")
@@ -611,8 +608,8 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 
 // UpsertSkill writes a single skill through the service layer. Returns the
 // canonical stable id and Skill that were persisted.
-// Empty id is accepted when the Skill carries a name, allowing scoped skill
-// creates to derive the same stable id shape as imports.
+// Empty id is accepted only when the scoped name already resolves to an
+// existing skill, preserving historical refs on updates.
 func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
 	if err := h.service.UpsertSkill(name, sk); err != nil {
 		return "", fleet.Skill{}, err

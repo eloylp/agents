@@ -218,11 +218,7 @@ func UpsertSkillTx(tx *sql.Tx, name string, s fleet.Skill) error {
 		if err == nil {
 			name = existingRef
 		} else if errors.Is(err, sql.ErrNoRows) {
-			id, derr := derivedCatalogID("skill_", s.WorkspaceID, s.Repo, s.Name)
-			if derr != nil {
-				return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, derr)}
-			}
-			name = id
+			return &ErrValidation{Msg: fmt.Sprintf("store: skill %q requires explicit id", s.Name)}
 		} else {
 			return fmt.Errorf("store: upsert skill %q: read existing: %w", s.Name, err)
 		}

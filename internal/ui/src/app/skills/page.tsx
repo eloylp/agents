@@ -100,6 +100,17 @@ function SkillForm({
           </div>
         </div>
       )}
+      {isNew && (
+        <div>
+          <label style={labelStyle}>ID *</label>
+          <input
+            style={inputStyle}
+            value={form.id || ''}
+            onChange={e => setForm(f => ({ ...f, id: e.target.value }))}
+            placeholder="code-review"
+          />
+        </div>
+      )}
       <div>
         <label style={labelStyle}>Name *</label>
         <input
@@ -184,7 +195,7 @@ function SkillForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
+          disabled={saving || (isNew && !form.id?.trim()) || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
@@ -266,6 +277,7 @@ export default function SkillsPage() {
         method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isNew ? {
+          id: form.id || '',
           name: form.name,
           workspace_id: form.workspace_id || '',
           repo: form.repo || '',
