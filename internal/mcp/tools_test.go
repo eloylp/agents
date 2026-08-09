@@ -422,6 +422,13 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 		item := raw.(map[string]any)
 		if item["operation"] == "update_existing" {
 			promptItemID = item["id"].(string)
+			baseVersion, ok := item["base_version"].(map[string]any)
+			if !ok {
+				t.Fatalf("MCP prompt item base_version = %#v, want object", item["base_version"])
+			}
+			if baseVersion["asset_id"] != prompt.ID {
+				t.Fatalf("MCP prompt base_version.asset_id = %q, want public ref %q", baseVersion["asset_id"], prompt.ID)
+			}
 		} else {
 			createItemID = item["id"].(string)
 		}

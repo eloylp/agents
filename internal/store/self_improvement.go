@@ -786,29 +786,32 @@ func readSelfImprovementCatalogVersion(q querier, targetType, versionID string) 
 	switch targetType {
 	case "prompt":
 		err = q.QueryRow(`
-			SELECT id, prompt_id, version_number, state, description, content, source_type, source_ref, author, changelog,
-			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
-			FROM prompt_versions
-			WHERE id=?`, versionID).
+			SELECT pv.id, p.ref, pv.version_number, pv.state, pv.description, pv.content, pv.source_type, pv.source_ref,
+			       pv.author, pv.changelog, COALESCE(pv.base_version_id, ''), pv.body_hash, pv.created_at, COALESCE(pv.published_at, '')
+			FROM prompt_versions pv
+			JOIN prompts p ON p.id = pv.prompt_id
+			WHERE pv.id=?`, versionID).
 			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
 				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
 				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
 	case "skill":
 		err = q.QueryRow(`
-			SELECT id, skill_id, version_number, state, prompt, source_type, source_ref, author, changelog,
-			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
-			FROM skill_versions
-			WHERE id=?`, versionID).
+			SELECT sv.id, s.ref, sv.version_number, sv.state, sv.prompt, sv.source_type, sv.source_ref, sv.author, sv.changelog,
+			       COALESCE(sv.base_version_id, ''), sv.body_hash, sv.created_at, COALESCE(sv.published_at, '')
+			FROM skill_versions sv
+			JOIN skills s ON s.id = sv.skill_id
+			WHERE sv.id=?`, versionID).
 			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Prompt,
 				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
 				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
 	case "guardrail":
 		var enabled int
 		err = q.QueryRow(`
-			SELECT id, guardrail_id, version_number, state, description, content, enabled, position, source_type, source_ref,
-			       author, changelog, COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
-			FROM guardrail_versions
-			WHERE id=?`, versionID).
+			SELECT gv.id, g.ref, gv.version_number, gv.state, gv.description, gv.content, gv.enabled, gv.position, gv.source_type, gv.source_ref,
+			       gv.author, gv.changelog, COALESCE(gv.base_version_id, ''), gv.body_hash, gv.created_at, COALESCE(gv.published_at, '')
+			FROM guardrail_versions gv
+			JOIN guardrails g ON g.id = gv.guardrail_id
+			WHERE gv.id=?`, versionID).
 			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
 				&enabled, &version.Position, &version.SourceType, &version.SourceRef,
 				&version.Author, &version.Changelog, &version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
