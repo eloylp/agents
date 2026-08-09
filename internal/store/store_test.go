@@ -956,6 +956,321 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 	}
 }
 
+func TestCatalogAssetIntegerIDMigrationPreservesDependents(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "agents.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE workspaces (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			runner_image TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE backends (
+			name TEXT PRIMARY KEY,
+			command TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			healthy INTEGER NOT NULL DEFAULT 0,
+			health_detail TEXT NOT NULL DEFAULT '',
+			local_model_url TEXT NOT NULL DEFAULT '',
+			timeout_seconds INTEGER NOT NULL DEFAULT 600,
+			max_prompt_chars INTEGER NOT NULL DEFAULT 12000,
+			redaction_salt_env TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE repos (
+			workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
+			name TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(workspace_id, name)
+		);
+		CREATE TABLE prompts (
+			id TEXT PRIMARY KEY,
+			ref TEXT NOT NULL UNIQUE,
+			workspace_id TEXT DEFAULT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			current_version_id TEXT DEFAULT NULL
+		);
+		CREATE TABLE skills (
+			id TEXT PRIMARY KEY,
+			ref TEXT NOT NULL UNIQUE,
+			workspace_id TEXT DEFAULT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			current_version_id TEXT DEFAULT NULL
+		);
+		CREATE TABLE guardrails (
+			id TEXT PRIMARY KEY,
+			ref TEXT NOT NULL UNIQUE,
+			workspace_id TEXT DEFAULT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+			name TEXT NOT NULL,
+			description TEXT,
+			content TEXT NOT NULL,
+			default_content TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 100,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			current_version_id TEXT DEFAULT NULL
+		);
+		CREATE TABLE agents (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id) ON DELETE RESTRICT,
+			name TEXT NOT NULL,
+			backend TEXT NOT NULL REFERENCES backends(name) ON DELETE RESTRICT,
+			model TEXT NOT NULL DEFAULT '',
+			prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE RESTRICT,
+			scope_type TEXT NOT NULL DEFAULT 'workspace',
+			scope_repo TEXT NOT NULL DEFAULT '',
+			allow_prs INTEGER NOT NULL DEFAULT 0,
+			allow_dispatch INTEGER NOT NULL DEFAULT 0,
+			description TEXT NOT NULL DEFAULT '',
+			allow_memory INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(workspace_id, name)
+		);
+		CREATE TABLE bindings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			repo TEXT NOT NULL,
+			agent TEXT NOT NULL,
+			labels TEXT NOT NULL DEFAULT '[]',
+			events TEXT NOT NULL DEFAULT '[]',
+			cron TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1
+		);
+		CREATE TABLE graph_layouts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			node_kind TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			x REAL NOT NULL,
+			y REAL NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE agent_dispatches (
+			source_agent_id TEXT NOT NULL,
+			target_agent_id TEXT NOT NULL,
+			position INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(source_agent_id, target_agent_id)
+		);
+		CREATE TABLE agent_skills (
+			agent_id TEXT NOT NULL,
+			skill_id TEXT NOT NULL,
+			position INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(agent_id, skill_id)
+		);
+		CREATE TABLE workspace_guardrails (
+			workspace_id TEXT NOT NULL,
+			guardrail_name TEXT NOT NULL,
+			position INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(workspace_id, guardrail_name)
+		);
+		CREATE TABLE prompt_versions (
+			id TEXT PRIMARY KEY,
+			prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+			version_number INTEGER NOT NULL,
+			state TEXT NOT NULL DEFAULT 'published',
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			source_type TEXT NOT NULL DEFAULT 'migration',
+			source_ref TEXT NOT NULL DEFAULT '',
+			author TEXT NOT NULL DEFAULT '',
+			changelog TEXT NOT NULL DEFAULT '',
+			base_version_id TEXT DEFAULT NULL,
+			body_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			published_at TEXT DEFAULT NULL,
+			UNIQUE(prompt_id, version_number)
+		);
+		CREATE TABLE skill_versions (
+			id TEXT PRIMARY KEY,
+			skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+			version_number INTEGER NOT NULL,
+			state TEXT NOT NULL DEFAULT 'published',
+			prompt TEXT NOT NULL,
+			source_type TEXT NOT NULL DEFAULT 'migration',
+			source_ref TEXT NOT NULL DEFAULT '',
+			author TEXT NOT NULL DEFAULT '',
+			changelog TEXT NOT NULL DEFAULT '',
+			base_version_id TEXT DEFAULT NULL,
+			body_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			published_at TEXT DEFAULT NULL,
+			UNIQUE(skill_id, version_number)
+		);
+		CREATE TABLE guardrail_versions (
+			id TEXT PRIMARY KEY,
+			guardrail_id TEXT NOT NULL REFERENCES guardrails(id) ON DELETE CASCADE,
+			version_number INTEGER NOT NULL,
+			state TEXT NOT NULL DEFAULT 'published',
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 100,
+			source_type TEXT NOT NULL DEFAULT 'migration',
+			source_ref TEXT NOT NULL DEFAULT '',
+			author TEXT NOT NULL DEFAULT '',
+			changelog TEXT NOT NULL DEFAULT '',
+			base_version_id TEXT DEFAULT NULL,
+			body_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			published_at TEXT DEFAULT NULL,
+			UNIQUE(guardrail_id, version_number)
+		);
+		CREATE TABLE token_budgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT '',
+			agent TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO workspaces(id, name) VALUES('default', 'Default');
+		INSERT INTO backends(name, command) VALUES('claude', 'claude');
+		INSERT INTO repos(workspace_id, name) VALUES('default', 'owner/repo');
+		INSERT INTO prompts(id, ref, name, description, content, current_version_id)
+			VALUES('prompt_internal_old', 'prompt_coder', 'coder', 'desc', 'prompt body', 'promptver_keep');
+		INSERT INTO skills(id, ref, name, prompt, current_version_id)
+			VALUES('skill_internal_old', 'skill_architect', 'architect', 'skill body', 'skillver_keep');
+		INSERT INTO guardrails(id, ref, name, description, content, current_version_id)
+			VALUES('guardrail_internal_old', 'guardrail_security', 'security', 'guard desc', 'guard body', 'guardrailver_keep');
+		INSERT INTO agents(id, workspace_id, name, backend, prompt_id, description)
+			VALUES('agent_coder', 'default', 'coder', 'claude', 'prompt_internal_old', 'codes');
+		INSERT INTO agent_skills(agent_id, skill_id, position)
+			VALUES('agent_coder', 'skill_internal_old', 0);
+		INSERT INTO workspace_guardrails(workspace_id, guardrail_name, position, enabled)
+			VALUES('default', 'guardrail_internal_old', 0, 1);
+		INSERT INTO prompt_versions(id, prompt_id, version_number, state, description, content, body_hash)
+			VALUES('promptver_keep', 'prompt_internal_old', 1, 'published', 'desc', 'prompt body', 'hash');
+		INSERT INTO skill_versions(id, skill_id, version_number, state, prompt, body_hash)
+			VALUES('skillver_keep', 'skill_internal_old', 1, 'published', 'skill body', 'hash');
+		INSERT INTO guardrail_versions(id, guardrail_id, version_number, state, description, content, body_hash)
+			VALUES('guardrailver_keep', 'guardrail_internal_old', 1, 'published', 'guard desc', 'guard body', 'hash');
+	`); err != nil {
+		t.Fatalf("seed pre-060 schema: %v", err)
+	}
+	migrations, err := filepath.Glob("migrations/*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	for _, migration := range migrations {
+		name := filepath.Base(migration)
+		if name == "060_catalog_asset_integer_ids.sql" {
+			continue
+		}
+		if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			t.Fatalf("mark migration %s applied: %v", name, err)
+		}
+	}
+	db.Close()
+
+	db, err = store.Open(path)
+	if err != nil {
+		t.Fatalf("Open after pre-060 seed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, tc := range []struct {
+		table string
+		ref   string
+	}{
+		{"prompts", "prompt_coder"},
+		{"skills", "skill_architect"},
+		{"guardrails", "guardrail_security"},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			var storageType, ref string
+			if err := db.QueryRow("SELECT typeof(id), ref FROM "+tc.table+" WHERE ref=?", tc.ref).Scan(&storageType, &ref); err != nil {
+				t.Fatalf("read %s: %v", tc.table, err)
+			}
+			if storageType != "integer" {
+				t.Fatalf("%s id typeof = %q, want integer", tc.table, storageType)
+			}
+			if ref != tc.ref {
+				t.Fatalf("%s ref = %q, want %q", tc.table, ref, tc.ref)
+			}
+		})
+	}
+
+	var promptRef, skillRef, guardrailRef string
+	if err := db.QueryRow(`
+		SELECT p.ref
+		FROM agents a
+		JOIN prompts p ON p.id = a.prompt_id
+		WHERE a.name = 'coder'`).Scan(&promptRef); err != nil {
+		t.Fatalf("agent prompt ref: %v", err)
+	}
+	if promptRef != "prompt_coder" {
+		t.Fatalf("agent prompt ref = %q, want prompt_coder", promptRef)
+	}
+	if err := db.QueryRow(`
+		SELECT s.ref
+		FROM agent_skills ask
+		JOIN skills s ON s.id = ask.skill_id
+		WHERE ask.agent_id = 'agent_coder'`).Scan(&skillRef); err != nil {
+		t.Fatalf("agent skill ref: %v", err)
+	}
+	if skillRef != "skill_architect" {
+		t.Fatalf("agent skill ref = %q, want skill_architect", skillRef)
+	}
+	if err := db.QueryRow(`
+		SELECT g.ref
+		FROM workspace_guardrails wg
+		JOIN guardrails g ON g.id = wg.guardrail_name
+		WHERE wg.workspace_id = 'default'`).Scan(&guardrailRef); err != nil {
+		t.Fatalf("workspace guardrail ref: %v", err)
+	}
+	if guardrailRef != "guardrail_security" {
+		t.Fatalf("workspace guardrail ref = %q, want guardrail_security", guardrailRef)
+	}
+
+	for _, tc := range []struct {
+		table     string
+		id        string
+		assetType string
+	}{
+		{"prompt_versions", "promptver_keep", "integer"},
+		{"skill_versions", "skillver_keep", "integer"},
+		{"guardrail_versions", "guardrailver_keep", "integer"},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			var versionID, fkType string
+			if err := db.QueryRow("SELECT id, typeof("+strings.TrimSuffix(tc.table, "_versions")+"_id) FROM "+tc.table+" WHERE id=?", tc.id).Scan(&versionID, &fkType); err != nil {
+				t.Fatalf("read %s: %v", tc.table, err)
+			}
+			if versionID != tc.id {
+				t.Fatalf("%s id = %q, want %q", tc.table, versionID, tc.id)
+			}
+			if fkType != tc.assetType {
+				t.Fatalf("%s asset id typeof = %q, want %q", tc.table, fkType, tc.assetType)
+			}
+		})
+	}
+
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: "prompt_new", Name: "new", Content: "new body"}); err != nil {
+		t.Fatalf("UpsertPrompt new: %v", err)
+	}
+	var newIDType string
+	if err := db.QueryRow("SELECT typeof(id) FROM prompts WHERE ref='prompt_new'").Scan(&newIDType); err != nil {
+		t.Fatalf("new prompt id type: %v", err)
+	}
+	if newIDType != "integer" {
+		t.Fatalf("new prompt id typeof = %q, want integer", newIDType)
+	}
+}
+
 func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
 	t.Parallel()
 

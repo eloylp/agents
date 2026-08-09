@@ -37,16 +37,9 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 		if err := validateEntityID(p.ID); err != nil {
 			return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 		}
-		internalID, _, err := resolveCatalogID(tx, "prompts", p.ID)
-		if errors.Is(err, sql.ErrNoRows) {
-			internalID, err = newCatalogInternalID("prompt_")
-		}
-		if err != nil {
-			return fmt.Errorf("store import: prompt %q: resolve id: %w", p.Name, err)
-		}
 		if _, err := tx.Exec(`
-			INSERT INTO prompts (id, ref, workspace_id, repo, name, description, content, updated_at)
-			VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
+			INSERT INTO prompts (ref, workspace_id, repo, name, description, content, updated_at)
+			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
 			ON CONFLICT(ref) DO UPDATE SET
 				workspace_id = excluded.workspace_id,
 				repo = excluded.repo,
@@ -54,12 +47,16 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 				description = excluded.description,
 				content = excluded.content,
 				updated_at = datetime('now')`,
-			internalID, p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
+			p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: prompt name %q is already used by another prompt in that scope", p.Name)
 			}
 			return fmt.Errorf("store import: upsert prompt %s: %w", p.Name, err)
+		}
+		internalID, err := catalogInternalIDByRef(tx, "prompts", p.ID)
+		if err != nil {
+			return fmt.Errorf("store import: prompt %q: read internal id: %w", p.Name, err)
 		}
 		version, err := publishPromptVersionTx(tx, internalID, p.Description, p.Content)
 		if err != nil {
@@ -165,18 +162,12 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 		}
 		p.ID = id
 	}
-	if internalID == "" {
-		internalID, err = newCatalogInternalID("prompt_")
-		if err != nil {
-			return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
-		}
-	}
 	if err := validateEntityID(p.ID); err != nil {
 		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO prompts (id, ref, workspace_id, repo, name, description, content, updated_at)
-		VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
+		INSERT INTO prompts (ref, workspace_id, repo, name, description, content, updated_at)
+		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
 		ON CONFLICT(ref) DO UPDATE SET
 			workspace_id = excluded.workspace_id,
 			repo = excluded.repo,
@@ -184,12 +175,16 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 			description = excluded.description,
 			content = excluded.content,
 			updated_at = datetime('now')`,
-		internalID, p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
+		p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt in that scope", p.Name)}
 		}
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
+	}
+	internalID, err = catalogInternalIDByRef(tx, "prompts", p.ID)
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: read internal id: %w", p.Name, err)
 	}
 	version, err := publishPromptVersionTx(tx, internalID, p.Description, p.Content)
 	if err != nil {

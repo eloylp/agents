@@ -339,6 +339,13 @@ func resolveCatalogID(q querier, table, ref string) (string, string, error) {
 	return id, publicRef, err
 }
 
+func catalogInternalIDByRef(q querier, table, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	var id string
+	err := q.QueryRow("SELECT id FROM "+table+" WHERE ref=?", ref).Scan(&id)
+	return id, err
+}
+
 func newCatalogInternalID(prefix string) (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

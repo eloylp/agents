@@ -20,13 +20,13 @@ func budgetTestDB(t *testing.T) *sql.DB {
 		INSERT INTO backends(name, command, models, healthy, timeout_seconds, max_prompt_chars)
 			VALUES('claude', 'claude', '[]', 1, 600, 12000)
 			ON CONFLICT(name) DO NOTHING;
-		INSERT OR IGNORE INTO prompts(id, ref, name, content) VALUES('prompt_internal_coder', 'prompt_coder', 'coder', 'test prompt');
+		INSERT OR IGNORE INTO prompts(ref, name, content) VALUES('prompt_coder', 'coder', 'test prompt');
 		INSERT OR IGNORE INTO repos(workspace_id, name, enabled) VALUES('default', 'owner/repo', 1);
 		INSERT OR IGNORE INTO repos(workspace_id, name, enabled) VALUES('team-a', 'owner/repo', 1);
 		INSERT OR IGNORE INTO agents(id, workspace_id, name, backend, prompt_id, description)
-			VALUES('agent_default_coder', 'default', 'coder', 'claude', 'prompt_internal_coder', 'coder');
+			VALUES('agent_default_coder', 'default', 'coder', 'claude', (SELECT id FROM prompts WHERE ref='prompt_coder'), 'coder');
 		INSERT OR IGNORE INTO agents(id, workspace_id, name, backend, prompt_id, description)
-			VALUES('agent_team_coder', 'team-a', 'coder', 'claude', 'prompt_internal_coder', 'coder');
+			VALUES('agent_team_coder', 'team-a', 'coder', 'claude', (SELECT id FROM prompts WHERE ref='prompt_coder'), 'coder');
 	`); err != nil {
 		t.Fatalf("seed budget refs: %v", err)
 	}

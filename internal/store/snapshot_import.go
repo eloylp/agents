@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -372,7 +373,20 @@ func reseedSelfImprovementAnalystPromptTx(tx *sql.Tx) error {
 		if err != nil {
 			return fmt.Errorf("store: reseed self-improvement analyst prompt: read %s: %w", name, err)
 		}
-		if _, err := tx.Exec(string(data)); err != nil {
+		sqlText := string(data)
+		if name == "038_self_improvement_recommendations.sql" {
+			sqlText = strings.Replace(sqlText,
+				"INSERT INTO prompts (id, ref, workspace_id, repo, name, description, content, updated_at)",
+				"INSERT INTO prompts (ref, workspace_id, repo, name, description, content, updated_at)",
+				1,
+			)
+			sqlText = strings.Replace(sqlText,
+				"    'prompt_self_improvement_analyst',\n",
+				"",
+				1,
+			)
+		}
+		if _, err := tx.Exec(sqlText); err != nil {
 			return fmt.Errorf("store: reseed self-improvement analyst prompt: apply %s: %w", name, err)
 		}
 	}
