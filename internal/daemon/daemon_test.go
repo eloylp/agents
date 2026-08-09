@@ -171,6 +171,20 @@ func TestImprovementProposalBundleRESTLifecycle(t *testing.T) {
 	if created.ID == "" || created.Status != selfimprovement.ProposalBundleStatusPending || len(created.Items) != 3 {
 		t.Fatalf("automatic bundle = %+v, want pending bundle with three items", created)
 	}
+	createdPromptItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool { return item.AssetType == "prompt" })
+	if createdPromptItem.BaseVersion == nil || createdPromptItem.BaseVersion.AssetID != createdPromptItem.AssetID {
+		t.Fatalf("REST prompt base version asset_id = %+v, want public ref %q", createdPromptItem.BaseVersion, createdPromptItem.AssetID)
+	}
+	createdGuardrailItem := bundleItemBy(t, created, func(item selfimprovement.SelfImprovementBundleItem) bool {
+		return item.AssetType == "guardrail" && item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting
+	})
+	createdGuardrail, err := srv.Store().GetGuardrail(createdGuardrailItem.AssetID)
+	if err != nil {
+		t.Fatalf("read created guardrail: %v", err)
+	}
+	if createdGuardrailItem.BaseVersion == nil || createdGuardrailItem.BaseVersion.AssetID != createdGuardrail.ID {
+		t.Fatalf("REST guardrail base version asset_id = %+v, want public ref %q", createdGuardrailItem.BaseVersion, createdGuardrail.ID)
+	}
 
 	var fetched selfimprovement.SelfImprovementProposalBundle
 	serveJSON(t, srv, http.MethodGet, "/improvements/recommendations/"+recID+"/proposal-bundle", "", http.StatusOK, &fetched)

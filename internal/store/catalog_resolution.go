@@ -170,20 +170,20 @@ func visibleCatalogCandidates(q querier, table, selector, workspaceID, repo stri
 	query := `
 		SELECT id, ref, name, COALESCE(workspace_id, ''), COALESCE(repo, '')
 		FROM ` + table + `
-		WHERE (id = ? OR ref = ? OR name = ?)
+		WHERE (ref = ? OR name = ?)
 		  AND (
 			(workspace_id IS NULL AND repo IS NULL)
 			OR (workspace_id = ? AND repo IS NULL)
 			OR (? <> '' AND workspace_id = ? AND repo = ?)
 		  )`
-	args := []any{selector, selector, selector, workspaceID, repo, workspaceID, repo}
+	args := []any{selector, selector, workspaceID, repo, workspaceID, repo}
 	if mode == catalogScopeWorkspace {
 		query = `
 		SELECT id, ref, name, COALESCE(workspace_id, ''), ''
 		FROM ` + table + `
-		WHERE (id = ? OR ref = ? OR name = ?)
+		WHERE (ref = ? OR name = ?)
 		  AND (workspace_id IS NULL OR workspace_id = ?)`
-		args = []any{selector, selector, selector, workspaceID}
+		args = []any{selector, selector, workspaceID}
 	}
 	return scanCatalogCandidates(q, query, args...)
 }
@@ -192,10 +192,10 @@ func catalogCandidatesInScope(q querier, table, selector, workspaceID, repo stri
 	query := `
 		SELECT id, ref, name, COALESCE(workspace_id, ''), COALESCE(repo, '')
 		FROM ` + table + `
-		WHERE (id = ? OR ref = ? OR name = ?)
+		WHERE (ref = ? OR name = ?)
 		  AND workspace_id ` + catalogScopePredicate(workspaceID) + `
 		  AND repo ` + catalogScopePredicate(repo)
-	args := []any{selector, selector, selector}
+	args := []any{selector, selector}
 	if workspaceID != "" {
 		args = append(args, workspaceID)
 	}
@@ -206,9 +206,9 @@ func catalogCandidatesInScope(q querier, table, selector, workspaceID, repo stri
 		query = `
 		SELECT id, ref, name, COALESCE(workspace_id, ''), ''
 		FROM ` + table + `
-		WHERE (id = ? OR ref = ? OR name = ?)
+		WHERE (ref = ? OR name = ?)
 		  AND workspace_id ` + catalogScopePredicate(workspaceID)
-		args = []any{selector, selector, selector}
+		args = []any{selector, selector}
 		if workspaceID != "" {
 			args = append(args, workspaceID)
 		}
@@ -306,14 +306,14 @@ func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (st
 	rows, err := q.Query(`
 		SELECT id
 		FROM `+table+`
-		WHERE (id = ? OR ref = ?)
+		WHERE ref = ?
 		  AND (
 			(workspace_id IS NULL AND repo IS NULL)
 			OR (workspace_id = ? AND repo IS NULL)
 			OR (? <> '' AND workspace_id = ? AND repo = ?)
 		)
 		LIMIT 1`,
-		id, id, workspaceID, repo, workspaceID, repo,
+		id, workspaceID, repo, workspaceID, repo,
 	)
 	if err != nil {
 		return "", err
@@ -335,8 +335,15 @@ func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (st
 func resolveCatalogID(q querier, table, ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	var id, publicRef string
-	err := q.QueryRow("SELECT id, ref FROM "+table+" WHERE id=? OR ref=?", ref, ref).Scan(&id, &publicRef)
+	err := q.QueryRow("SELECT id, ref FROM "+table+" WHERE ref=?", ref).Scan(&id, &publicRef)
 	return id, publicRef, err
+}
+
+func catalogInternalIDByRef(q querier, table, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	var id string
+	err := q.QueryRow("SELECT id FROM "+table+" WHERE ref=?", ref).Scan(&id)
+	return id, err
 }
 
 func newCatalogInternalID(prefix string) (string, error) {

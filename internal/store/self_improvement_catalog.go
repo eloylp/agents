@@ -40,11 +40,11 @@ func CurrentSelfImprovementCatalogVersionID(q querier, assetType, assetID string
 	var err error
 	switch strings.TrimSpace(assetType) {
 	case "prompt":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM prompts WHERE id=? OR ref=?`, assetID, assetID).Scan(&id)
+		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM prompts WHERE ref=?`, assetID).Scan(&id)
 	case "skill":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM skills WHERE id=? OR ref=? OR name=?`, assetID, assetID, fleet.NormalizeSkillName(assetID)).Scan(&id)
+		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM skills WHERE ref=? OR name=?`, assetID, fleet.NormalizeSkillName(assetID)).Scan(&id)
 	case "guardrail":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM guardrails WHERE id=? OR ref=? OR name=?`, assetID, assetID, fleet.NormalizeGuardrailName(assetID)).Scan(&id)
+		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM guardrails WHERE ref=? OR name=?`, assetID, fleet.NormalizeGuardrailName(assetID)).Scan(&id)
 	default:
 		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
 	}
@@ -116,7 +116,7 @@ func ReadSelfImprovementPrompt(q querier, ref string) (fleet.Prompt, error) {
 		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
 		FROM prompts p
 		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
-		WHERE p.id=? OR p.ref=?`, ref, ref).
+		WHERE p.ref=?`, ref).
 		Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
@@ -138,7 +138,7 @@ func ReadSelfImprovementSkill(q querier, ref string) (fleet.Skill, error) {
 		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
 		FROM skills s
 		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id
-		WHERE s.id=? OR s.ref=? OR s.name=?`, ref, ref, fleet.NormalizeSkillName(ref)).
+		WHERE s.ref=? OR s.name=?`, ref, fleet.NormalizeSkillName(ref)).
 		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.Skill{}, &ErrNotFound{Msg: fmt.Sprintf("skill %q not found", ref)}
@@ -159,7 +159,7 @@ func ReadSelfImprovementGuardrail(q querier, ref string) (fleet.Guardrail, error
 	err := q.QueryRow(`
 		SELECT ref, COALESCE(workspace_id, ''), name, description, content, enabled, position, COALESCE(current_version_id, '')
 		FROM guardrails
-		WHERE id=? OR ref=? OR name=?`, ref, ref, fleet.NormalizeGuardrailName(ref)).
+		WHERE ref=? OR name=?`, ref, fleet.NormalizeGuardrailName(ref)).
 		Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &enabled, &g.Position, &g.VersionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.Guardrail{}, &ErrNotFound{Msg: fmt.Sprintf("guardrail %q not found", ref)}

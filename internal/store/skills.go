@@ -29,27 +29,24 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 		if err := validateEntityID(id); err != nil {
 			return fmt.Errorf("store import: skill %q: %w", id, err)
 		}
-		internalID, _, err := resolveCatalogID(tx, "skills", id)
-		if errors.Is(err, sql.ErrNoRows) {
-			internalID, err = newCatalogInternalID("skill_")
-		}
-		if err != nil {
-			return fmt.Errorf("store import: skill %q: resolve id: %w", id, err)
-		}
 		if _, err := tx.Exec(`
-			INSERT INTO skills (id, ref, workspace_id, repo, name, prompt)
-			VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
+			INSERT INTO skills (ref, workspace_id, repo, name, prompt)
+			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
 			ON CONFLICT(ref) DO UPDATE SET
 				workspace_id = excluded.workspace_id,
 				repo = excluded.repo,
 				name = excluded.name,
 				prompt = excluded.prompt`,
-			internalID, id, s.WorkspaceID, s.Repo, s.Name, s.Prompt,
+			id, s.WorkspaceID, s.Repo, s.Name, s.Prompt,
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: skill name %q is already used by another skill in that scope", s.Name)
 			}
 			return fmt.Errorf("store import: upsert skill %s: %w", id, err)
+		}
+		internalID, err := catalogInternalIDByRef(tx, "skills", id)
+		if err != nil {
+			return fmt.Errorf("store import: skill %q: read internal id: %w", id, err)
 		}
 		version, err := publishSkillVersionTx(tx, internalID, s.Prompt)
 		if err != nil {
@@ -120,7 +117,7 @@ func ReadSkillVersion(db *sql.DB, versionID string) (fleet.Skill, error) {
 
 func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
 	var skill fleet.Skill
-	err := q.QueryRow("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE id = ? OR ref = ?", id, id).
+	err := q.QueryRow("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE ref = ? OR name = ?", id, fleet.NormalizeSkillName(id)).
 		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name)
 	if err == nil {
 		return skill, true, nil

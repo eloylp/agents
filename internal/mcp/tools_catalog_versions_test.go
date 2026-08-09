@@ -71,6 +71,9 @@ func TestToolPromptCatalogVersionLifecycleTracksCurrent(t *testing.T) {
 	if len(versions) != 2 || versions[0]["id"] != v2 || versions[0]["state"] != "published" {
 		t.Fatalf("prompt versions = %+v, want current published v2 first", versions)
 	}
+	if versions[0]["asset_id"] != "prompt_coder" {
+		t.Fatalf("prompt version asset_id = %v, want public ref prompt_coder", versions[0]["asset_id"])
+	}
 }
 
 func TestToolSkillAndGuardrailUpdatesPublishImmediately(t *testing.T) {
@@ -101,6 +104,9 @@ func TestToolSkillAndGuardrailUpdatesPublishImmediately(t *testing.T) {
 	if len(skillVersions) == 0 || skillVersions[0]["id"] != skillV2 || skillVersions[0]["state"] != "published" {
 		t.Fatalf("skill versions = %+v, want current published version first", skillVersions)
 	}
+	if skillVersions[0]["asset_id"] != "testing" {
+		t.Fatalf("skill version asset_id = %v, want public ref testing", skillVersions[0]["asset_id"])
+	}
 
 	guardrailReq := mcpgo.CallToolRequest{}
 	guardrailReq.Params.Arguments = map[string]any{"name": "security", "content": "published guardrail"}
@@ -125,5 +131,8 @@ func TestToolSkillAndGuardrailUpdatesPublishImmediately(t *testing.T) {
 	decodeText(t, res, &guardrailVersions)
 	if len(guardrailVersions) == 0 || guardrailVersions[0]["id"] != guardrailV2 || guardrailVersions[0]["state"] != "published" {
 		t.Fatalf("guardrail versions = %+v, want current published version first", guardrailVersions)
+	}
+	if guardrailVersions[0]["asset_id"] != "security" {
+		t.Fatalf("guardrail version asset_id = %v, want public ref security", guardrailVersions[0]["asset_id"])
 	}
 }

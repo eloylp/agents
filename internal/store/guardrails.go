@@ -163,13 +163,6 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 		}
 		g.ID = id
 	}
-	internalID, _, err := resolveCatalogID(exec, "guardrails", g.ID)
-	if errors.Is(err, sql.ErrNoRows) {
-		internalID, err = newCatalogInternalID("guardrail_")
-	}
-	if err != nil {
-		return fmt.Errorf("store: upsert guardrail %q: resolve id: %w", g.Name, err)
-	}
 	if err := validateEntityID(g.ID); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: %v", g.Name, err)}
 	}
@@ -192,8 +185,8 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	// inbound JSON.
 	const q = `
 		INSERT INTO guardrails
-			(id, ref, workspace_id, name, description, content, default_content, is_builtin, enabled, position, updated_at)
-		VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+			(ref, workspace_id, name, description, content, default_content, is_builtin, enabled, position, updated_at)
+		VALUES (?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(ref) DO UPDATE SET
 			workspace_id = excluded.workspace_id,
 			name         = excluded.name,
@@ -203,12 +196,16 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 			position    = excluded.position,
 			updated_at  = datetime('now')`
 	if _, err := exec.Exec(q,
-		internalID, g.ID, g.WorkspaceID, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
+		g.ID, g.WorkspaceID, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return &ErrConflict{Msg: fmt.Sprintf("guardrail name %q is already used by another guardrail in that scope", g.Name)}
 		}
 		return fmt.Errorf("store: upsert guardrail %q: %w", g.Name, err)
+	}
+	internalID, err := catalogInternalIDByRef(exec, "guardrails", g.ID)
+	if err != nil {
+		return fmt.Errorf("store: upsert guardrail %q: read internal id: %w", g.Name, err)
 	}
 	version, err := publishGuardrailVersionTx(exec, internalID, g)
 	if err != nil {
@@ -309,9 +306,9 @@ func resolveGuardrailInternalID(q querier, ref string) (string, error) {
 	err := q.QueryRow(`
 		SELECT id
 		FROM guardrails
-		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND name = ?)
-		ORDER BY CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END
-		LIMIT 1`, ref, ref, ref, ref, ref).Scan(&id)
+		WHERE ref = ? OR (workspace_id IS NULL AND name = ?)
+		ORDER BY CASE WHEN ref = ? THEN 0 ELSE 1 END
+		LIMIT 1`, ref, ref, ref).Scan(&id)
 	return id, err
 }
 

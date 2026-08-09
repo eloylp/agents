@@ -3307,6 +3307,9 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	if len(promptVersions) < 2 || promptVersions[0].ID != prompt.VersionID || promptVersions[0].State != "published" {
 		t.Fatalf("prompt versions = %+v, want current published version first", promptVersions)
 	}
+	if promptVersions[0].AssetID != prompt.ID {
+		t.Fatalf("prompt version asset_id = %q, want public ref %q", promptVersions[0].AssetID, prompt.ID)
+	}
 
 	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
 		"name": "architect", "prompt": "architecture v1",
@@ -3337,6 +3340,9 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	}
 	if len(skillVersions) != 2 || skillVersions[0].ID != skill.VersionID || skillVersions[0].State != "published" {
 		t.Fatalf("skill versions = %+v, want current published v2 first", skillVersions)
+	}
+	if skillVersions[0].AssetID != skill.Name {
+		t.Fatalf("skill version asset_id = %q, want public ref %q", skillVersions[0].AssetID, skill.Name)
 	}
 
 	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
@@ -3369,6 +3375,9 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	}
 	if len(guardrailVersions) != 2 || guardrailVersions[0].ID != guardrailVersionID || guardrailVersions[0].State != "published" {
 		t.Fatalf("guardrail versions = %+v, want current published v2 first", guardrailVersions)
+	}
+	if guardrailVersions[0].AssetID != "guardrail_guardrail-a" {
+		t.Fatalf("guardrail version asset_id = %q, want public ref guardrail_guardrail-a", guardrailVersions[0].AssetID)
 	}
 }
 
