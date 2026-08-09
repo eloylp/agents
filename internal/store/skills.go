@@ -117,7 +117,7 @@ func ReadSkillVersion(db *sql.DB, versionID string) (fleet.Skill, error) {
 
 func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
 	var skill fleet.Skill
-	err := q.QueryRow("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE id = ? OR ref = ?", id, id).
+	err := q.QueryRow("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE ref = ? OR name = ?", id, fleet.NormalizeSkillName(id)).
 		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name)
 	if err == nil {
 		return skill, true, nil

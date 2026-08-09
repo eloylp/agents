@@ -212,7 +212,7 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
 		FROM prompts p
 		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
-		WHERE p.id=? OR p.ref=?`, ref, ref)
+		WHERE p.ref=?`, ref)
 	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
 	if err == nil {
 		return p, nil
@@ -283,7 +283,7 @@ func DeletePromptTx(tx *sql.Tx, ref string) error {
 		return &ErrValidation{Msg: "prompt id is required"}
 	}
 	var id string
-	err := tx.QueryRow("SELECT id FROM prompts WHERE id=? OR ref=?", ref, ref).Scan(&id)
+	err := tx.QueryRow("SELECT id FROM prompts WHERE ref=?", ref).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		name := fleet.NormalizePromptName(ref)
 		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)

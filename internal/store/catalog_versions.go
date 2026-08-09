@@ -739,7 +739,7 @@ func requireRowsAffected(res sql.Result, msg string) error {
 func promptInternalID(q querier, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	var id string
-	if err := q.QueryRow("SELECT id FROM prompts WHERE id=? OR ref=?", ref, ref).Scan(&id); err != nil {
+	if err := q.QueryRow("SELECT id FROM prompts WHERE ref=?", ref).Scan(&id); err != nil {
 		return "", catalogReadErr("prompt", ref, err)
 	}
 	return id, nil
@@ -757,7 +757,7 @@ func guardrailInternalID(q querier, ref string) (string, error) {
 
 func catalogInternalID(q querier, table, kind, ref string) (string, error) {
 	var id string
-	if err := q.QueryRow("SELECT id FROM "+table+" WHERE id=? OR ref=?", ref, ref).Scan(&id); err == nil {
+	if err := q.QueryRow("SELECT id FROM "+table+" WHERE ref=?", ref).Scan(&id); err == nil {
 		return id, nil
 	} else if err != sql.ErrNoRows {
 		return "", catalogReadErr(kind, ref, err)

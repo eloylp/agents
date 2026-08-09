@@ -306,9 +306,9 @@ func resolveGuardrailInternalID(q querier, ref string) (string, error) {
 	err := q.QueryRow(`
 		SELECT id
 		FROM guardrails
-		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND name = ?)
-		ORDER BY CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END
-		LIMIT 1`, ref, ref, ref, ref, ref).Scan(&id)
+		WHERE ref = ? OR (workspace_id IS NULL AND name = ?)
+		ORDER BY CASE WHEN ref = ? THEN 0 ELSE 1 END
+		LIMIT 1`, ref, ref, ref).Scan(&id)
 	return id, err
 }
 

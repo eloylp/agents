@@ -1269,6 +1269,112 @@ func TestCatalogAssetIntegerIDMigrationPreservesDependents(t *testing.T) {
 	if newIDType != "integer" {
 		t.Fatalf("new prompt id typeof = %q, want integer", newIDType)
 	}
+
+	var promptInternalID, skillInternalID, guardrailInternalID string
+	if err := db.QueryRow("SELECT CAST(id AS TEXT) FROM prompts WHERE ref='prompt_coder'").Scan(&promptInternalID); err != nil {
+		t.Fatalf("read prompt internal id: %v", err)
+	}
+	if err := db.QueryRow("SELECT CAST(id AS TEXT) FROM skills WHERE ref='skill_architect'").Scan(&skillInternalID); err != nil {
+		t.Fatalf("read skill internal id: %v", err)
+	}
+	if err := db.QueryRow("SELECT CAST(id AS TEXT) FROM guardrails WHERE ref='guardrail_security'").Scan(&guardrailInternalID); err != nil {
+		t.Fatalf("read guardrail internal id: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "read prompt",
+			run: func() error {
+				_, err := store.ReadPrompt(db, promptInternalID)
+				return err
+			},
+		},
+		{
+			name: "delete prompt",
+			run:  func() error { return store.DeletePrompt(db, promptInternalID) },
+		},
+		{
+			name: "list prompt versions",
+			run: func() error {
+				_, err := store.ListPromptVersionSnapshots(db, promptInternalID)
+				return err
+			},
+		},
+		{
+			name: "current prompt version",
+			run: func() error {
+				_, err := store.CurrentSelfImprovementCatalogVersionID(db, "prompt", promptInternalID)
+				return err
+			},
+		},
+		{
+			name: "read self-improvement prompt",
+			run: func() error {
+				_, err := store.ReadSelfImprovementPrompt(db, promptInternalID)
+				return err
+			},
+		},
+		{
+			name: "list skill versions",
+			run: func() error {
+				_, err := store.ListSkillVersionSnapshots(db, skillInternalID)
+				return err
+			},
+		},
+		{
+			name: "current skill version",
+			run: func() error {
+				_, err := store.CurrentSelfImprovementCatalogVersionID(db, "skill", skillInternalID)
+				return err
+			},
+		},
+		{
+			name: "read self-improvement skill",
+			run: func() error {
+				_, err := store.ReadSelfImprovementSkill(db, skillInternalID)
+				return err
+			},
+		},
+		{
+			name: "delete guardrail",
+			run:  func() error { return store.DeleteGuardrail(db, guardrailInternalID) },
+		},
+		{
+			name: "list guardrail versions",
+			run: func() error {
+				_, err := store.ListGuardrailVersionSnapshots(db, guardrailInternalID)
+				return err
+			},
+		},
+		{
+			name: "current guardrail version",
+			run: func() error {
+				_, err := store.CurrentSelfImprovementCatalogVersionID(db, "guardrail", guardrailInternalID)
+				return err
+			},
+		},
+		{
+			name: "read self-improvement guardrail",
+			run: func() error {
+				_, err := store.ReadSelfImprovementGuardrail(db, guardrailInternalID)
+				return err
+			},
+		},
+	} {
+		t.Run("internal id rejected by "+tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatal("lookup succeeded with internal integer id")
+			}
+			var notFound *store.ErrNotFound
+			if !errors.As(err, &notFound) {
+				t.Fatalf("lookup error = %T %[1]v, want ErrNotFound", err)
+			}
+		})
+	}
 }
 
 func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
