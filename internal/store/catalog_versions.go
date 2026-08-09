@@ -145,11 +145,13 @@ func ListPromptVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, 
 		return nil, err
 	}
 	rows, err := q.Query(`
-		SELECT id, prompt_id, version_number, state, description, content, source_type, source_ref, author, changelog,
-		       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
-		FROM prompt_versions
-		WHERE prompt_id=?
-		ORDER BY version_number ASC`, promptID)
+		SELECT pv.id, p.ref, pv.version_number, pv.state, pv.description, pv.content, pv.source_type, pv.source_ref,
+		       pv.author, pv.changelog, COALESCE(pv.base_version_id, ''), pv.body_hash, pv.created_at,
+		       COALESCE(pv.published_at, '')
+		FROM prompt_versions pv
+		JOIN prompts p ON p.id = pv.prompt_id
+		WHERE pv.prompt_id=?
+		ORDER BY pv.version_number ASC`, promptID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list prompt version snapshots for %s: %w", promptID, err)
 	}
@@ -184,11 +186,12 @@ func ListSkillVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, e
 		return nil, err
 	}
 	rows, err := q.Query(`
-		SELECT id, skill_id, version_number, state, prompt, source_type, source_ref, author, changelog,
-		       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
-		FROM skill_versions
-		WHERE skill_id=?
-		ORDER BY version_number ASC`, skillID)
+		SELECT sv.id, s.ref, sv.version_number, sv.state, sv.prompt, sv.source_type, sv.source_ref, sv.author,
+		       sv.changelog, COALESCE(sv.base_version_id, ''), sv.body_hash, sv.created_at, COALESCE(sv.published_at, '')
+		FROM skill_versions sv
+		JOIN skills s ON s.id = sv.skill_id
+		WHERE sv.skill_id=?
+		ORDER BY sv.version_number ASC`, skillID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list skill version snapshots for %s: %w", skillID, err)
 	}
@@ -223,12 +226,13 @@ func ListGuardrailVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersio
 		return nil, err
 	}
 	rows, err := q.Query(`
-		SELECT id, guardrail_id, version_number, state, description, content, enabled, position,
-		       source_type, source_ref, author, changelog, COALESCE(base_version_id, ''), body_hash,
-		       created_at, COALESCE(published_at, '')
-		FROM guardrail_versions
-		WHERE guardrail_id=?
-		ORDER BY version_number ASC`, guardrailID)
+		SELECT gv.id, g.ref, gv.version_number, gv.state, gv.description, gv.content, gv.enabled, gv.position,
+		       gv.source_type, gv.source_ref, gv.author, gv.changelog, COALESCE(gv.base_version_id, ''), gv.body_hash,
+		       gv.created_at, COALESCE(gv.published_at, '')
+		FROM guardrail_versions gv
+		JOIN guardrails g ON g.id = gv.guardrail_id
+		WHERE gv.guardrail_id=?
+		ORDER BY gv.version_number ASC`, guardrailID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list guardrail version snapshots for %s: %w", guardrailID, err)
 	}
@@ -258,11 +262,11 @@ func reverseCatalogVersions(versions []fleet.CatalogVersion) {
 
 func listCatalogVersions(q querier, table, column, assetID string) ([]fleet.CatalogVersion, error) {
 	rows, err := q.Query(`
-		SELECT id, `+column+`, version_number, state, source_type, source_ref, author, changelog,
+		SELECT id, ?, version_number, state, source_type, source_ref, author, changelog,
 		       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
 		FROM `+table+`
 		WHERE `+column+`=?
-		ORDER BY version_number DESC`, assetID)
+		ORDER BY version_number DESC`, assetID, assetID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list %s for %s: %w", table, assetID, err)
 	}
