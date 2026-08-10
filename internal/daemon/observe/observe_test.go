@@ -77,6 +77,9 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 		}
 		promptRefs := make(map[string]struct{}, len(cfg.Prompts))
 		for _, prompt := range cfg.Prompts {
+			if prompt.ID == "" {
+				prompt.ID = fixturePromptID(prompt.WorkspaceID, prompt.Repo, prompt.Name)
+			}
 			if _, err := st.UpsertPrompt(prompt); err != nil {
 				t.Fatalf("seed prompt %s: %v", prompt.Name, err)
 			}
@@ -94,6 +97,7 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 				continue
 			}
 			if _, err := st.UpsertPrompt(fleet.Prompt{
+				ID:          fixturePromptID(agents[i].WorkspaceID, "", agents[i].PromptRef),
 				WorkspaceID: agents[i].WorkspaceID,
 				Name:        agents[i].PromptRef,
 				Content:     "test prompt",
@@ -108,6 +112,21 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 	}
 	events := obstore.NewStore(db)
 	return testFixture{db: db, events: events, store: st}
+}
+
+func fixturePromptID(workspaceID, repo, name string) string {
+	if workspaceID == "" && repo == "" {
+		return name
+	}
+	parts := make([]string, 0, 3)
+	if workspaceID != "" {
+		parts = append(parts, workspaceID)
+	}
+	if repo != "" {
+		parts = append(parts, strings.ReplaceAll(repo, "/", "_"))
+	}
+	parts = append(parts, name)
+	return "prompt_" + strings.Join(parts, "_")
 }
 
 // newTestEvents is the legacy single-arg helper kept so the test bodies
@@ -174,6 +193,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 	st := store.New(db)
 	for _, agent := range agents {
 		if _, err := st.UpsertPrompt(fleet.Prompt{
+			ID:          fixturePromptID(agent.WorkspaceID, "", agent.PromptRef),
 			WorkspaceID: agent.WorkspaceID,
 			Name:        agent.PromptRef,
 			Content:     "p",
@@ -245,7 +265,7 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 			}
 		}
 		if _, ok := seenAgent[agent]; !ok {
-			if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: agent, Content: "p"}); err != nil {
+			if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: agent, Name: agent, Content: "p"}); err != nil {
 				t.Fatalf("seed prompt %s: %v", agent, err)
 			}
 			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", PromptRef: agent, Description: agent + " agent"}); err != nil {

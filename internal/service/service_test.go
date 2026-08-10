@@ -19,7 +19,7 @@ func openTestService(t *testing.T) (*Service, *sql.DB) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "coder", Content: "test prompt"}); err != nil {
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: "coder", Name: "coder", Content: "test prompt"}); err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
 	if err := store.UpsertBackend(db, "claude", fleet.Backend{Command: "claude"}); err != nil {

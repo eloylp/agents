@@ -51,7 +51,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err := st.UpsertBackend("codex", fleet.Backend{Command: "codex", Models: []string{"gpt-5.3-codex", "gpt-5.5"}}); err != nil {
 		t.Fatalf("upsert backend: %v", err)
 	}
-	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "coder", Content: "Do coding work."}); err != nil {
+	if _, err := st.UpsertPrompt(fleet.Prompt{ID: "coder", Name: "coder", Content: "Do coding work."}); err != nil {
 		t.Fatalf("upsert prompt: %v", err)
 	}
 	if err := st.UpsertAgent(fleet.Agent{
@@ -180,7 +180,7 @@ func TestCurrentCatalogVersionsRequiresAttribution(t *testing.T) {
 	t.Parallel()
 
 	st := newTempStore(t)
-	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "global-coder", Content: "Do coding work."}); err != nil {
+	if _, err := st.UpsertPrompt(fleet.Prompt{ID: "global-coder", Name: "global-coder", Content: "Do coding work."}); err != nil {
 		t.Fatalf("upsert prompt: %v", err)
 	}
 	if err := st.UpsertSkill("go-api", fleet.Skill{Name: "go-api", Prompt: "Handle Go APIs."}); err != nil {

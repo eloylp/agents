@@ -75,6 +75,17 @@ function GuardrailForm({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+      {isNew && (
+        <div>
+          <label style={labelStyle}>ID *</label>
+          <input
+            style={inputStyle}
+            value={form.id || ''}
+            onChange={e => set('id', e.target.value)}
+            placeholder="code-style"
+          />
+        </div>
+      )}
       <div>
         <label style={labelStyle}>Name *</label>
         <input
@@ -171,7 +182,7 @@ function GuardrailForm({
           </button>
           <button
             onClick={() => onSave(form)}
-            disabled={saving || !form.name.trim() || !form.content.trim()}
+            disabled={saving || (isNew && !form.id?.trim()) || !form.name.trim() || !form.content.trim()}
             style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             {saving ? 'Saving…' : 'Save'}
@@ -331,7 +342,7 @@ export default function GuardrailsManager() {
       const url = isNew ? apiRoutes.catalog.guardrails.list() : apiRoutes.catalog.guardrails.one(guardrailID(g))
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
-        ? { name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
+        ? { id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
         : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.

@@ -25,14 +25,18 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 			return err
 		}
 		if p.ID == "" {
-			id, err := derivedPromptRef(p)
-			if err != nil {
-				return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
+			var existingID, existingRef string
+			err := queryCatalogRefByScopeName(tx, "prompts", p.WorkspaceID, p.Repo, p.Name).Scan(&existingID, &existingRef)
+			if err == nil {
+				p.ID = existingRef
+			} else if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("store import: prompt %q requires explicit id", p.Name)
+			} else {
+				return fmt.Errorf("store import: prompt %q: read existing: %w", p.Name, err)
 			}
-			p.ID = id
 		}
 		if p.ID == "" || p.Name == "" {
-			return fmt.Errorf("store import: prompt requires id or name")
+			return fmt.Errorf("store import: prompt requires id and name")
 		}
 		if err := validateEntityID(p.ID); err != nil {
 			return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
@@ -156,11 +160,7 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 	if publicRef != "" {
 		p.ID = publicRef
 	} else if p.ID == "" {
-		id, err := derivedPromptRef(p)
-		if err != nil {
-			return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
-		}
-		p.ID = id
+		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q requires explicit id", p.Name)}
 	}
 	if err := validateEntityID(p.ID); err != nil {
 		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}

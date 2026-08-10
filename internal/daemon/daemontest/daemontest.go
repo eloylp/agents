@@ -63,7 +63,11 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		if agents[i].PromptRef == "" && agents[i].PromptID == "" {
 			agents[i].PromptRef = agents[i].Name
 		}
-		if _, err := st.UpsertPrompt(fleet.Prompt{Name: agents[i].PromptRef, Content: "test prompt"}); err != nil {
+		promptRef := agents[i].PromptRef
+		if promptRef == "" {
+			promptRef = agents[i].PromptID
+		}
+		if _, err := st.UpsertPrompt(fleet.Prompt{ID: promptRef, Name: promptRef, Content: "test prompt"}); err != nil {
 			t.Fatalf("seed prompt %s: %v", agents[i].PromptRef, err)
 		}
 	}

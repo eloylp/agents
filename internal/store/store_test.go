@@ -66,8 +66,8 @@ func minimalCfg() *config.Config {
 			"testing":   {Prompt: "Focus on testing."},
 		},
 		Prompts: []fleet.Prompt{
-			{Name: "coder", Content: "You write code."},
-			{Name: "pr-reviewer", Content: "You review PRs."},
+			{ID: "prompt_coder", Name: "coder", Content: "You write code."},
+			{ID: "prompt_pr-reviewer", Name: "pr-reviewer", Content: "You review PRs."},
 		},
 		Agents: []fleet.Agent{
 			{
@@ -125,8 +125,8 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("open: %v", err)
 	}
 	for _, p := range []fleet.Prompt{
-		{Name: "coder", Content: "test prompt"},
-		{Name: "pr-reviewer", Content: "test prompt"},
+		{ID: "prompt_coder", Name: "coder", Content: "test prompt"},
+		{ID: "prompt_pr-reviewer", Name: "pr-reviewer", Content: "test prompt"},
 	} {
 		if _, err := store.UpsertPrompt(db, p); err != nil {
 			t.Fatalf("seed prompt %s: %v", p.Name, err)
@@ -559,6 +559,7 @@ func TestGuardrailsCRUD(t *testing.T) {
 	// 2. Operator can add a custom guardrail; it lands at the configured
 	//    position and shows up in render order after the security row.
 	custom := fleet.Guardrail{
+		ID:          "guardrail_code-style",
 		Name:        "Code Style",
 		Description: "Project conventions",
 		Content:     "Always run gofmt before submitting.",
@@ -667,7 +668,7 @@ func TestImportLoadGuardrails(t *testing.T) {
 	cfg := minimalCfg()
 	cfg.Guardrails = []fleet.Guardrail{
 		{Name: "security", Content: "Operator-edited security body.", Enabled: true, Position: 0},
-		{Name: "code-style", Description: "Conventions", Content: "Always run gofmt.", Enabled: true, Position: 50},
+		{ID: "guardrail_code-style", Name: "code-style", Description: "Conventions", Content: "Always run gofmt.", Enabled: true, Position: 50},
 	}
 	if err := store.Import(db, cfg); err != nil {
 		t.Fatalf("Import: %v", err)
@@ -2728,7 +2729,16 @@ func TestPromptCRUD(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{
+		Name:        "release-notes",
+		Description: "Drafts release notes",
+		Content:     "Summarize merged changes.",
+	}); err == nil {
+		t.Fatal("UpsertPrompt create without id succeeded, want validation error")
+	}
+
 	created, err := store.UpsertPrompt(db, fleet.Prompt{
+		ID:          "prompt_release-notes",
 		Name:        "release-notes",
 		Description: "Drafts release notes",
 		Content:     "Summarize merged changes.",
@@ -2778,15 +2788,108 @@ func TestPromptCRUD(t *testing.T) {
 	}
 }
 
+func TestNewCatalogAssetsRequireExplicitID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	tests := []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{
+			name: "prompt",
+			run: func() error {
+				_, err := store.UpsertPrompt(db, fleet.Prompt{Name: "new-prompt", Content: "body"})
+				return err
+			},
+			want: "requires explicit id",
+		},
+		{
+			name: "skill",
+			run: func() error {
+				return store.UpsertSkill(db, "", fleet.Skill{Name: "new-skill", Prompt: "body"})
+			},
+			want: "requires explicit id",
+		},
+		{
+			name: "guardrail",
+			run: func() error {
+				return store.UpsertGuardrail(db, fleet.Guardrail{Name: "new-guardrail", Content: "body", Enabled: true})
+			},
+			want: "requires explicit id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			var validation *store.ErrValidation
+			if !errors.As(err, &validation) {
+				t.Fatalf("error = %T %v, want ErrValidation", err, err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestImportNewCatalogAssetsRequireExplicitID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+		want   string
+	}{
+		{
+			name: "prompt",
+			mutate: func(cfg *config.Config) {
+				cfg.Prompts = []fleet.Prompt{{Name: "new-prompt", Content: "body"}}
+			},
+			want: "prompt \"new-prompt\" requires explicit id",
+		},
+		{
+			name: "skill",
+			mutate: func(cfg *config.Config) {
+				cfg.Skills = map[string]fleet.Skill{"": {Name: "new-skill", Prompt: "body"}}
+			},
+			want: "skill requires id and name",
+		},
+		{
+			name: "guardrail",
+			mutate: func(cfg *config.Config) {
+				cfg.Guardrails = []fleet.Guardrail{{Name: "new-guardrail", Content: "body", Enabled: true}}
+			},
+			want: "guardrail \"new-guardrail\" requires explicit id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openTestDB(t)
+			cfg := minimalCfg()
+			tc.mutate(cfg)
+			err := store.Import(db, cfg)
+			if err == nil {
+				t.Fatal("Import succeeded, want validation error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestPromptCRUDScopedDuplicatesUseStableID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	teamA, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-a", Name: "Shared", Content: "Team A"})
+	teamA, err := store.UpsertPrompt(db, fleet.Prompt{ID: "prompt_team-a_shared", WorkspaceID: "team-a", Name: "Shared", Content: "Team A"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt team A: %v", err)
 	}
-	teamB, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-b", Name: "Shared", Content: "Team B"})
+	teamB, err := store.UpsertPrompt(db, fleet.Prompt{ID: "prompt_team-b_shared", WorkspaceID: "team-b", Name: "Shared", Content: "Team B"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt team B: %v", err)
 	}
@@ -2880,13 +2983,13 @@ func TestDerivedWorkspaceAndPromptIDsMustBeURLSafe(t *testing.T) {
 
 	db = openTestDB(t)
 	cfg = minimalCfg()
-	cfg.Prompts = []fleet.Prompt{{Name: "Project/A&B", Content: "Prompt"}}
+	cfg.Prompts = []fleet.Prompt{{ID: "Project/A&B", Name: "Project/A&B", Content: "Prompt"}}
 	err = store.Import(db, cfg)
 	if err == nil {
 		t.Fatal("Import succeeded, want invalid prompt id error")
 	}
-	if !strings.Contains(err.Error(), "not URL-safe") {
-		t.Fatalf("prompt error = %v, want URL-safe guidance", err)
+	if !strings.Contains(err.Error(), "must contain only lowercase letters, digits, hyphens, and underscores") {
+		t.Fatalf("prompt error = %v, want supported character set guidance", err)
 	}
 }
 
@@ -2983,6 +3086,7 @@ func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		ID:       "workspace-only",
 		Name:     "workspace-only",
 		Content:  "Apply only in Team A.",
 		Enabled:  false,
@@ -3017,7 +3121,7 @@ func TestWorkspaceGuardrailTracksCurrentVersion(t *testing.T) {
 	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "rollout", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{ID: "rollout", Name: "rollout", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
 		t.Fatalf("UpsertGuardrail v1: %v", err)
 	}
 	all, err := store.ReadAllGuardrails(db)
@@ -3043,7 +3147,7 @@ func TestWorkspaceGuardrailTracksCurrentVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadWorkspaceGuardrails: %v", err)
 	}
-	if len(refs) != 1 || refs[0].GuardrailName != "guardrail_rollout" {
+	if len(refs) != 1 || refs[0].GuardrailName != "rollout" {
 		t.Fatalf("workspace refs = %+v, want rollout guardrail ref", refs)
 	}
 	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
@@ -3060,6 +3164,7 @@ func TestWorkspaceBoundaryGuardrailNameIsReserved(t *testing.T) {
 	db := openTestDB(t)
 
 	err := store.UpsertGuardrail(db, fleet.Guardrail{
+		ID:      "workspace-boundary",
 		Name:    "workspace-boundary",
 		Content: "Operator override",
 		Enabled: true,
@@ -3073,6 +3178,7 @@ func TestWorkspaceBoundaryGuardrailNameIsReserved(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Guardrails = []fleet.Guardrail{{
+		ID:      "workspace-boundary",
 		Name:    "workspace-boundary",
 		Content: "Operator override",
 		Enabled: true,

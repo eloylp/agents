@@ -254,6 +254,12 @@ export default function PromptsPage() {
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'New prompt' : `Edit ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            {modal === 'create' && (
+              <div>
+                <label style={labelStyle}>ID *</label>
+                <input style={inputStyle} value={selected.id || ''} onChange={e => setSelected(p => ({ ...p, id: e.target.value }))} placeholder="release-notes" />
+              </div>
+            )}
             <div>
               <label style={labelStyle}>Name *</label>
               <input style={inputStyle} value={selected.name} onChange={e => setSelected(p => ({ ...p, name: e.target.value }))} disabled={modal === 'edit'} />
@@ -330,7 +336,7 @@ export default function PromptsPage() {
             {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)' }}>Cancel</button>
-              <button onClick={save} disabled={saving || !selected.name.trim() || !selected.content.trim() || (selectedScope !== 'global' && !selected.workspace_id) || (selectedScope === 'repo' && !selected.repo)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', fontWeight: 600 }}>{saving ? 'Saving...' : 'Save'}</button>
+              <button onClick={save} disabled={saving || (modal === 'create' && !selected.id?.trim()) || !selected.name.trim() || !selected.content.trim() || (selectedScope !== 'global' && !selected.workspace_id) || (selectedScope === 'repo' && !selected.repo)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', fontWeight: 600 }}>{saving ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
         </Modal>

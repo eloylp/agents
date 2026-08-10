@@ -440,7 +440,7 @@ func TestCatalogUpsertsPublishImmutableVersions(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "versioned-coder", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "versioned-coder", Name: "versioned-coder", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt v1: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestCatalogUpsertsSkipUnchangedVersions(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "unchanged-prompt", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "unchanged-prompt", Name: "unchanged-prompt", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt v1: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestCatalogUpsertsSkipUnchangedVersions(t *testing.T) {
 	}
 	assertTableCount(t, db, "skill_versions", "skill_id=(SELECT id FROM skills WHERE ref=?)", "unchanged-skill", 1)
 
-	guardrail := fleet.Guardrail{Name: "unchanged-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
+	guardrail := fleet.Guardrail{ID: "guardrail_unchanged-guardrail", Name: "unchanged-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
 	if err := store.UpsertGuardrail(db, guardrail); err != nil {
 		t.Fatalf("UpsertGuardrail v1: %v", err)
 	}
@@ -517,14 +517,14 @@ func TestCreatePublishedCatalogVersionsRecordSourceMetadata(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "published-prompt", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "published-prompt", Name: "published-prompt", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
 	if err := store.UpsertSkill(db, "published-skill", fleet.Skill{Name: "published-skill", Prompt: "skill v1"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
-	guardrail := fleet.Guardrail{Name: "published-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
+	guardrail := fleet.Guardrail{ID: "published-guardrail", Name: "published-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
 	if err := store.UpsertGuardrail(db, guardrail); err != nil {
 		t.Fatalf("UpsertGuardrail: %v", err)
 	}
@@ -550,7 +550,7 @@ func TestCreatePublishedCatalogVersionsRecordSourceMetadata(t *testing.T) {
 		tx.Rollback()
 		t.Fatalf("CreatePublishedSkillVersionTx: %v", err)
 	}
-	guardrailVersion, err := store.CreatePublishedGuardrailVersionTx(tx, "guardrail_published-guardrail", fleet.Guardrail{
+	guardrailVersion, err := store.CreatePublishedGuardrailVersionTx(tx, "published-guardrail", fleet.Guardrail{
 		Description: "second",
 		Content:     "guardrail v2",
 		Enabled:     true,
@@ -647,7 +647,7 @@ func TestCreatePublishedCatalogVersionRejectsInvalidMetadata(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "invalid-published-prompt", Description: "first", Content: "body v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "invalid-published-prompt", Name: "invalid-published-prompt", Description: "first", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestCatalogPublishedVersionPaths(t *testing.T) {
 			name: "guardrail",
 			createAsset: func(t *testing.T, db *sql.DB) string {
 				t.Helper()
-				g := fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}
+				g := fleet.Guardrail{ID: "security-review", Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}
 				if err := store.UpsertGuardrail(db, g); err != nil {
 					t.Fatalf("UpsertGuardrail: %v", err)
 				}
@@ -789,7 +789,7 @@ func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "mirror-prompt", Description: "first", Content: "prompt v1"})
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "mirror-prompt", Name: "mirror-prompt", Description: "first", Content: "prompt v1"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt v1: %v", err)
 	}
@@ -818,7 +818,7 @@ func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
 	}
 	assertSkillCurrentSnapshot(t, db, "mirror-skill")
 
-	guardrail := fleet.Guardrail{Name: "mirror-guardrail", Description: "first", Content: "guardrail v1", DefaultContent: "guardrail default", Enabled: true, Position: 10}
+	guardrail := fleet.Guardrail{ID: "guardrail_mirror-guardrail", Name: "mirror-guardrail", Description: "first", Content: "guardrail v1", DefaultContent: "guardrail default", Enabled: true, Position: 10}
 	if err := store.UpsertGuardrail(db, guardrail); err != nil {
 		t.Fatalf("UpsertGuardrail v1: %v", err)
 	}
@@ -879,7 +879,7 @@ func TestCatalogVersionReferences(t *testing.T) {
 	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{ID: "security-review", Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
 		t.Fatalf("UpsertGuardrail: %v", err)
 	}
 
@@ -931,11 +931,11 @@ func TestCatalogVersionReferencesRejectUnknownOrWrongAsset(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	promptA, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-a", Content: "a"})
+	promptA, err := store.UpsertPrompt(db, fleet.Prompt{ID: "prompt-a", Name: "prompt-a", Content: "a"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt prompt-a: %v", err)
 	}
-	promptB, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-b", Content: "b"})
+	promptB, err := store.UpsertPrompt(db, fleet.Prompt{ID: "prompt-b", Name: "prompt-b", Content: "b"})
 	if err != nil {
 		t.Fatalf("UpsertPrompt prompt-b: %v", err)
 	}
@@ -945,10 +945,10 @@ func TestCatalogVersionReferencesRejectUnknownOrWrongAsset(t *testing.T) {
 	if err := store.UpsertSkill(db, "skill-b", fleet.Skill{Prompt: "b"}); err != nil {
 		t.Fatalf("UpsertSkill skill-b: %v", err)
 	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-a", Description: "a", Content: "a", Enabled: true, Position: 10}); err != nil {
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{ID: "guardrail-a", Name: "guardrail-a", Description: "a", Content: "a", Enabled: true, Position: 10}); err != nil {
 		t.Fatalf("UpsertGuardrail guardrail-a: %v", err)
 	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-b", Description: "b", Content: "b", Enabled: true, Position: 20}); err != nil {
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{ID: "guardrail-b", Name: "guardrail-b", Description: "b", Content: "b", Enabled: true, Position: 20}); err != nil {
 		t.Fatalf("UpsertGuardrail guardrail-b: %v", err)
 	}
 
@@ -1181,7 +1181,7 @@ func assertVersionRefs(t *testing.T, name string, got, want []fleet.CatalogVersi
 	}
 }
 
-func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
+func TestUpsertScopedSkillRequiresExplicitIDForNewAsset(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	if _, err := db.Exec(`
@@ -1197,8 +1197,13 @@ func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
 		Name:        "Review",
 		Prompt:      "p",
 	}
-	if err := store.UpsertSkill(db, "", s); err != nil {
-		t.Fatalf("UpsertSkill scoped without id: %v", err)
+	err := store.UpsertSkill(db, "", s)
+	var validation *store.ErrValidation
+	if !errors.As(err, &validation) {
+		t.Fatalf("UpsertSkill scoped without id error = %T %v, want ErrValidation", err, err)
+	}
+	if err := store.UpsertSkill(db, "skill_platform_eloylp_agents_review", s); err != nil {
+		t.Fatalf("UpsertSkill scoped with explicit id: %v", err)
 	}
 	if err := store.UpsertSkill(db, "", fleet.Skill{
 		WorkspaceID: "platform",
@@ -2084,7 +2089,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 
 	// Prompt, mixed-case name should be stored lowercase.
-	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "Release-Notes", Content: "p"}); err != nil {
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: "release-notes", Name: "Release-Notes", Content: "p"}); err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
 	prompts, err := store.ReadPrompts(db)

@@ -46,7 +46,10 @@ func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 
 func seedStorePrompt(t *testing.T, s *daemon.Daemon, name string) {
 	t.Helper()
-	if _, err := s.Store().UpsertPrompt(fleet.Prompt{Name: name, Content: "prompt body"}); err != nil {
+	if _, err := s.Store().ReadPrompt(name); err == nil {
+		return
+	}
+	if _, err := s.Store().UpsertPrompt(fleet.Prompt{ID: "prompt_" + name, Name: name, Content: "prompt body"}); err != nil {
 		t.Fatalf("seedStorePrompt %s: %v", name, err)
 	}
 }
@@ -212,11 +215,11 @@ func TestStoreCRUDAgentCreateAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	seedStorePrompt(t, s, "coder")
 
 	rr := doRawCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
-		"name": "coder", "backend": "claude", "prompt_id": "prompt_coder", "prompt_ref": "coder",
+		"name": "coder", "backend": "claude", "prompt_id": "coder", "prompt_ref": "coder",
 		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
 	})
 	if rr.Code != http.StatusOK {
-		t.Fatalf("POST /agents prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
+		t.Fatalf("POST /agents prompt id plus ref: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
 	var out storeAgentJSON
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
@@ -424,7 +427,7 @@ func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
-		"name": "architect", "prompt": "Focus on architecture.",
+		"id": "architect", "name": "architect", "prompt": "Focus on architecture.",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST skill: got %d, %s", rr.Code, rr.Body.String())
@@ -460,6 +463,7 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"id":          "prompt_release-notes",
 		"name":        "release-notes",
 		"description": "Drafts releases",
 		"content":     "Summarize merged work.",
@@ -508,13 +512,39 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDCatalogCreateRequiresExplicitID(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	tests := []struct {
+		name string
+		path string
+		body map[string]any
+	}{
+		{name: "prompt", path: "/prompts", body: map[string]any{"name": "new-prompt", "content": "body"}},
+		{name: "skill", path: "/skills", body: map[string]any{"name": "new-skill", "prompt": "body"}},
+		{name: "guardrail", path: "/guardrails", body: map[string]any{"name": "new-guardrail", "content": "body", "enabled": true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := doCRUDRequest(t, s, http.MethodPost, tc.path, tc.body)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("POST %s without id: got %d, want 400, %s", tc.path, rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "requires explicit id") {
+				t.Fatalf("POST %s error = %q, want explicit id guidance", tc.path, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestStoreCRUDPromptScopedDuplicatesUseStableID(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
 	for _, body := range []map[string]any{
-		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
-		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+		{"id": "prompt_team-a_shared", "workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"id": "prompt_team-b_shared", "workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
 	} {
 		rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", body)
 		if rr.Code != http.StatusOK {
@@ -817,6 +847,7 @@ func TestStoreCRUDGuardrailCreatePatchDelete(t *testing.T) {
 
 	// Create operator-added guardrail.
 	rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"id":          "code-style",
 		"name":        "Code Style",
 		"description": "Project conventions",
 		"content":     "Always run gofmt.",
@@ -892,7 +923,7 @@ func TestStoreCRUDGuardrailReset(t *testing.T) {
 
 	// Reset on an operator-added row (no default) returns 400.
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
-		"name": "code-style", "content": "x", "enabled": true,
+		"id": "code-style", "name": "code-style", "content": "x", "enabled": true,
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("POST seed code-style: got %d, %s", rr.Code, rr.Body.String())
 	}
@@ -2029,6 +2060,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	// POST with mixed-case name and whitespace-padded prompt; response must
 	// have lowercase name and trimmed prompt.
 	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"id":     "architect",
 		"name":   "Architect",
 		"prompt": "  Focus on design.  ",
 	})
@@ -2246,7 +2278,8 @@ func TestStoreImportWorkspaceShape(t *testing.T) {
   claude:
     command: claude
 prompts:
-  - name: imported-prompt
+  - id: prompt_imported-prompt
+    name: imported-prompt
     content: imported prompt
 skills: {}
 workspaces:
@@ -2342,7 +2375,8 @@ func TestStoreImportRoundTrip(t *testing.T) {
     skills: []
     can_dispatch: []
 prompts:
-  - name: imported-agent
+  - id: prompt_imported-agent
+    name: imported-agent
     content: imported prompt
 skills:
   imported-skill:
@@ -2744,7 +2778,8 @@ func TestImportYAMLPreservesRuntimeWhenOmitted(t *testing.T) {
   claude:
     command: claude
 prompts:
-  - name: imported-agent
+  - id: prompt_imported-agent
+    name: imported-agent
     content: imported prompt
 agents:
   - name: imported-agent
@@ -2810,7 +2845,8 @@ agents:
     skills: []
     can_dispatch: []
 prompts:
-  - name: new-agent
+  - id: prompt_new-agent
+    name: new-agent
     content: fresh
 repos:
   - name: owner/new-repo
@@ -2955,7 +2991,8 @@ agents:
     skills: []
     can_dispatch: []
 prompts:
-  - name: scout
+  - id: prompt_scout
+    name: scout
     content: p
 repos:
   - name: owner/existing-repo
@@ -3010,7 +3047,8 @@ agents:
     skills: []
     can_dispatch: []
 prompts:
-  - name: scout
+  - id: prompt_scout
+    name: scout
     content: p
 repos:
   - name: owner/new-repo
@@ -3133,11 +3171,11 @@ func TestStoreCRUDAgentPatchAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	}
 
 	rr := doRawCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
-		"prompt_id":  "prompt_coder",
+		"prompt_id":  "coder",
 		"prompt_ref": "coder",
 	})
 	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH /agents/coder prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
+		t.Fatalf("PATCH /agents/coder prompt id plus ref: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
 	var out storeAgentJSON
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
@@ -3312,7 +3350,7 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	}
 
 	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
-		"name": "architect", "prompt": "architecture v1",
+		"id": "architect", "name": "architect", "prompt": "architecture v1",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST architect skill: got %d, %s", rr.Code, rr.Body.String())
@@ -3346,7 +3384,7 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	}
 
 	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
-		"name": "Guardrail A", "description": "v1", "content": "guardrail v1", "enabled": true, "position": 10,
+		"id": "guardrail-a", "name": "Guardrail A", "description": "v1", "content": "guardrail v1", "enabled": true, "position": 10,
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST guardrail: got %d, %s", rr.Code, rr.Body.String())
@@ -3376,8 +3414,8 @@ func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	if len(guardrailVersions) != 2 || guardrailVersions[0].ID != guardrailVersionID || guardrailVersions[0].State != "published" {
 		t.Fatalf("guardrail versions = %+v, want current published v2 first", guardrailVersions)
 	}
-	if guardrailVersions[0].AssetID != "guardrail_guardrail-a" {
-		t.Fatalf("guardrail version asset_id = %q, want public ref guardrail_guardrail-a", guardrailVersions[0].AssetID)
+	if guardrailVersions[0].AssetID != "guardrail-a" {
+		t.Fatalf("guardrail version asset_id = %q, want public ref guardrail-a", guardrailVersions[0].AssetID)
 	}
 }
 

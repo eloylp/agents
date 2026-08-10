@@ -64,7 +64,7 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 		Description: "Reviews repository events",
 	}}
 	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
-	if _, err := st.UpsertPrompt(fleet.Prompt{Name: "reviewer", Content: "Review events."}); err != nil {
+	if _, err := st.UpsertPrompt(fleet.Prompt{ID: "reviewer", Name: "reviewer", Content: "Review events."}); err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
 	if err := st.ImportAll(agents, []fleet.Repo{repo}, nil, backends, nil, nil); err != nil {

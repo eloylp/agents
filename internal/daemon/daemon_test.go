@@ -245,6 +245,7 @@ func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix s
 	t.Helper()
 	st := srv.Store()
 	prompt, err := st.UpsertPrompt(fleet.Prompt{
+		ID:          "rest-bundle-prompt-" + suffix,
 		Name:        "rest-bundle-prompt-" + suffix,
 		Description: "prompt desc",
 		Content:     "prompt v1",
@@ -260,6 +261,7 @@ func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix s
 		guardrailName += "-" + suffix
 	}
 	if err := st.UpsertGuardrail(fleet.Guardrail{
+		ID:          guardrailName,
 		Name:        guardrailName,
 		Description: "guard desc v1",
 		Content:     "guard v1",

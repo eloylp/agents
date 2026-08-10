@@ -40,8 +40,8 @@ func fixtureConfig() *config.Config {
 			"security": {Prompt: "audit inputs"},
 		},
 		Prompts: []fleet.Prompt{
-			{Name: "coder", Content: "code"},
-			{Name: "reviewer", Content: "review"},
+			{ID: "prompt_coder", Name: "coder", Content: "code"},
+			{ID: "prompt_reviewer", Name: "reviewer", Content: "review"},
 		},
 		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, PromptRef: "coder", Description: "writes code", AllowDispatch: true},
@@ -66,7 +66,12 @@ func testDB(t *testing.T) *sql.DB {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	for _, p := range []fleet.Prompt{{Name: "coder", Content: "code"}, {Name: "reviewer", Content: "review"}, {Name: "team-reviewer", Content: "review"}, {Name: "team-coder", Content: "code"}} {
+	for _, p := range []fleet.Prompt{
+		{ID: "prompt_coder", Name: "coder", Content: "code"},
+		{ID: "prompt_reviewer", Name: "reviewer", Content: "review"},
+		{ID: "team-reviewer", Name: "team-reviewer", Content: "review"},
+		{ID: "team-coder", Name: "team-coder", Content: "code"},
+	} {
 		if _, err := store.UpsertPrompt(db, p); err != nil {
 			t.Fatalf("seed prompt %s: %v", p.Name, err)
 		}
@@ -364,7 +369,7 @@ func TestToolClarifyImprovementRecommendationRetriesFailedViaQueue(t *testing.T)
 func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	prompt, err := deps.Store.UpsertPrompt(fleet.Prompt{Name: "bundle-target", Description: "target desc", Content: "body v1"})
+	prompt, err := deps.Store.UpsertPrompt(fleet.Prompt{ID: "bundle-target", Name: "bundle-target", Description: "target desc", Content: "body v1"})
 	if err != nil {
 		t.Fatalf("seed prompt: %v", err)
 	}
@@ -694,6 +699,7 @@ func TestToolPromptCRUDNormalizesNames(t *testing.T) {
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
+		"id":          "prompt_release-notes",
 		"name":        "Release-Notes",
 		"description": "Drafts releases",
 		"content":     "Summarize work",
@@ -742,13 +748,44 @@ func TestToolPromptCRUDNormalizesNames(t *testing.T) {
 	}
 }
 
+func TestToolCatalogCreateRequiresExplicitID(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	tests := []struct {
+		name string
+		call func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
+		args map[string]any
+	}{
+		{name: "prompt", call: toolCreatePrompt(deps), args: map[string]any{"name": "new-prompt", "content": "body"}},
+		{name: "skill", call: toolCreateSkill(deps), args: map[string]any{"name": "new-skill", "prompt": "body"}},
+		{name: "guardrail", call: toolCreateGuardrail(deps), args: map[string]any{"name": "new-guardrail", "content": "body"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = tc.args
+			res, err := tc.call(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("expected IsError for create without id, got %+v", res)
+			}
+			if !strings.Contains(textOf(t, res), "requires explicit id") {
+				t.Fatalf("error = %q, want explicit id guidance", textOf(t, res))
+			}
+		})
+	}
+}
+
 func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 
 	for _, args := range []map[string]any{
-		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
-		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+		{"id": "prompt_team-a_shared", "workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"id": "prompt_team-b_shared", "workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
 	} {
 		req := mcpgo.CallToolRequest{}
 		req.Params.Arguments = args
@@ -2098,6 +2135,7 @@ func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
+		"id":     "hardening",
 		"name":   "  Hardening  ",
 		"prompt": "  audit inputs carefully  ",
 	}

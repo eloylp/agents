@@ -185,9 +185,6 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		id := req.GetString("id", "")
 		workspaceID := req.GetString("workspace_id", "")
 		repo := req.GetString("repo", "")
-		if id == "" && workspaceID == "" && repo == "" {
-			id = name
-		}
 		sk := fleet.Skill{
 			ID:          id,
 			WorkspaceID: workspaceID,

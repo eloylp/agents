@@ -157,11 +157,7 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 		}
 	}
 	if g.ID == "" {
-		id, err := derivedCatalogID("guardrail_", g.WorkspaceID, "", g.Name)
-		if err != nil {
-			return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: %v", g.Name, err)}
-		}
-		g.ID = id
+		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q requires explicit id", g.Name)}
 	}
 	if err := validateEntityID(g.ID); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: %v", g.Name, err)}

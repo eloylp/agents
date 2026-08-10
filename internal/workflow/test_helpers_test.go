@@ -50,7 +50,7 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 		if !slices.ContainsFunc(cfg.Prompts, func(p fleet.Prompt) bool {
 			return p.Name == cfg.Agents[i].PromptRef
 		}) {
-			cfg.Prompts = append(cfg.Prompts, fleet.Prompt{Name: cfg.Agents[i].PromptRef, Content: "test prompt"})
+			cfg.Prompts = append(cfg.Prompts, fleet.Prompt{ID: fmt.Sprintf("prompt_test_agent_%d", i), Name: cfg.Agents[i].PromptRef, Content: "test prompt"})
 		}
 	}
 	for i, p := range cfg.Prompts {
