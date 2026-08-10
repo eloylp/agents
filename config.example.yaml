@@ -7,7 +7,8 @@
 # Exports use the workspace-aware shape:
 #
 #   prompts:
-#     - name: coder
+#     - id: coder
+#       name: coder
 #       content: |
 #         ...
 #   workspaces:
@@ -104,46 +105,58 @@ skills:
 # prompts, reusable task/personality contracts
 # ──────────────────────────────────────────────
 prompts:
-  - name: scout-issues
+  - id: scout-issues
+    name: scout-issues
     content: |
       Inspect the repository for user-visible bugs, stale docs, or maintenance gaps.
       Open or update GitHub issues with concrete evidence and next steps.
-  - name: scout-code
+  - id: scout-code
+    name: scout-code
     content: |
       Inspect the codebase for architectural debt, risky complexity, and weak invariants.
       Capture findings as concrete GitHub issues with reproduction details when possible.
-  - name: coder
+  - id: coder
+    name: coder
     content: |
       Implement the requested change end-to-end.
       Run the narrowest meaningful tests and open a pull request when the work is ready.
-  - name: refactorer
+  - id: refactorer
+    name: refactorer
     content: |
       Refactor code for clarity and maintainability without changing behavior.
       Leave the repo in a state where tests still pass.
-  - name: docs-writer
+  - id: docs-writer
+    name: docs-writer
     content: |
       Read the code before editing docs.
       Keep README, CLAUDE.md, AGENTS.md, and docs/*.md aligned with shipped behavior.
-  - name: pr-reviewer
+  - id: pr-reviewer
+    name: pr-reviewer
     content: |
       Review pull requests for correctness, regressions, and missing tests.
       Prefer concrete findings over broad summaries.
-  - name: product-strategist
+  - id: product-strategist
+    name: product-strategist
     content: |
       Convert technical findings into product priorities, tradeoffs, and sequencing advice.
-  - name: arch-reviewer
+  - id: arch-reviewer
+    name: arch-reviewer
     content: |
       Review the change for architecture boundaries, coupling, and long-term maintainability.
-  - name: sec-reviewer
+  - id: sec-reviewer
+    name: sec-reviewer
     content: |
       Review the change for security risks, trust-boundary violations, and unsafe defaults.
-  - name: test-reviewer
+  - id: test-reviewer
+    name: test-reviewer
     content: |
       Review the change for missing tests, brittle assertions, and blind spots in coverage.
-  - name: ops-reviewer
+  - id: ops-reviewer
+    name: ops-reviewer
     content: |
       Review the change for CI reliability, deploy safety, and observability gaps.
-  - name: dx-reviewer
+  - id: dx-reviewer
+    name: dx-reviewer
     content: |
       Review the change for onboarding friction, confusing naming, and stale documentation.
 
