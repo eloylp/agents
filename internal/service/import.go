@@ -24,7 +24,15 @@ func (s *Service) ReplaceConfig(cfg *config.Config, budgets []store.TokenBudget)
 		if err := rejectDelegatedCatalogImportTx(tx, cfg); err != nil {
 			return err
 		}
-		if err := store.ReplaceConfigTx(tx, cfg, budgets); err != nil {
+		delegated, err := catalogDelegatedTx(tx)
+		if err != nil {
+			return err
+		}
+		replaceConfigTx := store.ReplaceConfigTx
+		if delegated {
+			replaceConfigTx = store.ReplaceConfigPreserveCatalogTx
+		}
+		if err := replaceConfigTx(tx, cfg, budgets); err != nil {
 			return err
 		}
 		return validateFleetForCompleteConfigTx(tx)
@@ -39,4 +47,12 @@ func rejectDelegatedCatalogImportTx(tx *sql.Tx, cfg *config.Config) error {
 		return nil
 	}
 	return rejectCatalogDelegatedTx(tx)
+}
+
+func catalogDelegatedTx(tx *sql.Tx) (bool, error) {
+	cfg, err := store.ReadCatalogDelegationConfigTx(tx)
+	if err != nil {
+		return false, err
+	}
+	return cfg.Enabled, nil
 }

@@ -365,18 +365,24 @@ type catalogDelegationPatchJSON struct {
 
 func (p catalogDelegationPatchJSON) toStorePatch() store.CatalogDelegationPatch {
 	return store.CatalogDelegationPatch{
-		Enabled:              p.Enabled,
-		Repo:                 p.Repo,
-		Branch:               p.Branch,
-		CatalogPath:          p.CatalogPath,
-		LastSyncedCommit:     p.LastSyncedCommit,
-		LastSuccessfulSyncAt: p.LastSuccessfulSyncAt,
-		LastSyncStatus:       p.LastSyncStatus,
-		LastSyncError:        p.LastSyncError,
-		DisabledAt:           p.DisabledAt,
-		CredentialSecret:     p.Credential,
-		CredentialStatus:     p.CredentialStatus,
+		Enabled:          p.Enabled,
+		Repo:             p.Repo,
+		Branch:           p.Branch,
+		CatalogPath:      p.CatalogPath,
+		CredentialSecret: p.Credential,
 	}
+}
+
+func (p catalogDelegationPatchJSON) validatePublicPatch() error {
+	if p.LastSyncedCommit != nil ||
+		p.LastSuccessfulSyncAt != nil ||
+		p.LastSyncStatus != nil ||
+		p.LastSyncError != nil ||
+		p.DisabledAt != nil ||
+		p.CredentialStatus != nil {
+		return &store.ErrValidation{Msg: "catalog delegation sync status is managed by the daemon"}
+	}
+	return nil
 }
 
 func (h *Handler) HandleCatalogDelegation(w http.ResponseWriter, _ *http.Request) {
@@ -393,6 +399,10 @@ func (h *Handler) HandleUpdateCatalogDelegation(w http.ResponseWriter, r *http.R
 	var patch catalogDelegationPatchJSON
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&patch); err != nil {
 		http.Error(w, fmt.Sprintf("parse catalog delegation: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := patch.validatePublicPatch(); err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
 		return
 	}
 	cfg, err := h.service.PatchCatalogDelegationConfig(patch.toStorePatch())

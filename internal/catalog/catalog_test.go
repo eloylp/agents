@@ -103,6 +103,18 @@ assets:
 `,
 			wantErr: "must not include a version suffix",
 		},
+		{
+			name: "invalid public ref characters",
+			body: `
+version: 1
+assets:
+  - id: Bad/Ref
+    kind: prompt
+    name: coder
+    body: no
+`,
+			wantErr: "must contain only lowercase letters, digits, hyphen, or underscore",
+		},
 	}
 
 	for _, tc := range tests {

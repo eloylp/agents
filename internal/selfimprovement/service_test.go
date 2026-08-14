@@ -480,6 +480,52 @@ func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *tes
 	}
 }
 
+func TestPublishProposalBundleBlockedWhenCatalogDelegated(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "delegated-prompt", Name: "delegated-prompt", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683604)
+	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "catalog update",
+		Rationale:             "prompt update should be proposed",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation: %v", err)
+	}
+	if rec.ProposalBundle == nil {
+		t.Fatal("RecordRecommendation did not attach proposal bundle")
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	_, err = svc.PublishProposalBundle(rec.ProposalBundle.ID, "system")
+	var delegated *store.ErrCatalogDelegated
+	if !errors.As(err, &delegated) {
+		t.Fatalf("PublishProposalBundle() error = %T %v, want ErrCatalogDelegated", err, err)
+	}
+}
+
 func TestProposalBundleNoopEditDoesNotRecordEditEvent(t *testing.T) {
 	t.Parallel()
 	svc, st, db := newServiceTest(t)

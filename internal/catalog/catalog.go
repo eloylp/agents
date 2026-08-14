@@ -256,5 +256,11 @@ func validatePublicRef(ref string) error {
 	if strings.Contains(ref, "@") {
 		return fmt.Errorf("must not include a version suffix")
 	}
+	for _, r := range ref {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("must contain only lowercase letters, digits, hyphen, or underscore")
+	}
 	return nil
 }

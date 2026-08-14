@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eloylp/agents/internal/catalog"
+	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -113,6 +114,43 @@ func TestCatalogMutationsBlockedWhenDelegated(t *testing.T) {
 				t.Fatalf("%s error = %T %v, want ErrCatalogDelegated", tc.name, err, err)
 			}
 		})
+	}
+}
+
+func TestReplaceConfigPreservesDelegatedCatalogMirror(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	err := svc.ReplaceConfig(&config.Config{
+		Backends: map[string]fleet.Backend{"claude": {Command: "claude"}},
+		Agents: []fleet.Agent{{
+			Name:        "coder",
+			Backend:     "claude",
+			PromptRef:   "coder",
+			Description: "Writes code",
+		}},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ReplaceConfig: %v", err)
+	}
+
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "test prompt" {
+		t.Fatalf("prompt content = %q, want test prompt", prompt.Content)
 	}
 }
 
