@@ -21,6 +21,18 @@ export function isCatalogDelegated(config: Record<string, unknown> | null): bool
   return configCatalogDelegation(config)?.enabled === true
 }
 
+export function catalogDelegationFileURL(delegation: CatalogDelegationConfig | null): string | null {
+  const repo = delegation?.repo?.trim()
+  if (!repo || !repo.includes('/')) return null
+  const branch = delegation?.branch?.trim() || 'main'
+  const catalogPath = delegation?.catalog_path?.trim() || 'catalog.yml'
+  const [owner, name] = repo.split('/', 2).map(encodeURIComponent)
+  const encodedBranch = branch.split('/').map(encodeURIComponent).join('/')
+  const encodedPath = catalogPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  if (!owner || !name || !encodedPath) return null
+  return `https://github.com/${owner}/${name}/blob/${encodedBranch}/${encodedPath}`
+}
+
 export function isGlobalCatalogAsset(item: { workspace_id?: string; repo?: string }): boolean {
   return !item.workspace_id && !item.repo
 }

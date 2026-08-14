@@ -6,7 +6,8 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
-import { isCatalogDelegated } from '@/lib/catalog-delegation'
+import { catalogDelegationFileURL } from '@/lib/catalog-delegation'
+import type { CatalogDelegationConfig } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
@@ -224,7 +225,9 @@ export default function SkillsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
-  const [catalogDelegated, setCatalogDelegated] = useState(false)
+  const [catalogDelegation, setCatalogDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const catalogDelegated = catalogDelegation?.enabled === true
+  const catalogFileURL = catalogDelegationFileURL(catalogDelegation)
 
   const load = () => {
     setLoading(true)
@@ -245,10 +248,10 @@ export default function SkillsPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
-    fetch(apiRoutes.config(), { cache: 'no-store' })
+    fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
-      .then(data => setCatalogDelegated(isCatalogDelegated(data)))
-      .catch(() => setCatalogDelegated(false))
+      .then(data => setCatalogDelegation(data))
+      .catch(() => setCatalogDelegation(null))
   }, [limit, offset])
 
   useEffect(() => {
@@ -419,7 +422,12 @@ export default function SkillsPage() {
         >
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
         {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
-        {catalogDelegated && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Catalog delegation is enabled. Edit catalog.yml in the configured GitHub repository.</p>}
+        {catalogDelegated && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            Catalog delegation is enabled. Edit{' '}
+            {catalogFileURL ? <a href={catalogFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{catalogDelegation?.catalog_path || 'catalog.yml'}</a> : 'catalog.yml'}.
+          </p>
+        )}
         {!loading && !error && skills.length === 0 && (
           <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
         )}

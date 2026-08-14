@@ -8,7 +8,8 @@ import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
-import { isCatalogDelegated } from '@/lib/catalog-delegation'
+import { catalogDelegationFileURL } from '@/lib/catalog-delegation'
+import type { CatalogDelegationConfig } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
@@ -212,7 +213,9 @@ export default function GuardrailsManager() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
-  const [catalogDelegated, setCatalogDelegated] = useState(false)
+  const [catalogDelegation, setCatalogDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const catalogDelegated = catalogDelegation?.enabled === true
+  const catalogFileURL = catalogDelegationFileURL(catalogDelegation)
 
   useEffect(() => {
     currentWorkspaceRef.current = workspace
@@ -235,16 +238,16 @@ export default function GuardrailsManager() {
         if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
         return r.json()
       }),
-      fetch(apiRoutes.config(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
+      fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
     ])
-      .then(([catalogRaw, lookupRaw, refs, cfg]: [unknown, unknown, WorkspaceGuardrailRef[], Record<string, unknown> | null]) => {
+      .then(([catalogRaw, lookupRaw, refs, delegation]: [unknown, unknown, WorkspaceGuardrailRef[], CatalogDelegationConfig | null]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         const catalog = pageFromResponse<Guardrail>(catalogRaw, guardrailsLimit, guardrailsOffset)
         setGuardrails(catalog.items ?? [])
         setGuardrailLookups(itemsFromResponse<Guardrail>(lookupRaw))
         setGuardrailsTotal(catalog.total)
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
-        setCatalogDelegated(isCatalogDelegated(cfg))
+        setCatalogDelegation(delegation)
         setLoading(false)
       })
       .catch(e => {
@@ -570,7 +573,12 @@ export default function GuardrailsManager() {
           onLimitChange={(next) => { setGuardrailsLimit(next); setGuardrailsOffset(0) }}
           onOffsetChange={setGuardrailsOffset}
         >
-        {catalogDelegated && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Catalog delegation is enabled. Edit catalog.yml in the configured GitHub repository.</p>}
+        {catalogDelegated && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            Catalog delegation is enabled. Edit{' '}
+            {catalogFileURL ? <a href={catalogFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{catalogDelegation?.catalog_path || 'catalog.yml'}</a> : 'catalog.yml'}.
+          </p>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {guardrails.map(g => (
             <div
