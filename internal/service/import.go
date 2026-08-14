@@ -9,6 +9,9 @@ import (
 
 func (s *Service) ImportConfig(cfg *config.Config, budgets []store.TokenBudget) error {
 	return s.withRawTx("import config", func(tx *sql.Tx) error {
+		if err := rejectDelegatedCatalogImportTx(tx, cfg); err != nil {
+			return err
+		}
 		if err := store.ImportConfigTx(tx, cfg, budgets); err != nil {
 			return err
 		}
@@ -18,9 +21,22 @@ func (s *Service) ImportConfig(cfg *config.Config, budgets []store.TokenBudget) 
 
 func (s *Service) ReplaceConfig(cfg *config.Config, budgets []store.TokenBudget) error {
 	return s.withRawTx("replace config", func(tx *sql.Tx) error {
+		if err := rejectDelegatedCatalogImportTx(tx, cfg); err != nil {
+			return err
+		}
 		if err := store.ReplaceConfigTx(tx, cfg, budgets); err != nil {
 			return err
 		}
 		return validateFleetForCompleteConfigTx(tx)
 	})
+}
+
+func rejectDelegatedCatalogImportTx(tx *sql.Tx, cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if len(cfg.Prompts) == 0 && len(cfg.Skills) == 0 && len(cfg.Guardrails) == 0 {
+		return nil
+	}
+	return rejectCatalogDelegatedTx(tx)
 }

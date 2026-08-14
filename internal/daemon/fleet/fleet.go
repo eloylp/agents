@@ -1216,6 +1216,10 @@ func storeErrStatus(err error) int {
 	if errors.As(err, &c) {
 		return http.StatusConflict
 	}
+	var d *store.ErrCatalogDelegated
+	if errors.As(err, &d) {
+		return http.StatusConflict
+	}
 	return http.StatusInternalServerError
 }
 

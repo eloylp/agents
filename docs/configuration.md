@@ -20,6 +20,56 @@ The shortest useful YAML representation is roughly 30 lines.
 
 ---
 
+## GitHub Catalog Delegation
+
+SQLite remains the default source of truth for reusable prompts, skills, and
+operator-defined guardrails. Daemon admins can persist an opt-in GitHub
+delegation configuration with `enabled`, `repo`, `branch`, `catalog_path`, sync
+status, last synced commit, and redacted credential status. Read it with
+`GET /catalog/delegation`, update it with `PATCH /catalog/delegation`, or
+inspect it under `catalog.delegation` in `GET /config`. Credential bytes are
+never returned by `/config`, `/export`, REST status responses, or MCP config
+reads.
+
+When delegation is enabled, the service layer rejects direct prompt, skill, and
+guardrail catalog mutations, including config imports that contain delegated
+catalog sections. Agent composition, workspace guardrail selection, repo
+bindings, dispatch wiring, runtime settings, and budgets remain daemon-owned and
+editable in SQLite.
+
+Delegated catalog files use the canonical `catalog.yml` shape:
+
+```yaml
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: |
+      Implement the requested change.
+
+  - id: go-api
+    kind: skill
+    name: go-api
+    body: |
+      For Go HTTP APIs, route each HTTP method to a distinct handler.
+
+  - id: security
+    kind: guardrail
+    name: security
+    enabled: true
+    position: 10
+    body: |
+      Do not expose secrets.
+```
+
+The `id` is the stable public catalog ref. Internal SQLite IDs, catalog version
+IDs, workspace scope, repo scope, agent assignment, backend/runtime fields,
+events, schedules, dispatch wiring, graph layout, and token budgets are
+forbidden in `catalog.yml`.
+
+---
+
 ## Daemon Runtime Settings
 
 Daemon runtime settings are process configuration, not fleet strategy. They are not stored in SQLite, not accepted by `/import`, and not returned by `/export` or `/config`. Configure them at startup with environment variables. Empty variables are ignored, so built-in defaults remain in effect unless an operator explicitly sets a value. Changing any of these settings requires restarting the daemon.
@@ -400,4 +450,4 @@ curl -H "Authorization: Bearer $AGENTS_API_TOKEN" \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
-The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable public refs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. The SQLite primary keys behind those refs are internal only. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.
+The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable public refs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. The SQLite primary keys behind those refs are internal only. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. When GitHub catalog delegation is enabled, direct catalog writes return a delegated/read-only conflict and catalog edits must happen through the configured `catalog.yml`. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.

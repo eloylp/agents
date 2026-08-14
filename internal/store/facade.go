@@ -108,6 +108,12 @@ func (s *Store) CountPrompts() (int, error) { return CountPrompts(s.db) }
 func (s *Store) ReadRuntimeSettings() (fleet.RuntimeSettings, error) {
 	return ReadRuntimeSettings(s.db)
 }
+func (s *Store) ReadCatalogDelegationConfig() (fleet.CatalogDelegationConfig, error) {
+	return ReadCatalogDelegationConfig(s.db)
+}
+func (s *Store) PatchCatalogDelegationConfig(patch CatalogDelegationPatch) (fleet.CatalogDelegationConfig, error) {
+	return PatchCatalogDelegationConfig(s.db, patch)
+}
 func (s *Store) WriteRuntimeSettings(settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
 	return WriteRuntimeSettings(s.db, settings)
 }

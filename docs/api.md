@@ -37,6 +37,8 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 |---|---|---|
 | `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
 | `GET` | `/agents/orphans/status` | DB-only orphan report (agents pinning models unavailable in their backend's catalog) |
+| `GET` | `/catalog/delegation` | Redacted GitHub catalog delegation status |
+| `PATCH` | `/catalog/delegation` | Update catalog delegation metadata and credential status/reference |
 | `GET` | `/events` | Recent webhook events (time-windowed) |
 | `GET` | `/events/stream` | Live event firehose (SSE) |
 | `GET` | `/traces` | Recent agent run traces with timing |
@@ -129,7 +131,7 @@ Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLit
 |---|---|---|
 | `GET` | `/{resource}` | List entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`) with `limit`, `offset`, `total`, and `items`. Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list, but uses the same paginated envelope. |
 | `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
-| `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. New catalog entries (`prompts`, `skills`, `guardrails`) must include an explicit stable public `id`; omitting `id` is accepted only when updating an existing same-scope/name catalog row. |
+| `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. New catalog entries (`prompts`, `skills`, `guardrails`) must include an explicit stable public `id`; omitting `id` is accepted only when updating an existing same-scope/name catalog row. When `catalog.delegation.enabled` is true, direct catalog mutations return `409 Conflict`; edit the configured `catalog.yml` instead. |
 | `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
 | `PATCH` | `/repos/{owner}/{repo}` | Toggle a repo's `enabled` flag. Only `enabled` is patchable; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement (including bindings) goes through `POST /repos`. |
 | `DELETE` | `/{resource}/{name-or-id}` | Remove an entry. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
