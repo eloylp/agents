@@ -22,6 +22,8 @@ type File struct {
 type Asset struct {
 	ID          string `yaml:"id"`
 	Kind        string `yaml:"kind"`
+	WorkspaceID string `yaml:"workspace_id,omitempty"`
+	Repo        string `yaml:"repo,omitempty"`
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 	Body        string `yaml:"body"`
@@ -31,8 +33,6 @@ type Asset struct {
 
 var forbiddenAssetFields = map[string]struct{}{
 	"workspace":        {},
-	"workspace_id":     {},
-	"repo":             {},
 	"repo_binding":     {},
 	"agent":            {},
 	"agents":           {},
@@ -103,6 +103,11 @@ func Validate(file File) error {
 	for i, asset := range file.Assets {
 		asset.ID = strings.TrimSpace(asset.ID)
 		asset.Kind = strings.TrimSpace(asset.Kind)
+		asset.WorkspaceID = strings.TrimSpace(asset.WorkspaceID)
+		if asset.WorkspaceID != "" {
+			asset.WorkspaceID = fleet.NormalizeWorkspaceID(asset.WorkspaceID)
+		}
+		asset.Repo = fleet.NormalizeRepoName(asset.Repo)
 		asset.Name = strings.TrimSpace(asset.Name)
 		asset.Body = strings.TrimSpace(asset.Body)
 		prefix := fmt.Sprintf("catalog.yml: assets[%d]", i)
@@ -125,12 +130,18 @@ func Validate(file File) error {
 		if asset.Body == "" {
 			return &store.ErrValidation{Msg: prefix + ": body is required"}
 		}
+		if asset.WorkspaceID == "" && asset.Repo != "" {
+			return &store.ErrValidation{Msg: prefix + ": repo scope requires workspace_id"}
+		}
 		switch asset.Kind {
 		case "prompt", "skill":
 			if asset.Enabled != nil || asset.Position != nil {
 				return &store.ErrValidation{Msg: fmt.Sprintf("%s: enabled and position are only valid for guardrails", prefix)}
 			}
 		case "guardrail":
+			if asset.Repo != "" {
+				return &store.ErrValidation{Msg: prefix + ": repo scope is only valid for prompts and skills"}
+			}
 		default:
 			return &store.ErrValidation{Msg: fmt.Sprintf("%s: unsupported kind %q", prefix, asset.Kind)}
 		}
@@ -141,34 +152,32 @@ func Validate(file File) error {
 func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []fleet.Guardrail) File {
 	file := File{Version: Version}
 	for _, p := range prompts {
-		if p.WorkspaceID != "" || p.Repo != "" {
-			continue
-		}
 		file.Assets = append(file.Assets, Asset{
 			ID:          p.ID,
 			Kind:        "prompt",
+			WorkspaceID: p.WorkspaceID,
+			Repo:        p.Repo,
 			Name:        p.Name,
 			Description: p.Description,
 			Body:        p.Content,
 		})
 	}
 	for id, sk := range skills {
-		if sk.WorkspaceID != "" || sk.Repo != "" {
-			continue
-		}
 		name := sk.Name
 		if name == "" {
 			name = id
 		}
 		file.Assets = append(file.Assets, Asset{
-			ID:   id,
-			Kind: "skill",
-			Name: name,
-			Body: sk.Prompt,
+			ID:          id,
+			Kind:        "skill",
+			WorkspaceID: sk.WorkspaceID,
+			Repo:        sk.Repo,
+			Name:        name,
+			Body:        sk.Prompt,
 		})
 	}
 	for _, g := range guardrails {
-		if g.IsBuiltin || g.WorkspaceID != "" {
+		if g.IsBuiltin {
 			continue
 		}
 		enabled := g.Enabled
@@ -176,6 +185,7 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 		file.Assets = append(file.Assets, Asset{
 			ID:          g.ID,
 			Kind:        "guardrail",
+			WorkspaceID: g.WorkspaceID,
 			Name:        g.Name,
 			Description: g.Description,
 			Body:        g.Content,
@@ -238,7 +248,7 @@ func validateAssetFields(index int, node *yaml.Node) error {
 			return &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: assets[%d]: forbidden field %q", index, key)}
 		}
 		switch key {
-		case "id", "kind", "name", "description", "body", "enabled", "position":
+		case "id", "kind", "workspace_id", "repo", "name", "description", "body", "enabled", "position":
 		default:
 			return &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: assets[%d]: unsupported field %q", index, key)}
 		}

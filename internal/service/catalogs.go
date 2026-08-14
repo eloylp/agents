@@ -379,6 +379,8 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			seenPrompts[asset.ID] = struct{}{}
 			if _, err := store.UpsertPromptTx(tx, fleet.Prompt{
 				ID:          asset.ID,
+				WorkspaceID: asset.WorkspaceID,
+				Repo:        asset.Repo,
 				Name:        asset.Name,
 				Description: asset.Description,
 				Content:     asset.Body,
@@ -388,9 +390,11 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 		case "skill":
 			seenSkills[asset.ID] = struct{}{}
 			if err := store.UpsertSkillTx(tx, asset.ID, fleet.Skill{
-				ID:     asset.ID,
-				Name:   asset.Name,
-				Prompt: asset.Body,
+				ID:          asset.ID,
+				WorkspaceID: asset.WorkspaceID,
+				Repo:        asset.Repo,
+				Name:        asset.Name,
+				Prompt:      asset.Body,
 			}); err != nil {
 				return err
 			}
@@ -406,6 +410,7 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			}
 			if err := store.UpsertGuardrailTx(tx, fleet.Guardrail{
 				ID:          asset.ID,
+				WorkspaceID: asset.WorkspaceID,
 				Name:        asset.Name,
 				Description: asset.Description,
 				Content:     asset.Body,
@@ -431,7 +436,7 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 }
 
 func deleteMissingCatalogRefsTx(tx *sql.Tx, table string, keep map[string]struct{}, deleteFn func(*sql.Tx, string) error) error {
-	rows, err := tx.Query("SELECT ref FROM " + table + " WHERE workspace_id IS NULL AND repo IS NULL ORDER BY ref")
+	rows, err := tx.Query("SELECT ref FROM " + table + " ORDER BY ref")
 	if err != nil {
 		return fmt.Errorf("service: list delegated %s: %w", table, err)
 	}
@@ -458,7 +463,7 @@ func deleteMissingCatalogRefsTx(tx *sql.Tx, table string, keep map[string]struct
 }
 
 func deleteMissingGuardrailsTx(tx *sql.Tx, keep map[string]struct{}) error {
-	rows, err := tx.Query("SELECT ref FROM guardrails WHERE workspace_id IS NULL AND is_builtin=0 ORDER BY ref")
+	rows, err := tx.Query("SELECT ref FROM guardrails WHERE is_builtin=0 ORDER BY ref")
 	if err != nil {
 		return fmt.Errorf("service: list delegated guardrails: %w", err)
 	}

@@ -267,6 +267,85 @@ assets:
 	}
 }
 
+func TestApplyDelegatedCatalogReconcilesScopedAssets(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	if err := svc.UpsertSkill("old-workspace-skill", fleet.Skill{
+		ID:          "old-workspace-skill",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "old-workspace-skill",
+		Prompt:      "old",
+	}); err != nil {
+		t.Fatalf("seed scoped skill: %v", err)
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "base123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	file, err := catalog.Parse([]byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: updated global prompt
+  - id: repo-coder
+    kind: prompt
+    workspace_id: default
+    repo: owner/repo
+    name: coder
+    body: repo prompt
+  - id: workspace-skill
+    kind: skill
+    workspace_id: default
+    name: workspace skill
+    body: workspace skill
+  - id: workspace-guardrail
+    kind: guardrail
+    workspace_id: default
+    name: workspace guardrail
+    body: workspace guardrail
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := svc.ApplyDelegatedCatalog(file, "abc123"); err != nil {
+		t.Fatalf("ApplyDelegatedCatalog: %v", err)
+	}
+
+	prompt, err := store.ReadPrompt(db, "repo-coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt scoped: %v", err)
+	}
+	if prompt.WorkspaceID != fleet.DefaultWorkspaceID || prompt.Repo != "owner/repo" || prompt.Content != "repo prompt" {
+		t.Fatalf("scoped prompt = %+v, want default owner/repo repo prompt", prompt)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if _, ok := skills["old-workspace-skill"]; ok {
+		t.Fatalf("old-workspace-skill still present after delegated reconcile")
+	}
+	if got := skills["workspace-skill"]; got.WorkspaceID != fleet.DefaultWorkspaceID || got.Prompt != "workspace skill" {
+		t.Fatalf("workspace-skill = %+v, want scoped updated skill", got)
+	}
+	guardrail, err := store.GetGuardrail(db, "workspace-guardrail")
+	if err != nil {
+		t.Fatalf("GetGuardrail scoped: %v", err)
+	}
+	if guardrail.WorkspaceID != fleet.DefaultWorkspaceID || guardrail.Content != "workspace guardrail" {
+		t.Fatalf("workspace guardrail = %+v, want scoped content", guardrail)
+	}
+}
+
 func TestActivateCatalogDelegationExportsBeforeEnabling(t *testing.T) {
 	t.Parallel()
 	_, db := openTestService(t)

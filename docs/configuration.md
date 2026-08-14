@@ -44,6 +44,8 @@ version: 1
 assets:
   - id: coder
     kind: prompt
+    workspace_id: default
+    repo: eloylp/agents
     name: coder
     body: |
       Implement the requested change.
@@ -63,10 +65,12 @@ assets:
       Do not expose secrets.
 ```
 
-The `id` is the stable public catalog ref. Internal SQLite IDs, catalog version
-IDs, workspace scope, repo scope, agent assignment, backend/runtime fields,
-events, schedules, dispatch wiring, graph layout, and token budgets are
-forbidden in `catalog.yml`.
+The `id` is the stable public catalog ref. `workspace_id` and `repo` preserve
+catalog visibility: omit both for global assets, set `workspace_id` for
+workspace-scoped assets, and set both for repo-scoped prompts and skills.
+Guardrails may be global or workspace-scoped. Internal SQLite IDs, catalog
+version IDs, agent assignment, backend/runtime fields, events, schedules,
+dispatch wiring, graph layout, and token budgets are forbidden in `catalog.yml`.
 
 ---
 

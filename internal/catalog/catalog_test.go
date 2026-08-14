@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -23,6 +24,8 @@ version: 1
 assets:
   - id: coder
     kind: prompt
+    workspace_id: default
+    repo: eloylp/agents
     name: coder
     body: write code
   - id: go-api
@@ -92,6 +95,33 @@ assets:
 			wantErr: "enabled and position are only valid for guardrails",
 		},
 		{
+			name: "repo scope requires workspace",
+			body: `
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    repo: eloylp/agents
+    name: coder
+    body: no
+`,
+			wantErr: "repo scope requires workspace_id",
+		},
+		{
+			name: "guardrail repo scope",
+			body: `
+version: 1
+assets:
+  - id: security
+    kind: guardrail
+    workspace_id: default
+    repo: eloylp/agents
+    name: security
+    body: no
+`,
+			wantErr: "repo scope is only valid for prompts and skills",
+		},
+		{
 			name: "version suffix",
 			body: `
 version: 1
@@ -135,5 +165,44 @@ assets:
 				t.Fatalf("Parse() error = %q, want containing %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestToFileIncludesScopedCatalogAssets(t *testing.T) {
+	t.Parallel()
+
+	file := ToFile(
+		[]fleet.Prompt{{
+			ID:          "repo-coder",
+			WorkspaceID: "default",
+			Repo:        "eloylp/agents",
+			Name:        "coder",
+			Content:     "repo prompt",
+		}},
+		map[string]fleet.Skill{
+			"workspace-skill": {
+				WorkspaceID: "default",
+				Name:        "team skill",
+				Prompt:      "workspace skill",
+			},
+		},
+		[]fleet.Guardrail{{
+			ID:          "workspace-guardrail",
+			WorkspaceID: "default",
+			Name:        "workspace guardrail",
+			Content:     "workspace guardrail",
+		}},
+	)
+
+	if got := len(file.Assets); got != 3 {
+		t.Fatalf("asset count = %d, want 3", got)
+	}
+	for _, asset := range file.Assets {
+		if asset.WorkspaceID != "default" {
+			t.Fatalf("asset %s workspace_id = %q, want default", asset.ID, asset.WorkspaceID)
+		}
+		if asset.ID == "repo-coder" && asset.Repo != "eloylp/agents" {
+			t.Fatalf("repo-coder repo = %q, want eloylp/agents", asset.Repo)
+		}
 	}
 }
