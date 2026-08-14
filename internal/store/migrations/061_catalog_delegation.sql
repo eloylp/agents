@@ -9,11 +9,10 @@ CREATE TABLE IF NOT EXISTS catalog_delegation (
 	last_sync_status TEXT NOT NULL DEFAULT 'disabled',
 	last_sync_error TEXT NOT NULL DEFAULT '',
 	disabled_at TEXT NOT NULL DEFAULT '',
-	credential_secret TEXT NOT NULL DEFAULT '',
+	credential_ref TEXT NOT NULL DEFAULT '',
 	credential_status TEXT NOT NULL DEFAULT 'unset',
 	created_at TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 INSERT OR IGNORE INTO catalog_delegation (id) VALUES (1);
-

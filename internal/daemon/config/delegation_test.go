@@ -14,6 +14,7 @@ func TestCatalogDelegationPatchRejectsSyncManagedFields(t *testing.T) {
 	status := "synced"
 	errText := ""
 	disabledAt := "2026-08-14T08:00:00Z"
+	credential := "secret-token"
 	credentialStatus := "configured"
 
 	tests := []struct {
@@ -24,6 +25,7 @@ func TestCatalogDelegationPatchRejectsSyncManagedFields(t *testing.T) {
 		{name: "last sync status", patch: catalogDelegationPatchJSON{LastSyncStatus: &status}},
 		{name: "last sync error", patch: catalogDelegationPatchJSON{LastSyncError: &errText}},
 		{name: "disabled at", patch: catalogDelegationPatchJSON{DisabledAt: &disabledAt}},
+		{name: "credential value", patch: catalogDelegationPatchJSON{Credential: &credential}},
 		{name: "credential status", patch: catalogDelegationPatchJSON{CredentialStatus: &credentialStatus}},
 	}
 

@@ -24,8 +24,11 @@ The shortest useful YAML representation is roughly 30 lines.
 
 SQLite remains the default source of truth for reusable prompts, skills, and
 operator-defined guardrails. Daemon admins can persist an opt-in GitHub
-delegation configuration with `enabled`, `repo`, `branch`, `catalog_path`, sync
-status, last synced commit, and redacted credential status. Read it with
+delegation configuration with `enabled`, `repo`, `branch`, `catalog_path`,
+`credential_ref`, sync status, last synced commit, and redacted credential
+status. `credential_ref` is the name of a daemon environment variable that holds
+the GitHub token; token bytes are resolved only when activation or sync calls
+GitHub and are not persisted in SQLite. Read the delegation status with
 `GET /catalog/delegation`, update it with `PATCH /catalog/delegation`, or
 inspect it under `catalog.delegation` in `GET /config`. Credential bytes are
 never returned by `/config`, `/export`, REST status responses, or MCP config

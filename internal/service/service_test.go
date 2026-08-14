@@ -347,18 +347,18 @@ assets:
 }
 
 func TestActivateCatalogDelegationExportsBeforeEnabling(t *testing.T) {
-	t.Parallel()
 	_, db := openTestService(t)
 	fake := &fakeCatalogGitHub{writeSHA: "commit456"}
 	svc := NewWithCatalogGitHub(store.New(db), fake)
 	enabled := true
 	repo := "owner/catalog"
-	token := "secret-token"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_EXPORT"
+	t.Setenv(credentialRef, "secret-token")
 
 	cfg, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
-		Enabled:          &enabled,
-		Repo:             &repo,
-		CredentialSecret: &token,
+		Enabled:       &enabled,
+		Repo:          &repo,
+		CredentialRef: &credentialRef,
 	}, "")
 	if err != nil {
 		t.Fatalf("ActivateCatalogDelegation: %v", err)
@@ -375,19 +375,19 @@ func TestActivateCatalogDelegationExportsBeforeEnabling(t *testing.T) {
 }
 
 func TestActivateCatalogDelegationFailureLeavesDisabled(t *testing.T) {
-	t.Parallel()
 	_, db := openTestService(t)
 	fake := &fakeCatalogGitHub{writeErr: errors.New("write failed")}
 	svc := NewWithCatalogGitHub(store.New(db), fake)
 	enabled := true
 	repo := "owner/catalog"
-	token := "secret-token"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_FAILURE"
+	t.Setenv(credentialRef, "secret-token")
 
 	err := func() error {
 		_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
-			Enabled:          &enabled,
-			Repo:             &repo,
-			CredentialSecret: &token,
+			Enabled:       &enabled,
+			Repo:          &repo,
+			CredentialRef: &credentialRef,
 		}, "")
 		return err
 	}()
@@ -404,18 +404,18 @@ func TestActivateCatalogDelegationFailureLeavesDisabled(t *testing.T) {
 }
 
 func TestActivateCatalogDelegationRequiresExplicitReenableModeWhenDiverged(t *testing.T) {
-	t.Parallel()
 	_, db := openTestService(t)
 	enabled := true
 	disabled := false
 	repo := "owner/catalog"
-	token := "secret-token"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_REENABLE"
+	t.Setenv(credentialRef, "secret-token")
 	sha := "old123"
 	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
 		Enabled:          &enabled,
 		Repo:             &repo,
 		LastSyncedCommit: &sha,
-		CredentialSecret: &token,
+		CredentialRef:    &credentialRef,
 	}); err != nil {
 		t.Fatalf("PatchCatalogDelegationConfig enable: %v", err)
 	}
@@ -461,18 +461,18 @@ assets:
 }
 
 func TestActivateCatalogDelegationResumeFromRepoAppliesRemoteCatalog(t *testing.T) {
-	t.Parallel()
 	_, db := openTestService(t)
 	enabled := true
 	disabled := false
 	repo := "owner/catalog"
-	token := "secret-token"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_RESUME"
+	t.Setenv(credentialRef, "secret-token")
 	sha := "old123"
 	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
 		Enabled:          &enabled,
 		Repo:             &repo,
 		LastSyncedCommit: &sha,
-		CredentialSecret: &token,
+		CredentialRef:    &credentialRef,
 	}); err != nil {
 		t.Fatalf("PatchCatalogDelegationConfig enable: %v", err)
 	}
@@ -537,17 +537,17 @@ func TestPatchCatalogDelegationConfigDisableRecordsAuditState(t *testing.T) {
 }
 
 func TestSyncDelegatedCatalogAppliesChangedHead(t *testing.T) {
-	t.Parallel()
 	_, db := openTestService(t)
 	enabled := true
 	repo := "owner/catalog"
-	token := "secret-token"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_SYNC"
+	t.Setenv(credentialRef, "secret-token")
 	sha := "old123"
 	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
 		Enabled:          &enabled,
 		Repo:             &repo,
 		LastSyncedCommit: &sha,
-		CredentialSecret: &token,
+		CredentialRef:    &credentialRef,
 	}); err != nil {
 		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
 	}

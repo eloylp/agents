@@ -29,12 +29,12 @@ func ReadCatalogDelegationConfigTx(tx *sql.Tx) (fleet.CatalogDelegationConfig, e
 	return readCatalogDelegationConfig(tx)
 }
 
-func ReadCatalogDelegationCredentialTx(tx *sql.Tx) (string, error) {
-	var secret string
-	if err := tx.QueryRow("SELECT credential_secret FROM catalog_delegation WHERE id=1").Scan(&secret); err != nil {
-		return "", fmt.Errorf("store: read catalog delegation credential: %w", err)
+func ReadCatalogDelegationCredentialRefTx(tx *sql.Tx) (string, error) {
+	var ref string
+	if err := tx.QueryRow("SELECT credential_ref FROM catalog_delegation WHERE id=1").Scan(&ref); err != nil {
+		return "", fmt.Errorf("store: read catalog delegation credential ref: %w", err)
 	}
-	return secret, nil
+	return ref, nil
 }
 
 func readCatalogDelegationConfig(q querier) (fleet.CatalogDelegationConfig, error) {
@@ -43,11 +43,11 @@ func readCatalogDelegationConfig(q querier) (fleet.CatalogDelegationConfig, erro
 	err := q.QueryRow(`
 		SELECT enabled, repo, branch, catalog_path, last_synced_commit,
 		       last_successful_sync_at, last_sync_status, last_sync_error,
-		       disabled_at, credential_status, created_at, updated_at
+		       disabled_at, credential_ref, credential_status, created_at, updated_at
 		FROM catalog_delegation WHERE id=1`).Scan(
 		&enabled, &cfg.Repo, &cfg.Branch, &cfg.CatalogPath, &cfg.LastSyncedCommit,
 		&cfg.LastSuccessfulSyncAt, &cfg.LastSyncStatus, &cfg.LastSyncError,
-		&cfg.DisabledAt, &cfg.CredentialStatus, &cfg.CreatedAt, &cfg.UpdatedAt,
+		&cfg.DisabledAt, &cfg.CredentialRef, &cfg.CredentialStatus, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if err != nil {
 		return fleet.CatalogDelegationConfig{}, fmt.Errorf("store: read catalog delegation: %w", err)
@@ -66,7 +66,7 @@ type CatalogDelegationPatch struct {
 	LastSyncStatus       *string
 	LastSyncError        *string
 	DisabledAt           *string
-	CredentialSecret     *string
+	CredentialRef        *string
 	CredentialStatus     *string
 }
 
@@ -100,8 +100,8 @@ func PatchCatalogDelegationConfigTx(tx *sql.Tx, patch CatalogDelegationPatch) (f
 	lastSyncStatus := cfg.LastSyncStatus
 	lastSyncError := cfg.LastSyncError
 	disabledAt := cfg.DisabledAt
+	credentialRef := cfg.CredentialRef
 	credentialStatus := cfg.CredentialStatus
-	credentialSecret := ""
 
 	if patch.Enabled != nil {
 		enabled = *patch.Enabled
@@ -130,14 +130,11 @@ func PatchCatalogDelegationConfigTx(tx *sql.Tx, patch CatalogDelegationPatch) (f
 	if patch.DisabledAt != nil {
 		disabledAt = strings.TrimSpace(*patch.DisabledAt)
 	}
+	if patch.CredentialRef != nil {
+		credentialRef = strings.TrimSpace(*patch.CredentialRef)
+	}
 	if patch.CredentialStatus != nil {
 		credentialStatus = strings.TrimSpace(*patch.CredentialStatus)
-	}
-	if patch.CredentialSecret != nil {
-		credentialSecret = strings.TrimSpace(*patch.CredentialSecret)
-		if credentialSecret != "" && credentialStatus == "" {
-			credentialStatus = "configured"
-		}
 	}
 	if branch == "" {
 		branch = "main"
@@ -152,8 +149,11 @@ func PatchCatalogDelegationConfigTx(tx *sql.Tx, patch CatalogDelegationPatch) (f
 			lastSyncStatus = "disabled"
 		}
 	}
-	if credentialStatus == "" {
+	if credentialStatus == "" || patch.CredentialRef != nil {
 		credentialStatus = "unset"
+		if credentialRef != "" {
+			credentialStatus = "configured"
+		}
 	}
 	if enabled && repo == "" {
 		return fleet.CatalogDelegationConfig{}, &ErrValidation{Msg: "catalog delegation repo is required when enabled"}
@@ -165,12 +165,12 @@ func PatchCatalogDelegationConfigTx(tx *sql.Tx, patch CatalogDelegationPatch) (f
 		UPDATE catalog_delegation
 		SET enabled=?, repo=?, branch=?, catalog_path=?, last_synced_commit=?,
 		    last_successful_sync_at=?, last_sync_status=?, last_sync_error=?,
-		    disabled_at=?, credential_secret=CASE WHEN ? = '' THEN credential_secret ELSE ? END,
+		    disabled_at=?, credential_ref=?,
 		    credential_status=?, updated_at=datetime('now')
 		WHERE id=1`,
 		boolToInt(enabled), repo, branch, catalogPath, lastSyncedCommit,
 		lastSuccessfulSyncAt, lastSyncStatus, lastSyncError, disabledAt,
-		credentialSecret, credentialSecret, credentialStatus,
+		credentialRef, credentialStatus,
 	); err != nil {
 		return fleet.CatalogDelegationConfig{}, fmt.Errorf("store: patch catalog delegation: %w", err)
 	}

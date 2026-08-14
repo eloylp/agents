@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -146,20 +147,20 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 	patch.LastSyncError = &clear
 
 	var cfg fleet.CatalogDelegationConfig
-	var token string
+	var credentialRef string
 	if err := s.withRawTx("prepare catalog delegation", func(tx *sql.Tx) error {
 		var err error
 		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
 		if err != nil {
 			return err
 		}
-		token, err = store.ReadCatalogDelegationCredentialTx(tx)
+		credentialRef, err = store.ReadCatalogDelegationCredentialRefTx(tx)
 		return err
 	}); err != nil {
 		return fleet.CatalogDelegationConfig{}, err
 	}
-	if strings.TrimSpace(token) == "" {
-		err := &store.ErrValidation{Msg: "catalog delegation credential is required for activation"}
+	token, err := resolveCatalogDelegationCredential(credentialRef)
+	if err != nil {
 		_ = s.markCatalogDelegationSyncError(err)
 		return fleet.CatalogDelegationConfig{}, err
 	}
@@ -268,7 +269,10 @@ func (s *Service) resumeCatalogDelegationFromRepo(ctx context.Context, ghCfg cat
 func (s *Service) SyncDelegatedCatalog(ctx context.Context) (fleet.CatalogDelegationConfig, error) {
 	cfg, token, err := s.readDelegationConfigAndCredential()
 	if err != nil {
-		return fleet.CatalogDelegationConfig{}, err
+		if cfg.Enabled {
+			_ = s.markCatalogDelegationSyncError(err)
+		}
+		return cfg, err
 	}
 	if !cfg.Enabled {
 		return cfg, nil
@@ -344,17 +348,36 @@ func (s *Service) currentCatalogFile() (catalog.File, error) {
 
 func (s *Service) readDelegationConfigAndCredential() (fleet.CatalogDelegationConfig, string, error) {
 	var cfg fleet.CatalogDelegationConfig
-	var token string
+	var credentialRef string
 	err := s.withRawTx("read catalog delegation", func(tx *sql.Tx) error {
 		var err error
 		cfg, err = store.ReadCatalogDelegationConfigTx(tx)
 		if err != nil {
 			return err
 		}
-		token, err = store.ReadCatalogDelegationCredentialTx(tx)
+		credentialRef, err = store.ReadCatalogDelegationCredentialRefTx(tx)
 		return err
 	})
+	if err != nil {
+		return cfg, "", err
+	}
+	if !cfg.Enabled {
+		return cfg, "", nil
+	}
+	token, err := resolveCatalogDelegationCredential(credentialRef)
 	return cfg, token, err
+}
+
+func resolveCatalogDelegationCredential(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", &store.ErrValidation{Msg: "catalog delegation credential_ref is required"}
+	}
+	token := strings.TrimSpace(os.Getenv(ref))
+	if token == "" {
+		return "", &store.ErrValidation{Msg: "catalog delegation credential_ref is not set in the daemon environment"}
+	}
+	return token, nil
 }
 
 func (s *Service) markCatalogDelegationSyncError(syncErr error) error {

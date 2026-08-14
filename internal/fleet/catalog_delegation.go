@@ -13,6 +13,7 @@ type CatalogDelegationConfig struct {
 	LastSyncStatus       string `json:"last_sync_status,omitempty" yaml:"last_sync_status,omitempty"`
 	LastSyncError        string `json:"last_sync_error,omitempty" yaml:"last_sync_error,omitempty"`
 	DisabledAt           string `json:"disabled_at,omitempty" yaml:"disabled_at,omitempty"`
+	CredentialRef        string `json:"credential_ref,omitempty" yaml:"credential_ref,omitempty"`
 	CredentialStatus     string `json:"credential_status,omitempty" yaml:"credential_status,omitempty"`
 	CreatedAt            string `json:"created_at,omitempty" yaml:"created_at,omitempty"`
 	UpdatedAt            string `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`

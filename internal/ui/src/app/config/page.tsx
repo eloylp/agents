@@ -324,7 +324,7 @@ export default function ConfigPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [delegation, setDelegation] = useState<CatalogDelegationConfig | null>(null)
-  const [delegationForm, setDelegationForm] = useState({ repo: '', branch: 'main', catalog_path: 'catalog.yml', credential: '', reenable_mode: '' })
+  const [delegationForm, setDelegationForm] = useState({ repo: '', branch: 'main', catalog_path: 'catalog.yml', credential_ref: '', reenable_mode: '' })
   const [delegationSaving, setDelegationSaving] = useState(false)
   const [delegationStatus, setDelegationStatus] = useState('')
   const [delegationError, setDelegationError] = useState('')
@@ -829,6 +829,7 @@ export default function ConfigPage() {
       repo: data.repo ?? '',
       branch: data.branch ?? 'main',
       catalog_path: data.catalog_path ?? 'catalog.yml',
+      credential_ref: data.credential_ref ?? '',
     }))
   }
 
@@ -861,7 +862,7 @@ export default function ConfigPage() {
     repo: delegationForm.repo,
     branch: delegationForm.branch,
     catalog_path: delegationForm.catalog_path,
-    credential: delegationForm.credential || undefined,
+    credential_ref: delegationForm.credential_ref || undefined,
     reenable_mode: delegationForm.reenable_mode || undefined,
   }, 'Catalog delegation enabled.')
 
@@ -1108,7 +1109,7 @@ export default function ConfigPage() {
               <div><label style={labelStyle}>Status</label><div style={{ color: delegation?.enabled ? 'var(--success)' : 'var(--text-muted)', fontWeight: 700 }}>{delegation?.enabled ? 'Enabled' : 'Disabled'}</div></div>
               <div><label style={labelStyle}>Last sync</label><div style={{ color: 'var(--text)' }}>{delegation?.last_sync_status || 'disabled'}</div></div>
               <div><label style={labelStyle}>Commit</label><div style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{delegation?.last_synced_commit?.slice(0, 12) || '-'}</div></div>
-              <div><label style={labelStyle}>Credential</label><div style={{ color: 'var(--text)' }}>{delegation?.credential_status || 'unset'}</div></div>
+              <div><label style={labelStyle}>Credential</label><div style={{ color: 'var(--text)' }}>{delegation?.credential_status || 'unset'}{delegation?.credential_ref ? ` (${delegation.credential_ref})` : ''}</div></div>
             </div>
             {delegation?.last_sync_error && <div style={{ color: 'var(--text-danger)', fontSize: '0.825rem' }}>{delegation.last_sync_error}</div>}
             <div style={{ display: 'grid', gap: '0.75rem' }}>
@@ -1127,8 +1128,8 @@ export default function ConfigPage() {
                 </label>
               </div>
               <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
-                Credential
-                <input type="password" value={delegationForm.credential} onChange={e => setDelegationForm(prev => ({ ...prev, credential: e.target.value }))} placeholder={delegation?.credential_status === 'configured' ? 'Leave empty to keep existing token' : 'GitHub token'} style={inputStyle} />
+                Credential env var
+                <input value={delegationForm.credential_ref} onChange={e => setDelegationForm(prev => ({ ...prev, credential_ref: e.target.value }))} placeholder="GITHUB_TOKEN" style={inputStyle} />
               </label>
               {delegation?.disabled_at && (
                 <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>

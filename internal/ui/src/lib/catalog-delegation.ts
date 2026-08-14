@@ -8,6 +8,7 @@ export interface CatalogDelegationConfig {
   last_sync_status?: string
   last_sync_error?: string
   disabled_at?: string
+  credential_ref?: string
   credential_status?: string
 }
 

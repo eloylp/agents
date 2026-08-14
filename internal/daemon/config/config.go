@@ -362,17 +362,18 @@ type catalogDelegationPatchJSON struct {
 	LastSyncStatus       *string `json:"last_sync_status,omitempty"`
 	LastSyncError        *string `json:"last_sync_error,omitempty"`
 	DisabledAt           *string `json:"disabled_at,omitempty"`
+	CredentialRef        *string `json:"credential_ref,omitempty"`
 	Credential           *string `json:"credential,omitempty"`
 	CredentialStatus     *string `json:"credential_status,omitempty"`
 }
 
 func (p catalogDelegationPatchJSON) toStorePatch() store.CatalogDelegationPatch {
 	return store.CatalogDelegationPatch{
-		Enabled:          p.Enabled,
-		Repo:             p.Repo,
-		Branch:           p.Branch,
-		CatalogPath:      p.CatalogPath,
-		CredentialSecret: p.Credential,
+		Enabled:       p.Enabled,
+		Repo:          p.Repo,
+		Branch:        p.Branch,
+		CatalogPath:   p.CatalogPath,
+		CredentialRef: p.CredentialRef,
 	}
 }
 
@@ -384,6 +385,9 @@ func (p catalogDelegationPatchJSON) validatePublicPatch() error {
 		p.DisabledAt != nil ||
 		p.CredentialStatus != nil {
 		return &store.ErrValidation{Msg: "catalog delegation sync status is managed by the daemon"}
+	}
+	if p.Credential != nil {
+		return &store.ErrValidation{Msg: "catalog delegation credential must be supplied as credential_ref"}
 	}
 	return nil
 }

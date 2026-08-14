@@ -38,7 +38,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
 | `GET` | `/agents/orphans/status` | DB-only orphan report (agents pinning models unavailable in their backend's catalog) |
 | `GET` | `/catalog/delegation` | Redacted GitHub catalog delegation status |
-| `PATCH` | `/catalog/delegation` | Update catalog delegation metadata and credential status/reference |
+| `PATCH` | `/catalog/delegation` | Update catalog delegation metadata and credential environment reference |
 | `GET` | `/events` | Recent webhook events (time-windowed) |
 | `GET` | `/events/stream` | Live event firehose (SSE) |
 | `GET` | `/traces` | Recent agent run traces with timing |
