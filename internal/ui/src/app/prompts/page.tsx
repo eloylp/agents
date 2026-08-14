@@ -7,6 +7,7 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
+import { isCatalogDelegated } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Prompt {
@@ -54,6 +55,7 @@ export default function PromptsPage() {
   const [filterRepos, setFilterRepos] = useState<Repo[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [catalogDelegated, setCatalogDelegated] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -74,6 +76,10 @@ export default function PromptsPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
+    fetch(apiRoutes.config(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setCatalogDelegated(isCatalogDelegated(data)))
+      .catch(() => setCatalogDelegated(false))
   }, [limit, offset])
 
   useEffect(() => {
@@ -212,7 +218,9 @@ export default function PromptsPage() {
           )}
           <button
             onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setError(''); setModal('create') }}
-            style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            disabled={catalogDelegated}
+            title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+            style={{ background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + New prompt
           </button>
@@ -227,6 +235,7 @@ export default function PromptsPage() {
           onOffsetChange={setOffset}
         >
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
+        {catalogDelegated && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Catalog delegation is enabled. Edit catalog.yml in the configured GitHub repository.</p>}
         {!loading && prompts.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No prompts configured.</p>}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
           {visiblePrompts.map(p => (
@@ -243,8 +252,8 @@ export default function PromptsPage() {
                 {p.content || '-'}
               </pre>
               <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-                <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
-                <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
+                <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', color: catalogDelegated ? 'var(--text-muted)' : 'var(--accent)' }}>Edit</button>
+                <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', color: 'var(--text-danger)' }}>Delete</button>
               </div>
             </Card>
           ))}

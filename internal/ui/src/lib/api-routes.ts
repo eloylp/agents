@@ -84,6 +84,11 @@ export const apiRoutes = {
     guardrails: (id: string) => `/workspaces/${enc(id)}/guardrails`,
   },
   catalog: {
+    delegation: {
+      status: () => '/catalog/delegation',
+      update: () => '/catalog/delegation',
+      sync: () => '/catalog/delegation/sync',
+    },
     prompts: catalogRoutes('prompts'),
     skills: catalogRoutes('skills'),
     guardrails: {

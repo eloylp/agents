@@ -132,14 +132,18 @@ func (s *Service) ApplyDelegatedCatalog(file catalog.File, commitSHA string) err
 	})
 }
 
-func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.CatalogDelegationPatch) (fleet.CatalogDelegationConfig, error) {
+const (
+	catalogDelegationResumeFromRepo       = "resume_from_repo"
+	catalogDelegationOverwriteRepoFromSQL = "overwrite_repo_from_sqlite"
+)
+
+func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.CatalogDelegationPatch, reenableMode string) (fleet.CatalogDelegationConfig, error) {
 	disabled := false
 	pending := "pending"
 	clear := ""
 	patch.Enabled = &disabled
 	patch.LastSyncStatus = &pending
 	patch.LastSyncError = &clear
-	patch.DisabledAt = &clear
 
 	var cfg fleet.CatalogDelegationConfig
 	var token string
@@ -160,6 +164,28 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 		return fleet.CatalogDelegationConfig{}, err
 	}
 
+	ghCfg := catalogGitHubConfig{
+		Repo:        cfg.Repo,
+		Branch:      cfg.Branch,
+		CatalogPath: cfg.CatalogPath,
+		Token:       token,
+	}
+	head, err := s.github.BranchHead(ctx, ghCfg)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	if cfg.LastSyncedCommit != "" && head != cfg.LastSyncedCommit {
+		switch reenableMode {
+		case catalogDelegationResumeFromRepo:
+			return s.resumeCatalogDelegationFromRepo(ctx, ghCfg, head)
+		case catalogDelegationOverwriteRepoFromSQL:
+		default:
+			err := &store.ErrValidation{Msg: "catalog delegation re-enable requires resume_from_repo or overwrite_repo_from_sqlite because GitHub changed while disabled"}
+			_ = s.markCatalogDelegationSyncError(err)
+			return fleet.CatalogDelegationConfig{}, err
+		}
+	}
 	file, err := s.currentCatalogFile()
 	if err != nil {
 		_ = s.markCatalogDelegationSyncError(err)
@@ -167,16 +193,6 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 	}
 	content, err := catalog.Marshal(file)
 	if err != nil {
-		_ = s.markCatalogDelegationSyncError(err)
-		return fleet.CatalogDelegationConfig{}, err
-	}
-	ghCfg := catalogGitHubConfig{
-		Repo:        cfg.Repo,
-		Branch:      cfg.Branch,
-		CatalogPath: cfg.CatalogPath,
-		Token:       token,
-	}
-	if _, err := s.github.BranchHead(ctx, ghCfg); err != nil {
 		_ = s.markCatalogDelegationSyncError(err)
 		return fleet.CatalogDelegationConfig{}, err
 	}
@@ -202,6 +218,44 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 			LastSuccessfulSyncAt: &syncedAt,
 			LastSyncStatus:       &status,
 			LastSyncError:        &clear,
+			DisabledAt:           &clear,
+		})
+		return err
+	}); err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (s *Service) resumeCatalogDelegationFromRepo(ctx context.Context, ghCfg catalogGitHubConfig, head string) (fleet.CatalogDelegationConfig, error) {
+	content, _, err := s.github.ReadFile(ctx, ghCfg, head)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	file, err := catalog.Parse(content)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	if err := s.ApplyDelegatedCatalog(file, head); err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	enabled := true
+	clear := ""
+	status := "synced"
+	syncedAt := time.Now().UTC().Format(time.RFC3339)
+	var cfg fleet.CatalogDelegationConfig
+	if err := s.withRawTx("enable resumed catalog delegation", func(tx *sql.Tx) error {
+		var err error
+		cfg, err = store.PatchCatalogDelegationConfigTx(tx, store.CatalogDelegationPatch{
+			Enabled:              &enabled,
+			LastSuccessfulSyncAt: &syncedAt,
+			LastSyncStatus:       &status,
+			LastSyncError:        &clear,
+			DisabledAt:           &clear,
 		})
 		return err
 	}); err != nil {
@@ -258,6 +312,14 @@ func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatc
 	var cfg fleet.CatalogDelegationConfig
 	err := s.withRawTx("patch catalog delegation", func(tx *sql.Tx) error {
 		var err error
+		if patch.Enabled != nil && !*patch.Enabled {
+			disabledAt := time.Now().UTC().Format(time.RFC3339)
+			status := "disabled"
+			clear := ""
+			patch.DisabledAt = &disabledAt
+			patch.LastSyncStatus = &status
+			patch.LastSyncError = &clear
+		}
 		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
 		return err
 	})

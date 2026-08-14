@@ -21,4 +21,10 @@ describe('apiRoutes', () => {
       .toBe('/improvements/feedback?offset=0&workspace=default')
     expect(apiRoutes.catalog.prompts.list({ workspace: '' })).toBe('/prompts')
   })
+
+  it('builds catalog delegation routes', () => {
+    expect(apiRoutes.catalog.delegation.status()).toBe('/catalog/delegation')
+    expect(apiRoutes.catalog.delegation.update()).toBe('/catalog/delegation')
+    expect(apiRoutes.catalog.delegation.sync()).toBe('/catalog/delegation/sync')
+  })
 })

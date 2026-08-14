@@ -356,6 +356,7 @@ type catalogDelegationPatchJSON struct {
 	Repo                 *string `json:"repo,omitempty"`
 	Branch               *string `json:"branch,omitempty"`
 	CatalogPath          *string `json:"catalog_path,omitempty"`
+	ReenableMode         *string `json:"reenable_mode,omitempty"`
 	LastSyncedCommit     *string `json:"last_synced_commit,omitempty"`
 	LastSuccessfulSyncAt *string `json:"last_successful_sync_at,omitempty"`
 	LastSyncStatus       *string `json:"last_sync_status,omitempty"`
@@ -410,7 +411,11 @@ func (h *Handler) HandleUpdateCatalogDelegation(w http.ResponseWriter, r *http.R
 	var cfg fleet.CatalogDelegationConfig
 	var err error
 	if patch.Enabled != nil && *patch.Enabled {
-		cfg, err = h.service.ActivateCatalogDelegation(r.Context(), patch.toStorePatch())
+		reenableMode := ""
+		if patch.ReenableMode != nil {
+			reenableMode = strings.TrimSpace(*patch.ReenableMode)
+		}
+		cfg, err = h.service.ActivateCatalogDelegation(r.Context(), patch.toStorePatch(), reenableMode)
 	} else {
 		cfg, err = h.service.PatchCatalogDelegationConfig(patch.toStorePatch())
 	}

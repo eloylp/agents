@@ -6,6 +6,7 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
+import { isCatalogDelegated } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
@@ -223,6 +224,7 @@ export default function SkillsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [catalogDelegated, setCatalogDelegated] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -243,6 +245,10 @@ export default function SkillsPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
+    fetch(apiRoutes.config(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setCatalogDelegated(isCatalogDelegated(data)))
+      .catch(() => setCatalogDelegated(false))
   }, [limit, offset])
 
   useEffect(() => {
@@ -392,7 +398,9 @@ export default function SkillsPage() {
           )}
           <button
             onClick={openCreate}
-            style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            disabled={catalogDelegated}
+            title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+            style={{ background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Create skill
           </button>
@@ -411,6 +419,7 @@ export default function SkillsPage() {
         >
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
         {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
+        {catalogDelegated && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Catalog delegation is enabled. Edit catalog.yml in the configured GitHub repository.</p>}
         {!loading && !error && skills.length === 0 && (
           <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
         )}
@@ -442,8 +451,8 @@ export default function SkillsPage() {
                   </pre>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                  <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                  <button onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
+                  <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.75rem', color: catalogDelegated ? 'var(--text-muted)' : 'var(--accent)' }}>Edit</button>
+                  <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
                 </div>
               </div>
             </Card>

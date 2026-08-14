@@ -8,6 +8,7 @@ import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
+import { isCatalogDelegated } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
@@ -211,6 +212,7 @@ export default function GuardrailsManager() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
+  const [catalogDelegated, setCatalogDelegated] = useState(false)
 
   useEffect(() => {
     currentWorkspaceRef.current = workspace
@@ -233,14 +235,16 @@ export default function GuardrailsManager() {
         if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
         return r.json()
       }),
+      fetch(apiRoutes.config(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
     ])
-      .then(([catalogRaw, lookupRaw, refs]: [unknown, unknown, WorkspaceGuardrailRef[]]) => {
+      .then(([catalogRaw, lookupRaw, refs, cfg]: [unknown, unknown, WorkspaceGuardrailRef[], Record<string, unknown> | null]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         const catalog = pageFromResponse<Guardrail>(catalogRaw, guardrailsLimit, guardrailsOffset)
         setGuardrails(catalog.items ?? [])
         setGuardrailLookups(itemsFromResponse<Guardrail>(lookupRaw))
         setGuardrailsTotal(catalog.total)
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
+        setCatalogDelegated(isCatalogDelegated(cfg))
         setLoading(false)
       })
       .catch(e => {
@@ -551,7 +555,9 @@ export default function GuardrailsManager() {
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          disabled={catalogDelegated}
+          title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', color: '#fff', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           New guardrail
         </button>
@@ -564,15 +570,19 @@ export default function GuardrailsManager() {
           onLimitChange={(next) => { setGuardrailsLimit(next); setGuardrailsOffset(0) }}
           onOffsetChange={setGuardrailsOffset}
         >
+        {catalogDelegated && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Catalog delegation is enabled. Edit catalog.yml in the configured GitHub repository.</p>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {guardrails.map(g => (
             <div
               key={guardrailID(g)}
-              onClick={() => { setSelected(g); setModal('edit') }}
+              onClick={() => {
+                if (catalogDelegated) return
+                setSelected(g); setModal('edit')
+              }}
               style={{
                 background: 'var(--bg-card)', border: '1px solid var(--border)',
                 borderRadius: '8px', padding: '1rem',
-                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
+                cursor: catalogDelegated ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -597,7 +607,7 @@ export default function GuardrailsManager() {
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>
                 )}
               </div>
-              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>edit →</span>
+              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>{catalogDelegated ? 'read-only' : 'edit →'}</span>
             </div>
           ))}
           {guardrails.length === 0 && (
