@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/eloylp/agents/internal/catalog"
 	"github.com/eloylp/agents/internal/fleet"
@@ -119,13 +121,137 @@ func (s *Service) ApplyDelegatedCatalog(file catalog.File, commitSHA string) err
 		}
 		status := "synced"
 		sha := strings.TrimSpace(commitSHA)
+		syncedAt := time.Now().UTC().Format(time.RFC3339)
 		_, err := store.PatchCatalogDelegationConfigTx(tx, store.CatalogDelegationPatch{
-			LastSyncedCommit: &sha,
-			LastSyncStatus:   &status,
-			LastSyncError:    ptrString(""),
+			LastSyncedCommit:     &sha,
+			LastSuccessfulSyncAt: &syncedAt,
+			LastSyncStatus:       &status,
+			LastSyncError:        ptrString(""),
 		})
 		return err
 	})
+}
+
+func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.CatalogDelegationPatch) (fleet.CatalogDelegationConfig, error) {
+	disabled := false
+	pending := "pending"
+	clear := ""
+	patch.Enabled = &disabled
+	patch.LastSyncStatus = &pending
+	patch.LastSyncError = &clear
+	patch.DisabledAt = &clear
+
+	var cfg fleet.CatalogDelegationConfig
+	var token string
+	if err := s.withRawTx("prepare catalog delegation", func(tx *sql.Tx) error {
+		var err error
+		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
+		if err != nil {
+			return err
+		}
+		token, err = store.ReadCatalogDelegationCredentialTx(tx)
+		return err
+	}); err != nil {
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	if strings.TrimSpace(token) == "" {
+		err := &store.ErrValidation{Msg: "catalog delegation credential is required for activation"}
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+
+	file, err := s.currentCatalogFile()
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	content, err := catalog.Marshal(file)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	ghCfg := catalogGitHubConfig{
+		Repo:        cfg.Repo,
+		Branch:      cfg.Branch,
+		CatalogPath: cfg.CatalogPath,
+		Token:       token,
+	}
+	if _, err := s.github.BranchHead(ctx, ghCfg); err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	_, blobSHA, err := s.github.ReadFile(ctx, ghCfg, cfg.Branch)
+	if err != nil && !isGitHubNotFound(err) {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	commitSHA, err := s.github.WriteFile(ctx, ghCfg, "Export agents intelligence catalog", content, blobSHA)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+
+	enabled := true
+	status := "synced"
+	syncedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := s.withRawTx("enable catalog delegation", func(tx *sql.Tx) error {
+		var err error
+		cfg, err = store.PatchCatalogDelegationConfigTx(tx, store.CatalogDelegationPatch{
+			Enabled:              &enabled,
+			LastSyncedCommit:     &commitSHA,
+			LastSuccessfulSyncAt: &syncedAt,
+			LastSyncStatus:       &status,
+			LastSyncError:        &clear,
+		})
+		return err
+	}); err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (s *Service) SyncDelegatedCatalog(ctx context.Context) (fleet.CatalogDelegationConfig, error) {
+	cfg, token, err := s.readDelegationConfigAndCredential()
+	if err != nil {
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	ghCfg := catalogGitHubConfig{
+		Repo:        cfg.Repo,
+		Branch:      cfg.Branch,
+		CatalogPath: cfg.CatalogPath,
+		Token:       token,
+	}
+	head, err := s.github.BranchHead(ctx, ghCfg)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return cfg, err
+	}
+	if head == cfg.LastSyncedCommit {
+		return cfg, nil
+	}
+	content, _, err := s.github.ReadFile(ctx, ghCfg, head)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return cfg, err
+	}
+	file, err := catalog.Parse(content)
+	if err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return cfg, err
+	}
+	if err := s.ApplyDelegatedCatalog(file, head); err != nil {
+		_ = s.markCatalogDelegationSyncError(err)
+		return cfg, err
+	}
+	updated, _, err := s.readDelegationConfigAndCredential()
+	if err != nil {
+		return fleet.CatalogDelegationConfig{}, err
+	}
+	return updated, nil
 }
 
 func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatch) (fleet.CatalogDelegationConfig, error) {
@@ -136,6 +262,49 @@ func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatc
 		return err
 	})
 	return cfg, err
+}
+
+func (s *Service) currentCatalogFile() (catalog.File, error) {
+	prompts, err := store.ReadPrompts(s.store.DB())
+	if err != nil {
+		return catalog.File{}, err
+	}
+	skills, err := store.ReadSkills(s.store.DB())
+	if err != nil {
+		return catalog.File{}, err
+	}
+	guardrails, err := store.ReadAllGuardrails(s.store.DB())
+	if err != nil {
+		return catalog.File{}, err
+	}
+	return catalog.ToFile(prompts, skills, guardrails), nil
+}
+
+func (s *Service) readDelegationConfigAndCredential() (fleet.CatalogDelegationConfig, string, error) {
+	var cfg fleet.CatalogDelegationConfig
+	var token string
+	err := s.withRawTx("read catalog delegation", func(tx *sql.Tx) error {
+		var err error
+		cfg, err = store.ReadCatalogDelegationConfigTx(tx)
+		if err != nil {
+			return err
+		}
+		token, err = store.ReadCatalogDelegationCredentialTx(tx)
+		return err
+	})
+	return cfg, token, err
+}
+
+func (s *Service) markCatalogDelegationSyncError(syncErr error) error {
+	status := "error"
+	msg := syncErr.Error()
+	return s.withRawTx("mark catalog delegation sync error", func(tx *sql.Tx) error {
+		_, err := store.PatchCatalogDelegationConfigTx(tx, store.CatalogDelegationPatch{
+			LastSyncStatus: &status,
+			LastSyncError:  &msg,
+		})
+		return err
+	})
 }
 
 func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {

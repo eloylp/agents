@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eloylp/agents/internal/catalog"
@@ -11,6 +13,42 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
+
+type fakeCatalogGitHub struct {
+	head      string
+	file      []byte
+	blobSHA   string
+	writeSHA  string
+	writeErr  error
+	writes    int
+	lastWrite []byte
+}
+
+func (f *fakeCatalogGitHub) BranchHead(context.Context, catalogGitHubConfig) (string, error) {
+	if f.head == "" {
+		return "base123", nil
+	}
+	return f.head, nil
+}
+
+func (f *fakeCatalogGitHub) ReadFile(context.Context, catalogGitHubConfig, string) ([]byte, string, error) {
+	if f.file == nil {
+		return nil, "", &githubStatusError{StatusCode: 404, Body: "not found"}
+	}
+	return f.file, f.blobSHA, nil
+}
+
+func (f *fakeCatalogGitHub) WriteFile(_ context.Context, _ catalogGitHubConfig, _ string, content []byte, _ string) (string, error) {
+	f.writes++
+	f.lastWrite = append([]byte(nil), content...)
+	if f.writeErr != nil {
+		return "", f.writeErr
+	}
+	if f.writeSHA == "" {
+		return "commit123", nil
+	}
+	return f.writeSHA, nil
+}
 
 func openTestService(t *testing.T) (*Service, *sql.DB) {
 	t.Helper()
@@ -224,6 +262,106 @@ assets:
 	}
 	if cfg.LastSyncedCommit != "abc123" || cfg.LastSyncStatus != "synced" {
 		t.Fatalf("delegation cfg = %+v, want sha abc123 synced", cfg)
+	}
+}
+
+func TestActivateCatalogDelegationExportsBeforeEnabling(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	fake := &fakeCatalogGitHub{writeSHA: "commit456"}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+	enabled := true
+	repo := "owner/catalog"
+	token := "secret-token"
+
+	cfg, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		CredentialSecret: &token,
+	})
+	if err != nil {
+		t.Fatalf("ActivateCatalogDelegation: %v", err)
+	}
+	if !cfg.Enabled || cfg.LastSyncedCommit != "commit456" || cfg.LastSyncStatus != "synced" {
+		t.Fatalf("delegation cfg = %+v, want enabled synced at commit456", cfg)
+	}
+	if fake.writes != 1 {
+		t.Fatalf("writes = %d, want 1", fake.writes)
+	}
+	if got := string(fake.lastWrite); !strings.Contains(got, "id: coder") || strings.Contains(got, "secret-token") {
+		t.Fatalf("exported catalog = %q, want coder asset and no credential", got)
+	}
+}
+
+func TestActivateCatalogDelegationFailureLeavesDisabled(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	fake := &fakeCatalogGitHub{writeErr: errors.New("write failed")}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+	enabled := true
+	repo := "owner/catalog"
+	token := "secret-token"
+
+	err := func() error {
+		_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+			Enabled:          &enabled,
+			Repo:             &repo,
+			CredentialSecret: &token,
+		})
+		return err
+	}()
+	if err == nil {
+		t.Fatal("ActivateCatalogDelegation err = nil, want error")
+	}
+	cfg, readErr := store.ReadCatalogDelegationConfig(db)
+	if readErr != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", readErr)
+	}
+	if cfg.Enabled || cfg.LastSyncedCommit != "" || cfg.LastSyncStatus != "error" {
+		t.Fatalf("delegation cfg = %+v, want disabled error without synced commit", cfg)
+	}
+}
+
+func TestSyncDelegatedCatalogAppliesChangedHead(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	token := "secret-token"
+	sha := "old123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+		CredentialSecret: &token,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+	svc := NewWithCatalogGitHub(store.New(db), &fakeCatalogGitHub{
+		head: "new123",
+		file: []byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: synced prompt
+`),
+	})
+
+	cfg, err := svc.SyncDelegatedCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("SyncDelegatedCatalog: %v", err)
+	}
+	if cfg.LastSyncedCommit != "new123" || cfg.LastSyncStatus != "synced" {
+		t.Fatalf("delegation cfg = %+v, want new123 synced", cfg)
+	}
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "synced prompt" {
+		t.Fatalf("prompt content = %q, want synced prompt", prompt.Content)
 	}
 }
 

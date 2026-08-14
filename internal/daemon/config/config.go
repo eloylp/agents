@@ -11,6 +11,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
 	r.Handle("/catalog/delegation", withTimeout(http.HandlerFunc(h.HandleCatalogDelegation))).Methods(http.MethodGet)
 	r.Handle("/catalog/delegation", withTimeout(http.HandlerFunc(h.HandleUpdateCatalogDelegation))).Methods(http.MethodPut, http.MethodPatch)
+	r.Handle("/catalog/delegation/sync", withTimeout(http.HandlerFunc(h.HandleSyncCatalogDelegation))).Methods(http.MethodPost)
 	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleRuntime))).Methods(http.MethodGet)
 	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateRuntime))).Methods(http.MethodPut, http.MethodPatch)
 	r.Handle("/workspaces/{workspace}/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateWorkspaceRuntime))).Methods(http.MethodPut, http.MethodPatch)
@@ -405,13 +407,33 @@ func (h *Handler) HandleUpdateCatalogDelegation(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
 	}
-	cfg, err := h.service.PatchCatalogDelegationConfig(patch.toStorePatch())
+	var cfg fleet.CatalogDelegationConfig
+	var err error
+	if patch.Enabled != nil && *patch.Enabled {
+		cfg, err = h.service.ActivateCatalogDelegation(r.Context(), patch.toStorePatch())
+	} else {
+		cfg, err = h.service.PatchCatalogDelegationConfig(patch.toStorePatch())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+func (h *Handler) HandleSyncCatalogDelegation(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.service.SyncDelegatedCatalog(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+func (h *Handler) SyncCatalogDelegation(ctx context.Context) (fleet.CatalogDelegationConfig, error) {
+	return h.service.SyncDelegatedCatalog(ctx)
 }
 
 // ── /export and /import ──────────────────────────────────────────────────────

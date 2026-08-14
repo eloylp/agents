@@ -141,6 +141,9 @@ func Validate(file File) error {
 func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []fleet.Guardrail) File {
 	file := File{Version: Version}
 	for _, p := range prompts {
+		if p.WorkspaceID != "" || p.Repo != "" {
+			continue
+		}
 		file.Assets = append(file.Assets, Asset{
 			ID:          p.ID,
 			Kind:        "prompt",
@@ -150,6 +153,9 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 		})
 	}
 	for id, sk := range skills {
+		if sk.WorkspaceID != "" || sk.Repo != "" {
+			continue
+		}
 		name := sk.Name
 		if name == "" {
 			name = id
@@ -162,7 +168,7 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 		})
 	}
 	for _, g := range guardrails {
-		if g.IsBuiltin {
+		if g.IsBuiltin || g.WorkspaceID != "" {
 			continue
 		}
 		enabled := g.Enabled

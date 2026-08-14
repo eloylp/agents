@@ -29,6 +29,14 @@ func ReadCatalogDelegationConfigTx(tx *sql.Tx) (fleet.CatalogDelegationConfig, e
 	return readCatalogDelegationConfig(tx)
 }
 
+func ReadCatalogDelegationCredentialTx(tx *sql.Tx) (string, error) {
+	var secret string
+	if err := tx.QueryRow("SELECT credential_secret FROM catalog_delegation WHERE id=1").Scan(&secret); err != nil {
+		return "", fmt.Errorf("store: read catalog delegation credential: %w", err)
+	}
+	return secret, nil
+}
+
 func readCatalogDelegationConfig(q querier) (fleet.CatalogDelegationConfig, error) {
 	var cfg fleet.CatalogDelegationConfig
 	var enabled int
