@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -400,10 +401,14 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 		switch asset.Kind {
 		case "prompt":
 			seenPrompts[asset.ID] = struct{}{}
+			workspaceID, repo, err := existingPromptScopeTx(tx, asset.ID)
+			if err != nil {
+				return err
+			}
 			if _, err := store.UpsertPromptTx(tx, fleet.Prompt{
 				ID:          asset.ID,
-				WorkspaceID: asset.WorkspaceID,
-				Repo:        asset.Repo,
+				WorkspaceID: workspaceID,
+				Repo:        repo,
 				Name:        asset.Name,
 				Description: asset.Description,
 				Content:     asset.Body,
@@ -412,10 +417,14 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			}
 		case "skill":
 			seenSkills[asset.ID] = struct{}{}
+			workspaceID, repo, err := existingSkillScopeTx(tx, asset.ID)
+			if err != nil {
+				return err
+			}
 			if err := store.UpsertSkillTx(tx, asset.ID, fleet.Skill{
 				ID:          asset.ID,
-				WorkspaceID: asset.WorkspaceID,
-				Repo:        asset.Repo,
+				WorkspaceID: workspaceID,
+				Repo:        repo,
 				Name:        asset.Name,
 				Prompt:      asset.Body,
 			}); err != nil {
@@ -423,22 +432,18 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			}
 		case "guardrail":
 			seenGuardrails[asset.ID] = struct{}{}
-			enabled := false
-			if asset.Enabled != nil {
-				enabled = *asset.Enabled
-			}
-			position := 0
-			if asset.Position != nil {
-				position = *asset.Position
+			existing, err := existingGuardrailSettingsTx(tx, asset.ID)
+			if err != nil {
+				return err
 			}
 			if err := store.UpsertGuardrailTx(tx, fleet.Guardrail{
 				ID:          asset.ID,
-				WorkspaceID: asset.WorkspaceID,
+				WorkspaceID: existing.WorkspaceID,
 				Name:        asset.Name,
 				Description: asset.Description,
 				Content:     asset.Body,
-				Enabled:     enabled,
-				Position:    position,
+				Enabled:     existing.Enabled,
+				Position:    existing.Position,
 			}); err != nil {
 				return err
 			}
@@ -456,6 +461,59 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 		return err
 	}
 	return validateFleetTx(tx)
+}
+
+func existingPromptScopeTx(tx *sql.Tx, ref string) (string, string, error) {
+	var workspaceID, repo string
+	err := tx.QueryRow(`
+		SELECT COALESCE(workspace_id, ''), COALESCE(repo, '')
+		FROM prompts
+		WHERE ref=?`, ref).Scan(&workspaceID, &repo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("service: read prompt %s scope: %w", ref, err)
+	}
+	return workspaceID, repo, nil
+}
+
+func existingSkillScopeTx(tx *sql.Tx, ref string) (string, string, error) {
+	var workspaceID, repo string
+	err := tx.QueryRow(`
+		SELECT COALESCE(workspace_id, ''), COALESCE(repo, '')
+		FROM skills
+		WHERE ref=?`, ref).Scan(&workspaceID, &repo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("service: read skill %s scope: %w", ref, err)
+	}
+	return workspaceID, repo, nil
+}
+
+type existingGuardrailSettings struct {
+	WorkspaceID string
+	Enabled     bool
+	Position    int
+}
+
+func existingGuardrailSettingsTx(tx *sql.Tx, ref string) (existingGuardrailSettings, error) {
+	var settings existingGuardrailSettings
+	var enabled int
+	err := tx.QueryRow(`
+		SELECT COALESCE(workspace_id, ''), enabled, position
+		FROM guardrails
+		WHERE ref=?`, ref).Scan(&settings.WorkspaceID, &enabled, &settings.Position)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settings, nil
+	}
+	if err != nil {
+		return settings, fmt.Errorf("service: read guardrail %s settings: %w", ref, err)
+	}
+	settings.Enabled = enabled != 0
+	return settings, nil
 }
 
 func deleteMissingCatalogRefsTx(tx *sql.Tx, table string, keep map[string]struct{}, deleteFn func(*sql.Tx, string) error) error {

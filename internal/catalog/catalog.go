@@ -22,25 +22,17 @@ type File struct {
 type Asset struct {
 	ID          string `yaml:"id"`
 	Kind        string `yaml:"kind"`
-	WorkspaceID string `yaml:"workspace_id,omitempty"`
-	Repo        string `yaml:"repo,omitempty"`
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 	Body        string `yaml:"body"`
-	Enabled     *bool  `yaml:"enabled,omitempty"`
-	Position    *int   `yaml:"position,omitempty"`
 }
 
 var allowedAssetFields = map[string]struct{}{
-	"id":           {},
-	"kind":         {},
-	"workspace_id": {},
-	"repo":         {},
-	"name":         {},
-	"description":  {},
-	"body":         {},
-	"enabled":      {},
-	"position":     {},
+	"id":          {},
+	"kind":        {},
+	"name":        {},
+	"description": {},
+	"body":        {},
 }
 
 func Parse(data []byte) (File, error) {
@@ -89,11 +81,6 @@ func Validate(file File) error {
 	for i, asset := range file.Assets {
 		asset.ID = strings.TrimSpace(asset.ID)
 		asset.Kind = strings.TrimSpace(asset.Kind)
-		asset.WorkspaceID = strings.TrimSpace(asset.WorkspaceID)
-		if asset.WorkspaceID != "" {
-			asset.WorkspaceID = fleet.NormalizeWorkspaceID(asset.WorkspaceID)
-		}
-		asset.Repo = fleet.NormalizeRepoName(asset.Repo)
 		asset.Name = strings.TrimSpace(asset.Name)
 		asset.Body = strings.TrimSpace(asset.Body)
 		prefix := fmt.Sprintf("catalog.yml: assets[%d]", i)
@@ -103,31 +90,23 @@ func Validate(file File) error {
 		if err := validatePublicRef(asset.ID); err != nil {
 			return &store.ErrValidation{Msg: fmt.Sprintf("%s: id %q: %v", prefix, asset.ID, err)}
 		}
-		if _, ok := seen[asset.ID]; ok {
-			return &store.ErrValidation{Msg: fmt.Sprintf("%s: duplicate id %q", prefix, asset.ID)}
-		}
-		seen[asset.ID] = struct{}{}
 		if asset.Kind == "" {
 			return &store.ErrValidation{Msg: prefix + ": kind is required"}
 		}
+		seenKey := asset.Kind + "\x00" + asset.ID
+		if _, ok := seen[seenKey]; ok {
+			return &store.ErrValidation{Msg: fmt.Sprintf("%s: duplicate %s id %q", prefix, asset.Kind, asset.ID)}
+		}
+		seen[seenKey] = struct{}{}
 		if asset.Name == "" {
 			return &store.ErrValidation{Msg: prefix + ": name is required"}
 		}
 		if asset.Body == "" {
 			return &store.ErrValidation{Msg: prefix + ": body is required"}
 		}
-		if asset.WorkspaceID == "" && asset.Repo != "" {
-			return &store.ErrValidation{Msg: prefix + ": repo scope requires workspace_id"}
-		}
 		switch asset.Kind {
 		case "prompt", "skill":
-			if asset.Enabled != nil || asset.Position != nil {
-				return &store.ErrValidation{Msg: fmt.Sprintf("%s: enabled and position are only valid for guardrails", prefix)}
-			}
 		case "guardrail":
-			if asset.Repo != "" {
-				return &store.ErrValidation{Msg: prefix + ": repo scope is only valid for prompts and skills"}
-			}
 		default:
 			return &store.ErrValidation{Msg: fmt.Sprintf("%s: unsupported kind %q", prefix, asset.Kind)}
 		}
@@ -141,8 +120,6 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 		file.Assets = append(file.Assets, Asset{
 			ID:          p.ID,
 			Kind:        "prompt",
-			WorkspaceID: p.WorkspaceID,
-			Repo:        p.Repo,
 			Name:        p.Name,
 			Description: p.Description,
 			Body:        p.Content,
@@ -154,29 +131,22 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 			name = id
 		}
 		file.Assets = append(file.Assets, Asset{
-			ID:          id,
-			Kind:        "skill",
-			WorkspaceID: sk.WorkspaceID,
-			Repo:        sk.Repo,
-			Name:        name,
-			Body:        sk.Prompt,
+			ID:   id,
+			Kind: "skill",
+			Name: name,
+			Body: sk.Prompt,
 		})
 	}
 	for _, g := range guardrails {
 		if g.IsBuiltin {
 			continue
 		}
-		enabled := g.Enabled
-		position := g.Position
 		file.Assets = append(file.Assets, Asset{
 			ID:          g.ID,
 			Kind:        "guardrail",
-			WorkspaceID: g.WorkspaceID,
 			Name:        g.Name,
 			Description: g.Description,
 			Body:        g.Content,
-			Enabled:     &enabled,
-			Position:    &position,
 		})
 	}
 	return file

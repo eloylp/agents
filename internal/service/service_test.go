@@ -226,8 +226,6 @@ assets:
     kind: guardrail
     name: rollout
     description: release safety
-    enabled: true
-    position: 20
     body: deploy carefully
 `))
 	if err != nil {
@@ -255,8 +253,8 @@ assets:
 	if err != nil {
 		t.Fatalf("GetGuardrail: %v", err)
 	}
-	if !guardrail.Enabled || guardrail.Position != 20 {
-		t.Fatalf("guardrail = %+v, want enabled position 20", guardrail)
+	if guardrail.Enabled || guardrail.Position != 0 {
+		t.Fatalf("guardrail = %+v, want new daemon-owned disabled position 0", guardrail)
 	}
 	cfg, err := store.ReadCatalogDelegationConfig(db)
 	if err != nil {
@@ -267,16 +265,35 @@ assets:
 	}
 }
 
-func TestApplyDelegatedCatalogReconcilesScopedAssets(t *testing.T) {
+func TestApplyDelegatedCatalogPreservesExistingDaemonOwnedMetadata(t *testing.T) {
 	t.Parallel()
 	svc, db := openTestService(t)
-	if err := svc.UpsertSkill("old-workspace-skill", fleet.Skill{
-		ID:          "old-workspace-skill",
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{
+		ID:          "repo-coder",
 		WorkspaceID: fleet.DefaultWorkspaceID,
-		Name:        "old-workspace-skill",
+		Repo:        "owner/repo",
+		Name:        "coder",
+		Content:     "old repo prompt",
+	}); err != nil {
+		t.Fatalf("seed scoped prompt: %v", err)
+	}
+	if err := svc.UpsertSkill("workspace-skill", fleet.Skill{
+		ID:          "workspace-skill",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "workspace skill",
 		Prompt:      "old",
 	}); err != nil {
 		t.Fatalf("seed scoped skill: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		ID:          "workspace-guardrail",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "workspace guardrail",
+		Content:     "old guardrail",
+		Enabled:     true,
+		Position:    99,
+	}); err != nil {
+		t.Fatalf("seed scoped guardrail: %v", err)
 	}
 	enabled := true
 	repo := "owner/catalog"
@@ -298,18 +315,14 @@ assets:
     body: updated global prompt
   - id: repo-coder
     kind: prompt
-    workspace_id: default
-    repo: owner/repo
     name: coder
     body: repo prompt
   - id: workspace-skill
     kind: skill
-    workspace_id: default
     name: workspace skill
     body: workspace skill
   - id: workspace-guardrail
     kind: guardrail
-    workspace_id: default
     name: workspace guardrail
     body: workspace guardrail
 `))
@@ -331,9 +344,6 @@ assets:
 	if err != nil {
 		t.Fatalf("ReadSkills: %v", err)
 	}
-	if _, ok := skills["old-workspace-skill"]; ok {
-		t.Fatalf("old-workspace-skill still present after delegated reconcile")
-	}
 	if got := skills["workspace-skill"]; got.WorkspaceID != fleet.DefaultWorkspaceID || got.Prompt != "workspace skill" {
 		t.Fatalf("workspace-skill = %+v, want scoped updated skill", got)
 	}
@@ -343,6 +353,9 @@ assets:
 	}
 	if guardrail.WorkspaceID != fleet.DefaultWorkspaceID || guardrail.Content != "workspace guardrail" {
 		t.Fatalf("workspace guardrail = %+v, want scoped content", guardrail)
+	}
+	if !guardrail.Enabled || guardrail.Position != 99 {
+		t.Fatalf("workspace guardrail settings = %+v, want existing enabled position 99", guardrail)
 	}
 }
 

@@ -24,8 +24,6 @@ version: 1
 assets:
   - id: coder
     kind: prompt
-    workspace_id: default
-    repo: eloylp/agents
     name: coder
     body: write code
   - id: go-api
@@ -35,13 +33,11 @@ assets:
   - id: security
     kind: guardrail
     name: security
-    enabled: true
-    position: 10
     body: do not expose secrets
 `,
 		},
 		{
-			name: "duplicate id",
+			name: "same id across kinds is valid",
 			body: `
 version: 1
 assets:
@@ -54,7 +50,22 @@ assets:
     name: coder
     body: two
 `,
-			wantErr: `duplicate id "coder"`,
+		},
+		{
+			name: "duplicate kind id",
+			body: `
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: one
+  - id: coder
+    kind: prompt
+    name: coder other
+    body: two
+`,
+			wantErr: `duplicate prompt id "coder"`,
 		},
 		{
 			name: "unsupported kind",
@@ -82,7 +93,7 @@ assets:
 			wantErr: `unsupported field "agent"`,
 		},
 		{
-			name: "guardrail only fields",
+			name: "unsupported daemon-owned enabled field",
 			body: `
 version: 1
 assets:
@@ -92,10 +103,10 @@ assets:
     enabled: true
     body: no
 `,
-			wantErr: "enabled and position are only valid for guardrails",
+			wantErr: `unsupported field "enabled"`,
 		},
 		{
-			name: "repo scope requires workspace",
+			name: "unsupported daemon-owned repo field",
 			body: `
 version: 1
 assets:
@@ -105,21 +116,20 @@ assets:
     name: coder
     body: no
 `,
-			wantErr: "repo scope requires workspace_id",
+			wantErr: `unsupported field "repo"`,
 		},
 		{
-			name: "guardrail repo scope",
+			name: "unsupported daemon-owned workspace field",
 			body: `
 version: 1
 assets:
   - id: security
     kind: guardrail
     workspace_id: default
-    repo: eloylp/agents
     name: security
     body: no
 `,
-			wantErr: "repo scope is only valid for prompts and skills",
+			wantErr: `unsupported field "workspace_id"`,
 		},
 		{
 			name: "version suffix",
@@ -168,7 +178,7 @@ assets:
 	}
 }
 
-func TestToFileIncludesScopedCatalogAssets(t *testing.T) {
+func TestToFileOmitsDaemonOwnedCatalogMetadata(t *testing.T) {
 	t.Parallel()
 
 	file := ToFile(
@@ -198,11 +208,18 @@ func TestToFileIncludesScopedCatalogAssets(t *testing.T) {
 		t.Fatalf("asset count = %d, want 3", got)
 	}
 	for _, asset := range file.Assets {
-		if asset.WorkspaceID != "default" {
-			t.Fatalf("asset %s workspace_id = %q, want default", asset.ID, asset.WorkspaceID)
+		if asset.ID == "" || asset.Kind == "" || asset.Name == "" || asset.Body == "" {
+			t.Fatalf("asset %s missing delegated content fields: %+v", asset.ID, asset)
 		}
-		if asset.ID == "repo-coder" && asset.Repo != "eloylp/agents" {
-			t.Fatalf("repo-coder repo = %q, want eloylp/agents", asset.Repo)
+	}
+	data, err := Marshal(file)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	text := string(data)
+	for _, forbidden := range []string{"workspace_id", "repo:", "enabled:", "position:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("delegated catalog contains daemon-owned field %q:\n%s", forbidden, text)
 		}
 	}
 }

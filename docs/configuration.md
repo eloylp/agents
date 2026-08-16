@@ -47,8 +47,6 @@ version: 1
 assets:
   - id: coder
     kind: prompt
-    workspace_id: default
-    repo: eloylp/agents
     name: coder
     body: |
       Implement the requested change.
@@ -62,18 +60,19 @@ assets:
   - id: security
     kind: guardrail
     name: security
-    enabled: true
-    position: 10
     body: |
       Do not expose secrets.
 ```
 
-The `id` is the stable public catalog ref. `workspace_id` and `repo` preserve
-catalog visibility: omit both for global assets, set `workspace_id` for
-workspace-scoped assets, and set both for repo-scoped prompts and skills.
-Guardrails may be global or workspace-scoped. Internal SQLite IDs, catalog
-version IDs, agent assignment, backend/runtime fields, events, schedules,
-dispatch wiring, graph layout, and token budgets are forbidden in `catalog.yml`.
+The `id` is the stable public catalog ref and identity boundary. GitHub owns
+collaborative intelligence content only: refs, kinds, names, descriptions, and
+bodies. Workspace/repo visibility, guardrail enablement and order, internal
+SQLite IDs, catalog version IDs, agent assignment, backend/runtime fields,
+events, schedules, dispatch wiring, graph layout, and token budgets are
+daemon-owned and forbidden in `catalog.yml`. When a GitHub asset updates an
+existing SQLite row by `kind` and `id`, the row keeps its existing daemon-owned
+scope and settings. Assets introduced by GitHub are created as global catalog
+assets.
 
 ---
 
