@@ -31,30 +31,16 @@ type Asset struct {
 	Position    *int   `yaml:"position,omitempty"`
 }
 
-var forbiddenAssetFields = map[string]struct{}{
-	"workspace":        {},
-	"repo_binding":     {},
-	"agent":            {},
-	"agents":           {},
-	"prompt_id":        {},
-	"skills":           {},
-	"backend":          {},
-	"model":            {},
-	"labels":           {},
-	"events":           {},
-	"cron":             {},
-	"schedule":         {},
-	"dispatch":         {},
-	"can_dispatch":     {},
-	"allow_dispatch":   {},
-	"token_budget":     {},
-	"token_budgets":    {},
-	"graph":            {},
-	"graph_layout":     {},
-	"version_id":       {},
-	"catalog_version":  {},
-	"catalog_versions": {},
-	"internal_id":      {},
+var allowedAssetFields = map[string]struct{}{
+	"id":           {},
+	"kind":         {},
+	"workspace_id": {},
+	"repo":         {},
+	"name":         {},
+	"description":  {},
+	"body":         {},
+	"enabled":      {},
+	"position":     {},
 }
 
 func Parse(data []byte) (File, error) {
@@ -244,12 +230,7 @@ func validateAssetFields(index int, node *yaml.Node) error {
 			return &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: assets[%d]: duplicate field %q", index, key)}
 		}
 		seen[key] = struct{}{}
-		if _, forbidden := forbiddenAssetFields[key]; forbidden {
-			return &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: assets[%d]: forbidden field %q", index, key)}
-		}
-		switch key {
-		case "id", "kind", "workspace_id", "repo", "name", "description", "body", "enabled", "position":
-		default:
+		if _, ok := allowedAssetFields[key]; !ok {
 			return &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: assets[%d]: unsupported field %q", index, key)}
 		}
 	}

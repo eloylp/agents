@@ -69,7 +69,7 @@ assets:
 			wantErr: `unsupported kind "agent"`,
 		},
 		{
-			name: "forbidden workflow field",
+			name: "unsupported workflow field",
 			body: `
 version: 1
 assets:
@@ -79,7 +79,7 @@ assets:
     agent: coder
     body: no
 `,
-			wantErr: `forbidden field "agent"`,
+			wantErr: `unsupported field "agent"`,
 		},
 		{
 			name: "guardrail only fields",
