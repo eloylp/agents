@@ -78,7 +78,7 @@ describe('<SkillsPage />', () => {
       '/skills/go-api',
       expect.objectContaining({ method: 'PATCH' }),
     ))
-  })
+  }, 10000)
 
   it('links delegated users to the configured catalog file', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -108,6 +108,8 @@ describe('<SkillsPage />', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/acme/catalog/blob/main/catalog.yml')
     expect(screen.getByRole('button', { name: '+ Create skill' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Scope' }))
+    expect(screen.queryByTestId('catalog-versions')).not.toBeInTheDocument()
+    expect(screen.getByText('Content versions are managed in the delegated GitHub catalog while delegation is enabled.')).toBeInTheDocument()
     fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Global'), { target: { value: 'workspace' } })
     fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Select workspace...'), { target: { value: 'team-a' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))

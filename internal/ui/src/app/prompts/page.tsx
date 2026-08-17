@@ -354,7 +354,12 @@ export default function PromptsPage() {
               <label style={labelStyle}>Content *</label>
               <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} readOnly={catalogDelegated && modal === 'edit'} />
             </div>
-            {modal === 'edit' && (
+            {modal === 'edit' && catalogDelegated && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+                Content versions are managed in the delegated GitHub catalog while delegation is enabled.
+              </p>
+            )}
+            {modal === 'edit' && !catalogDelegated && (
               <CatalogVersionsPanel
                 type="prompt"
                 assetID={selected.id || selected.name}

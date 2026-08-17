@@ -123,6 +123,8 @@ describe('<PromptsPage />', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/acme/catalog/blob/main/catalog.yml')
     expect(screen.getByRole('button', { name: '+ New prompt' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Scope' }))
+    expect(screen.queryByTestId('catalog-versions')).not.toBeInTheDocument()
+    expect(screen.getByText('Content versions are managed in the delegated GitHub catalog while delegation is enabled.')).toBeInTheDocument()
     fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Global'), { target: { value: 'workspace' } })
     fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Select workspace...'), { target: { value: 'team-a' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))

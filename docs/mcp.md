@@ -31,11 +31,13 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable public prompt refs as `id`, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported. Agents track the latest published catalog versions. To return to older catalog content, publish a rollback as a new current version.
 
-When GitHub catalog delegation is enabled, MCP catalog mutation tools surface
-the same delegated/read-only error as REST. Reads still return the SQLite
-mirror, and daemon-owned tools for agents, repos, workspace guardrail selection,
-dispatch, runtime, and budgets remain writable. Config reads expose delegation
-status without credential values.
+When GitHub catalog delegation is enabled, MCP catalog content mutation tools
+surface the same delegated/read-only error as REST for create, delete, reset,
+and content changes. Reads still return the SQLite mirror, and daemon-owned
+placement/state surfaces remain writable where supported: prompt and skill
+scope updates, workspace guardrail selection/order, agents, repos, dispatch,
+runtime, and budgets. Config reads expose delegation status without credential
+values.
 
 CRUD list tools are paginated. `list_agents`, `list_repos`, `list_workspaces`, `list_prompts`, `list_skills`, `list_backends`, `list_guardrails`, and `list_token_budgets` accept optional `limit` and `offset` parameters, default to `limit=50&offset=0`, cap `limit` at `500`, and return `{ "items": [...], "total": n, "limit": n, "offset": n }`. `list_runners` retains its `runners` key to match the REST compatibility shape.
 

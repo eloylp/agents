@@ -8,7 +8,7 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
-import { CatalogDelegationConfig, configCatalogDelegation } from '@/lib/catalog-delegation'
+import { CatalogDelegationConfig, catalogDelegationFileURL, configCatalogDelegation } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { defaultWorkspaceID, useSelectedWorkspace } from '@/lib/workspace'
 
@@ -1026,6 +1026,12 @@ export default function ConfigPage() {
   const repoOptionsWithCurrent = budgetForm.repo && !repoNames.includes(budgetForm.repo) ? [budgetForm.repo, ...repoNames] : repoNames
   const agentOptionsWithCurrent = budgetForm.agent && !agentNames.includes(budgetForm.agent) ? [budgetForm.agent, ...agentNames] : agentNames
   const backendOptionsWithCurrent = budgetForm.backend && !backendNames.includes(budgetForm.backend) ? [budgetForm.backend, ...backendNames] : backendNames
+  const delegationFileURL = catalogDelegationFileURL({
+    repo: delegationForm.repo,
+    branch: delegationForm.branch,
+    catalog_path: delegationForm.catalog_path,
+  })
+  const canEnableDelegation = !delegationSaving && delegationForm.repo.trim() !== '' && delegationForm.credential_ref.trim() !== ''
   const budgetCanSave = !budgetSaving &&
     (!budgetNeedsWorkspace || budgetForm.workspace_id.trim() !== '') &&
     (!budgetNeedsRepo || budgetForm.repo.trim() !== '') &&
@@ -1092,7 +1098,7 @@ export default function ConfigPage() {
               <div>
                 <h2 style={{ fontSize: '1rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>GitHub catalog source</h2>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  Global prompts, skills, and operator guardrails are read-only in the UI while delegation is enabled.
+                  Catalog content is read-only in the daemon while delegation is enabled; daemon-owned scope and placement stay editable.
                 </p>
               </div>
               <button
@@ -1111,8 +1117,16 @@ export default function ConfigPage() {
               <div><label style={labelStyle}>Commit</label><div style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{delegation?.last_synced_commit?.slice(0, 12) || '-'}</div></div>
               <div><label style={labelStyle}>Credential</label><div style={{ color: 'var(--text)' }}>{delegation?.credential_status || 'unset'}{delegation?.credential_ref ? ` (${delegation.credential_ref})` : ''}</div></div>
             </div>
+            {delegationFileURL && (
+              <a href={delegationFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--link)', fontSize: '0.875rem' }}>
+                Open configured catalog.yml
+              </a>
+            )}
             {delegation?.last_sync_error && <div style={{ color: 'var(--text-danger)', fontSize: '0.825rem' }}>{delegation.last_sync_error}</div>}
             <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+                Enable exports the current SQLite catalog, writes and overwrites the configured catalog.yml on the selected branch, commits it to GitHub, records the resulting commit SHA, and only then enables delegation.
+              </p>
               <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
                 Repository
                 <input value={delegationForm.repo} onChange={e => setDelegationForm(prev => ({ ...prev, repo: e.target.value }))} placeholder="owner/catalog" style={inputStyle} />
@@ -1130,6 +1144,9 @@ export default function ConfigPage() {
               <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
                 Credential env var
                 <input value={delegationForm.credential_ref} onChange={e => setDelegationForm(prev => ({ ...prev, credential_ref: e.target.value }))} placeholder="GITHUB_TOKEN" style={inputStyle} />
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.775rem' }}>
+                  Enter the daemon environment variable name, not a token value. The variable must already exist in the daemon runtime; private repositories need contents write access, and env var changes require restarting the daemon or container.
+                </span>
               </label>
               {delegation?.disabled_at && (
                 <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
@@ -1142,7 +1159,7 @@ export default function ConfigPage() {
                 </label>
               )}
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <button onClick={enableDelegation} disabled={delegationSaving || !delegationForm.repo.trim()} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>Enable</button>
+                <button onClick={enableDelegation} disabled={!canEnableDelegation} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: canEnableDelegation ? 'pointer' : 'default', fontSize: '0.875rem', fontWeight: 600 }}>Enable</button>
                 <button onClick={syncDelegation} disabled={delegationSaving || !delegation?.enabled} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 14px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>Sync now</button>
                 <button onClick={disableDelegation} disabled={delegationSaving || !delegation?.enabled} style={{ background: 'var(--bg-danger)', border: '1px solid var(--border-danger)', color: 'var(--text-danger)', padding: '7px 14px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>Disable</button>
               </div>

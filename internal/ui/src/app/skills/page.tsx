@@ -191,7 +191,12 @@ function SkillForm({
           readOnly={catalogDelegated && !isNew}
         />
       </div>
-      {!isNew && (
+      {!isNew && catalogDelegated && (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+          Content versions are managed in the delegated GitHub catalog while delegation is enabled.
+        </p>
+      )}
+      {!isNew && !catalogDelegated && (
         <CatalogVersionsPanel
           type="skill"
           assetID={stableSkillID(form)}
