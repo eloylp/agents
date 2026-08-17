@@ -53,10 +53,11 @@ const labelStyle: React.CSSProperties = {
 }
 
 function GuardrailForm({
-  initial, isNew, onSave, onCancel, onReset, onDelete, onVersionsChanged, saving, error,
+  initial, isNew, catalogDelegated, onSave, onCancel, onReset, onDelete, onVersionsChanged, saving, error,
 }: {
   initial: Guardrail
   isNew: boolean
+  catalogDelegated: boolean
   onSave: (g: Guardrail) => void
   onCancel: () => void
   onReset?: () => void
@@ -73,7 +74,8 @@ function GuardrailForm({
   }, [initial])
 
   const showReset = !isNew && form.is_builtin && !!onReset
-  const canDelete = !isNew && !!onDelete
+  const canDelete = !isNew && !catalogDelegated && !!onDelete
+  const contentReadOnly = catalogDelegated && !isNew
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -110,6 +112,7 @@ function GuardrailForm({
           value={form.description}
           onChange={e => set('description', e.target.value)}
           placeholder="Short label shown in the list"
+          disabled={contentReadOnly}
         />
       </div>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -135,9 +138,10 @@ function GuardrailForm({
           placeholder="The policy text prepended to every agent's composed prompt…"
           minHeight={260}
           expandTitle={isNew ? 'New guardrail' : `Edit ${form.name}`}
+          readOnly={contentReadOnly}
         />
       </div>
-      {!isNew && (
+      {!isNew && !catalogDelegated && (
         <CatalogVersionsPanel
           type="guardrail"
           assetID={form.id || form.name}
@@ -350,6 +354,8 @@ export default function GuardrailsManager() {
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
         ? { id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
+        : catalogDelegated
+          ? { enabled: g.enabled, position: g.position }
         : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
@@ -386,7 +392,6 @@ export default function GuardrailsManager() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          description: selected.description, content: selected.content,
           enabled: false, position: selected.position,
         }),
       })
@@ -584,13 +589,12 @@ export default function GuardrailsManager() {
             <div
               key={guardrailID(g)}
               onClick={() => {
-                if (catalogDelegated) return
                 setSelected(g); setModal('edit')
               }}
               style={{
                 background: 'var(--bg-card)', border: '1px solid var(--border)',
                 borderRadius: '8px', padding: '1rem',
-                cursor: catalogDelegated ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem',
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -615,7 +619,7 @@ export default function GuardrailsManager() {
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>
                 )}
               </div>
-              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>{catalogDelegated ? 'read-only' : 'edit →'}</span>
+              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>{catalogDelegated ? 'state' : 'edit ->'}</span>
             </div>
           ))}
           {guardrails.length === 0 && (
@@ -632,6 +636,7 @@ export default function GuardrailsManager() {
           <GuardrailForm
             initial={selected}
             isNew={modal === 'create'}
+            catalogDelegated={catalogDelegated}
             onSave={handleSave}
             onCancel={closeModal}
             onReset={selected.is_builtin ? handleReset : undefined}

@@ -61,11 +61,12 @@ function skillIdentityTooltip(skill: Skill) {
 }
 
 function SkillForm({
-  initial, isNew, workspaces, onSave, onCancel, onVersionsChanged, saving, error,
+  initial, isNew, workspaces, catalogDelegated, onSave, onCancel, onVersionsChanged, saving, error,
 }: {
   initial: Skill
   isNew: boolean
   workspaces: Workspace[]
+  catalogDelegated: boolean
   onSave: (s: Skill) => void
   onCancel: () => void
   onVersionsChanged: () => void
@@ -129,7 +130,7 @@ function SkillForm({
           <select
             style={inputStyle}
             value={selectedScope}
-            disabled={!isNew}
+            disabled={!isNew && !catalogDelegated}
             onChange={e => {
               const next = e.target.value as 'global' | 'workspace' | 'repo'
               setSelectedScope(next)
@@ -147,7 +148,7 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.workspace_id || ''}
-              disabled={!isNew}
+              disabled={!isNew && !catalogDelegated}
               onChange={e => setForm(f => ({ ...f, workspace_id: e.target.value, repo: '' }))}
             >
               <option value="">Select workspace...</option>
@@ -161,7 +162,7 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.repo || ''}
-              disabled={!isNew || !form.workspace_id}
+              disabled={(!isNew && !catalogDelegated) || !form.workspace_id}
               onChange={e => setForm(f => ({ ...f, repo: e.target.value }))}
             >
               <option value="">Select repo...</option>
@@ -177,6 +178,7 @@ function SkillForm({
           onChange={v => setForm(f => ({ ...f, prompt: v }))}
           placeholder="Skill guidance text…"
           minHeight={200}
+          readOnly={catalogDelegated && !isNew}
         />
       </div>
       {!isNew && (
@@ -291,6 +293,9 @@ export default function SkillsPage() {
           workspace_id: form.workspace_id || '',
           repo: form.repo || '',
           prompt: form.prompt,
+        } : catalogDelegated ? {
+          workspace_id: form.workspace_id || '',
+          repo: form.repo || '',
         } : { prompt: form.prompt }),
       })
       if (!res.ok) {
@@ -459,7 +464,7 @@ export default function SkillsPage() {
                   </pre>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                  <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.75rem', color: catalogDelegated ? 'var(--text-muted)' : 'var(--accent)' }}>Edit</button>
+                  <button title={catalogDelegated ? 'Manage daemon-owned scope' : undefined} onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>{catalogDelegated ? 'Scope' : 'Edit'}</button>
                   <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
                 </div>
               </div>
@@ -474,6 +479,7 @@ export default function SkillsPage() {
             initial={selected}
             isNew={modal === 'create'}
             workspaces={workspaces}
+            catalogDelegated={catalogDelegated}
             onSave={saveSkill}
             onCancel={() => setModal(null)}
             onVersionsChanged={load}

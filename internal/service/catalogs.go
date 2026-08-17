@@ -35,6 +35,16 @@ func (s *Service) DeleteSkill(name string) error {
 	})
 }
 
+func (s *Service) UpdateSkillScope(ref, workspaceID, repo string) (fleet.Skill, error) {
+	var saved fleet.Skill
+	err := s.withRawTx("update skill scope", func(tx *sql.Tx) error {
+		var err error
+		saved, err = store.UpdateSkillScopeTx(tx, ref, workspaceID, repo)
+		return err
+	})
+	return saved, err
+}
+
 func (s *Service) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	var saved fleet.Prompt
 	err := s.withTx("upsert prompt", func(tx *sql.Tx) error {
@@ -43,6 +53,16 @@ func (s *Service) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 		}
 		var err error
 		saved, err = store.UpsertPromptTx(tx, p)
+		return err
+	})
+	return saved, err
+}
+
+func (s *Service) UpdatePromptScope(ref, workspaceID, repo string) (fleet.Prompt, error) {
+	var saved fleet.Prompt
+	err := s.withRawTx("update prompt scope", func(tx *sql.Tx) error {
+		var err error
+		saved, err = store.UpdatePromptScopeTx(tx, ref, workspaceID, repo)
 		return err
 	})
 	return saved, err
@@ -91,6 +111,16 @@ func (s *Service) DeleteGuardrail(name string) error {
 		}
 		return store.DeleteGuardrailTx(tx, name)
 	})
+}
+
+func (s *Service) UpdateGuardrailState(ref string, enabled *bool, position *int) (fleet.Guardrail, error) {
+	var saved fleet.Guardrail
+	err := s.withRawTx("update guardrail state", func(tx *sql.Tx) error {
+		var err error
+		saved, err = store.UpdateGuardrailStateTx(tx, ref, enabled, position)
+		return err
+	})
+	return saved, err
 }
 
 func (s *Service) ResetGuardrail(name string) error {

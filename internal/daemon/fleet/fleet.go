@@ -475,17 +475,33 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 // PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
 // "don't touch".
 type SkillPatch struct {
-	Prompt *string `json:"prompt,omitempty"`
+	WorkspaceID *string `json:"workspace_id,omitempty"`
+	Repo        *string `json:"repo,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
 func (p SkillPatch) AnyFieldSet() bool {
+	return p.WorkspaceID != nil || p.Repo != nil || p.Prompt != nil
+}
+
+func (p SkillPatch) ScopeFieldSet() bool {
+	return p.WorkspaceID != nil || p.Repo != nil
+}
+
+func (p SkillPatch) ContentFieldSet() bool {
 	return p.Prompt != nil
 }
 
 func (p SkillPatch) apply(s *fleet.Skill) {
+	if p.WorkspaceID != nil {
+		s.WorkspaceID = *p.WorkspaceID
+	}
+	if p.Repo != nil {
+		s.Repo = *p.Repo
+	}
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
@@ -650,6 +666,18 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 	if !ok {
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
+	if patch.ScopeFieldSet() && !patch.ContentFieldSet() {
+		workspaceID := existing.WorkspaceID
+		repo := existing.Repo
+		if patch.WorkspaceID != nil {
+			workspaceID = *patch.WorkspaceID
+		}
+		if patch.Repo != nil {
+			repo = *patch.Repo
+		}
+		saved, err := h.service.UpdateSkillScope(normalized, workspaceID, repo)
+		return normalized, saved, err
+	}
 	patch.apply(&existing)
 	if err := h.service.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
@@ -686,15 +714,31 @@ type storePromptJSON struct {
 }
 
 type PromptPatch struct {
+	WorkspaceID *string `json:"workspace_id,omitempty"`
+	Repo        *string `json:"repo,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
 }
 
 func (p PromptPatch) AnyFieldSet() bool {
+	return p.WorkspaceID != nil || p.Repo != nil || p.Description != nil || p.Content != nil
+}
+
+func (p PromptPatch) ScopeFieldSet() bool {
+	return p.WorkspaceID != nil || p.Repo != nil
+}
+
+func (p PromptPatch) ContentFieldSet() bool {
 	return p.Description != nil || p.Content != nil
 }
 
 func (p PromptPatch) apply(prompt *fleet.Prompt) {
+	if p.WorkspaceID != nil {
+		prompt.WorkspaceID = *p.WorkspaceID
+	}
+	if p.Repo != nil {
+		prompt.Repo = *p.Repo
+	}
 	if p.Description != nil {
 		prompt.Description = *p.Description
 	}
@@ -856,6 +900,17 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 	prompt, err := h.store.ReadPrompt(ref)
 	if err != nil {
 		return fleet.Prompt{}, err
+	}
+	if patch.ScopeFieldSet() && !patch.ContentFieldSet() {
+		workspaceID := prompt.WorkspaceID
+		repo := prompt.Repo
+		if patch.WorkspaceID != nil {
+			workspaceID = *patch.WorkspaceID
+		}
+		if patch.Repo != nil {
+			repo = *patch.Repo
+		}
+		return h.service.UpdatePromptScope(prompt.ID, workspaceID, repo)
 	}
 	merged := prompt
 	patch.apply(&merged)

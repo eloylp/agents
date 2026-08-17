@@ -157,6 +157,53 @@ func TestCatalogMutationsBlockedWhenDelegated(t *testing.T) {
 	}
 }
 
+func TestDaemonOwnedCatalogPlacementAllowedWhenDelegated(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	if err := svc.UpsertRepo(fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := store.UpsertSkill(db, "reviewer", fleet.Skill{ID: "reviewer", Name: "reviewer", Prompt: "review skill"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	prompt, err := svc.UpdatePromptScope("coder", fleet.DefaultWorkspaceID, "owner/repo")
+	if err != nil {
+		t.Fatalf("UpdatePromptScope: %v", err)
+	}
+	if prompt.WorkspaceID != fleet.DefaultWorkspaceID || prompt.Repo != "owner/repo" || prompt.Content != "test prompt" {
+		t.Fatalf("prompt = %+v, want repo-scoped placement with content preserved", prompt)
+	}
+
+	skill, err := svc.UpdateSkillScope("reviewer", fleet.DefaultWorkspaceID, "owner/repo")
+	if err != nil {
+		t.Fatalf("UpdateSkillScope: %v", err)
+	}
+	if skill.WorkspaceID != fleet.DefaultWorkspaceID || skill.Repo != "owner/repo" || skill.Prompt != "review skill" {
+		t.Fatalf("skill = %+v, want repo-scoped placement with prompt preserved", skill)
+	}
+
+	position := 42
+	guardrailEnabled := false
+	guardrail, err := svc.UpdateGuardrailState("security", &guardrailEnabled, &position)
+	if err != nil {
+		t.Fatalf("UpdateGuardrailState: %v", err)
+	}
+	if guardrail.Enabled || guardrail.Position != position || guardrail.Content == "" {
+		t.Fatalf("guardrail = %+v, want state update with content preserved", guardrail)
+	}
+}
+
 func TestReplaceConfigPreservesDelegatedCatalogMirror(t *testing.T) {
 	t.Parallel()
 	svc, db := openTestService(t)

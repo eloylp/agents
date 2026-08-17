@@ -63,6 +63,14 @@ func (p GuardrailPatch) AnyFieldSet() bool {
 	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil
 }
 
+func (p GuardrailPatch) ContentFieldSet() bool {
+	return p.Description != nil || p.Content != nil
+}
+
+func (p GuardrailPatch) StateFieldSet() bool {
+	return p.Enabled != nil || p.Position != nil
+}
+
 func (p GuardrailPatch) apply(g *fleet.Guardrail) {
 	if p.Description != nil {
 		g.Description = *p.Description
@@ -244,6 +252,9 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	existing, err := h.store.GetGuardrail(normalized)
 	if err != nil {
 		return fleet.Guardrail{}, err
+	}
+	if patch.StateFieldSet() && !patch.ContentFieldSet() {
+		return h.service.UpdateGuardrailState(normalized, patch.Enabled, patch.Position)
 	}
 	patch.apply(&existing)
 	if err := h.service.UpsertGuardrail(existing); err != nil {

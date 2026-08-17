@@ -198,10 +198,54 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 	return p, nil
 }
 
+func UpdatePromptScopeTx(tx *sql.Tx, ref, workspaceID, repo string) (fleet.Prompt, error) {
+	ref = strings.TrimSpace(ref)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if ref == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt id is required"}
+	}
+	if workspaceID == "" && repo != "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt repo scope requires workspace_id"}
+	}
+	if err := ensureCatalogScope(tx, "prompt", workspaceID, repo); err != nil {
+		return fleet.Prompt{}, err
+	}
+	result, err := tx.Exec(`
+		UPDATE prompts
+		SET workspace_id = NULLIF(?, ''), repo = NULLIF(?, ''), updated_at = datetime('now')
+		WHERE ref = ?`,
+		workspaceID, repo, ref,
+	)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return fleet.Prompt{}, &ErrConflict{Msg: "prompt name is already used by another prompt in that scope"}
+		}
+		return fleet.Prompt{}, fmt.Errorf("store: update prompt %s scope: %w", ref, err)
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: update prompt %s scope: rows affected: %w", ref, err)
+	} else if changed == 0 {
+		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
+	}
+	return ReadPromptTx(tx, ref)
+}
+
 // ReadPrompt resolves a prompt by stable id first, then by legacy global display
 // name. Scoped prompts may share names, so callers that need deterministic
 // addressing must pass the stable id.
 func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
+	return readPrompt(db, ref)
+}
+
+func ReadPromptTx(tx *sql.Tx, ref string) (fleet.Prompt, error) {
+	return readPrompt(tx, ref)
+}
+
+func readPrompt(db querier, ref string) (fleet.Prompt, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return fleet.Prompt{}, &ErrValidation{Msg: "prompt id is required"}

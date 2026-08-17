@@ -118,6 +118,11 @@ export default function PromptsPage() {
           workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
           repo: selectedScope === 'repo' ? selected.repo : '',
         }
+      : catalogDelegated
+        ? {
+            workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
+            repo: selectedScope === 'repo' ? selected.repo : '',
+          }
       : { description: selected.description, content: selected.content }
     try {
       const res = await fetch(url, {
@@ -260,7 +265,7 @@ export default function PromptsPage() {
                 {p.content || '-'}
               </pre>
               <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-                <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', color: catalogDelegated ? 'var(--text-muted)' : 'var(--accent)' }}>Edit</button>
+                <button title={catalogDelegated ? 'Manage daemon-owned scope' : undefined} onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>{catalogDelegated ? 'Scope' : 'Edit'}</button>
                 <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', color: 'var(--text-danger)' }}>Delete</button>
               </div>
             </Card>
@@ -287,7 +292,7 @@ export default function PromptsPage() {
                 <select
                   style={inputStyle}
                   value={selectedScope}
-                  disabled={modal === 'edit'}
+                  disabled={modal === 'edit' && !catalogDelegated}
                   onChange={e => {
                     const next = e.target.value as 'global' | 'workspace' | 'repo'
                     setSelectedScope(next)
@@ -305,7 +310,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.workspace_id || ''}
-                    disabled={modal === 'edit'}
+                    disabled={modal === 'edit' && !catalogDelegated}
                     onChange={e => setSelected(p => ({ ...p, workspace_id: e.target.value, repo: '' }))}
                   >
                     <option value="">Select workspace...</option>
@@ -319,7 +324,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.repo || ''}
-                    disabled={modal === 'edit' || !selected.workspace_id}
+                    disabled={(modal === 'edit' && !catalogDelegated) || !selected.workspace_id}
                     onChange={e => setSelected(p => ({ ...p, repo: e.target.value }))}
                   >
                     <option value="">Select repo...</option>
@@ -330,11 +335,11 @@ export default function PromptsPage() {
             </div>
             <div>
               <label style={labelStyle}>Description</label>
-              <input style={inputStyle} value={selected.description} onChange={e => setSelected(p => ({ ...p, description: e.target.value }))} />
+              <input style={inputStyle} value={selected.description} onChange={e => setSelected(p => ({ ...p, description: e.target.value }))} disabled={catalogDelegated && modal === 'edit'} />
             </div>
             <div>
               <label style={labelStyle}>Content *</label>
-              <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} />
+              <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} readOnly={catalogDelegated && modal === 'edit'} />
             </div>
             {modal === 'edit' && (
               <CatalogVersionsPanel
