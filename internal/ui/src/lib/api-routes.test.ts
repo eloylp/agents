@@ -26,5 +26,7 @@ describe('apiRoutes', () => {
     expect(apiRoutes.catalog.delegation.status()).toBe('/catalog/delegation')
     expect(apiRoutes.catalog.delegation.update()).toBe('/catalog/delegation')
     expect(apiRoutes.catalog.delegation.sync()).toBe('/catalog/delegation/sync')
+    expect(apiRoutes.catalog.prompts.scope('review prompt')).toBe('/prompts/review%20prompt/scope')
+    expect(apiRoutes.catalog.skills.scope('review skill')).toBe('/skills/review%20skill/scope')
   })
 })

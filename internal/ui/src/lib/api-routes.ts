@@ -49,6 +49,7 @@ function catalogRoutes(assetPath: 'prompts' | 'skills' | 'guardrails') {
   return {
     list: (query?: Query) => path(`/${assetPath}`, query),
     one: (id: string) => `/${assetPath}/${enc(id)}`,
+    scope: (id: string) => `/${assetPath}/${enc(id)}/scope`,
     versions: (id: string) => `/${assetPath}/${enc(id)}/versions`,
     versionReferences: (id: string, versionID: string) => `/${assetPath}/${enc(id)}/versions/${enc(versionID)}/references`,
   }

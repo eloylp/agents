@@ -86,6 +86,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleSkillVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}/scope", withTimeout(http.HandlerFunc(h.handleSkillScopePatch))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
@@ -103,6 +104,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handlePromptVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}/scope", withTimeout(http.HandlerFunc(h.handlePromptScopePatch))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
@@ -480,6 +482,34 @@ type SkillPatch struct {
 	Prompt      *string `json:"prompt,omitempty"`
 }
 
+type CatalogScopePatch struct {
+	Scope       string `json:"scope"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+}
+
+func (p CatalogScopePatch) workspaceRepo() (string, string, error) {
+	switch strings.TrimSpace(p.Scope) {
+	case "global":
+		return "", "", nil
+	case "workspace":
+		if strings.TrimSpace(p.WorkspaceID) == "" {
+			return "", "", &store.ErrValidation{Msg: "workspace_id is required for workspace scope"}
+		}
+		if strings.TrimSpace(p.Repo) != "" {
+			return "", "", &store.ErrValidation{Msg: "repo must be empty for workspace scope"}
+		}
+		return p.WorkspaceID, "", nil
+	case "repo":
+		if strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.Repo) == "" {
+			return "", "", &store.ErrValidation{Msg: "workspace_id and repo are required for repo scope"}
+		}
+		return p.WorkspaceID, p.Repo, nil
+	default:
+		return "", "", &store.ErrValidation{Msg: fmt.Sprintf("unsupported scope %q", p.Scope)}
+	}
+}
+
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
@@ -581,6 +611,25 @@ func (h *Handler) handleSkillVersionReferences(w http.ResponseWriter, r *http.Re
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
+}
+
+func (h *Handler) handleSkillScopePatch(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	var req CatalogScopePatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	workspaceID, repo, err := req.workspaceRepo()
+	if err != nil {
+		h.writeErr(w, err, "skill scope patch")
+		return
+	}
+	saved, err := h.service.UpdateSkillScope(ref, workspaceID, repo)
+	if err != nil {
+		h.writeErr(w, err, "skill scope patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, skillToStoreJSON(saved.ID, saved))
 }
 
 func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +903,25 @@ func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) 
 	prompt, err := h.updatePrompt(ref, req)
 	if err != nil {
 		h.writeErr(w, err, "prompt patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptScopePatch(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	var req CatalogScopePatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	workspaceID, repo, err := req.workspaceRepo()
+	if err != nil {
+		h.writeErr(w, err, "prompt scope patch")
+		return
+	}
+	prompt, err := h.service.UpdatePromptScope(ref, workspaceID, repo)
+	if err != nil {
+		h.writeErr(w, err, "prompt scope patch")
 		return
 	}
 	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))

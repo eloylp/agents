@@ -39,6 +39,12 @@ function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | '
   return 'global'
 }
 
+function scopePayload(scope: 'global' | 'workspace' | 'repo', item: { workspace_id?: string; repo?: string }) {
+  if (scope === 'global') return { scope }
+  if (scope === 'workspace') return { scope, workspace_id: item.workspace_id || '' }
+  return { scope, workspace_id: item.workspace_id || '', repo: item.repo || '' }
+}
+
 export default function PromptsPage() {
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [total, setTotal] = useState(0)
@@ -111,7 +117,12 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     const isNew = modal === 'create'
-    const url = isNew ? apiRoutes.catalog.prompts.list() : apiRoutes.catalog.prompts.one(selected.id || selected.name)
+    const id = selected.id || selected.name
+    const url = isNew
+      ? apiRoutes.catalog.prompts.list()
+      : catalogDelegated
+        ? apiRoutes.catalog.prompts.scope(id)
+        : apiRoutes.catalog.prompts.one(id)
     const body = isNew
       ? {
           ...selected,
@@ -119,11 +130,13 @@ export default function PromptsPage() {
           repo: selectedScope === 'repo' ? selected.repo : '',
         }
       : catalogDelegated
-        ? {
+        ? scopePayload(selectedScope, selected)
+        : {
+            description: selected.description,
+            content: selected.content,
             workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
             repo: selectedScope === 'repo' ? selected.repo : '',
           }
-      : { description: selected.description, content: selected.content }
     try {
       const res = await fetch(url, {
         method: isNew ? 'POST' : 'PATCH',
@@ -292,7 +305,7 @@ export default function PromptsPage() {
                 <select
                   style={inputStyle}
                   value={selectedScope}
-                  disabled={modal === 'edit' && !catalogDelegated}
+                  disabled={false}
                   onChange={e => {
                     const next = e.target.value as 'global' | 'workspace' | 'repo'
                     setSelectedScope(next)
@@ -310,7 +323,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.workspace_id || ''}
-                    disabled={modal === 'edit' && !catalogDelegated}
+                    disabled={false}
                     onChange={e => setSelected(p => ({ ...p, workspace_id: e.target.value, repo: '' }))}
                   >
                     <option value="">Select workspace...</option>
@@ -324,7 +337,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.repo || ''}
-                    disabled={(modal === 'edit' && !catalogDelegated) || !selected.workspace_id}
+                    disabled={!selected.workspace_id}
                     onChange={e => setSelected(p => ({ ...p, repo: e.target.value }))}
                   >
                     <option value="">Select repo...</option>

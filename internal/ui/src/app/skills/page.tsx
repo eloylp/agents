@@ -38,6 +38,12 @@ function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | '
   return 'global'
 }
 
+function scopePayload(scope: 'global' | 'workspace' | 'repo', item: { workspace_id?: string; repo?: string }) {
+  if (scope === 'global') return { scope }
+  if (scope === 'workspace') return { scope, workspace_id: item.workspace_id || '' }
+  return { scope, workspace_id: item.workspace_id || '', repo: item.repo || '' }
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
   fontSize: '0.85rem', fontFamily: 'inherit', background: 'var(--bg-input)', color: 'var(--text)',
@@ -93,6 +99,12 @@ function SkillForm({
       .catch(() => setRepoOptions([]))
   }, [selectedScope, form.workspace_id])
 
+  const save = () => onSave({
+    ...form,
+    workspace_id: selectedScope === 'global' ? '' : form.workspace_id,
+    repo: selectedScope === 'repo' ? form.repo : '',
+  })
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
       {!isNew && stableSkillID(form) && (
@@ -130,7 +142,6 @@ function SkillForm({
           <select
             style={inputStyle}
             value={selectedScope}
-            disabled={!isNew && !catalogDelegated}
             onChange={e => {
               const next = e.target.value as 'global' | 'workspace' | 'repo'
               setSelectedScope(next)
@@ -148,7 +159,6 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.workspace_id || ''}
-              disabled={!isNew && !catalogDelegated}
               onChange={e => setForm(f => ({ ...f, workspace_id: e.target.value, repo: '' }))}
             >
               <option value="">Select workspace...</option>
@@ -162,7 +172,7 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.repo || ''}
-              disabled={(!isNew && !catalogDelegated) || !form.workspace_id}
+              disabled={!form.workspace_id}
               onChange={e => setForm(f => ({ ...f, repo: e.target.value }))}
             >
               <option value="">Select repo...</option>
@@ -198,7 +208,7 @@ function SkillForm({
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={save}
           disabled={saving || (isNew && !form.id?.trim()) || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
@@ -284,7 +294,13 @@ export default function SkillsPage() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const res = await fetch(isNew ? apiRoutes.catalog.skills.list() : apiRoutes.catalog.skills.one(stableSkillID(form)), {
+      const id = stableSkillID(form)
+      const url = isNew
+        ? apiRoutes.catalog.skills.list()
+        : catalogDelegated
+          ? apiRoutes.catalog.skills.scope(id)
+          : apiRoutes.catalog.skills.one(id)
+      const res = await fetch(url, {
         method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isNew ? {
@@ -294,9 +310,12 @@ export default function SkillsPage() {
           repo: form.repo || '',
           prompt: form.prompt,
         } : catalogDelegated ? {
+          ...scopePayload(scopeType(form), form),
+        } : {
           workspace_id: form.workspace_id || '',
           repo: form.repo || '',
-        } : { prompt: form.prompt }),
+          prompt: form.prompt,
+        }),
       })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Save failed')

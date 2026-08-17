@@ -584,6 +584,69 @@ func TestStoreCRUDPromptScopedDuplicatesUseStableID(t *testing.T) {
 	}
 }
 
+func TestCatalogScopePatchEndpointsAllowedWhenDelegated(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"workspace_id": "team-a", "name": "owner/repo", "enabled": true, "bindings": []map[string]any{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"id": "review-prompt", "name": "review", "content": "prompt body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"id": "review-skill", "name": "review", "prompt": "skill body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := s.Store().PatchCatalogDelegationConfig(store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/prompts/review-prompt/scope", map[string]any{
+		"scope": "repo", "workspace_id": "team-a", "repo": "owner/repo",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt scope: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var prompt storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	if prompt.WorkspaceID != "team-a" || prompt.Repo != "owner/repo" || prompt.Content != "prompt body" {
+		t.Fatalf("prompt = %+v, want repo scope with content preserved", prompt)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/review-skill/scope", map[string]any{
+		"scope": "workspace", "workspace_id": "team-a",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH skill scope: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var skill storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&skill); err != nil {
+		t.Fatalf("decode skill: %v", err)
+	}
+	if skill.WorkspaceID != "team-a" || skill.Repo != "" || skill.Prompt != "skill body" {
+		t.Fatalf("skill = %+v, want workspace scope with prompt preserved", skill)
+	}
+}
+
 func TestStoreCRUDPromptDeleteReferencedByAgent(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

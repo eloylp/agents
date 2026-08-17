@@ -84,16 +84,19 @@ describe('<SkillsPage />', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/skills?limit=50&offset=0') {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }) } as Response)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [{ id: 'delegated-skill', name: 'delegated skill', prompt: 'body' }], total: 1, limit: 50, offset: 0 }) } as Response)
       }
       if (url === '/workspaces?limit=500&offset=0') {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [], total: 0, limit: 500, offset: 0 }) } as Response)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [{ id: 'team-a', name: 'Team A' }], total: 1, limit: 500, offset: 0 }) } as Response)
       }
       if (url === '/catalog/delegation') {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({ enabled: true, repo: 'acme/catalog', branch: 'main', catalog_path: 'catalog.yml' }),
         } as Response)
+      }
+      if (url === '/skills/delegated-skill/scope') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'delegated-skill', workspace_id: 'team-a', name: 'delegated skill', prompt: 'body' }) } as Response)
       }
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
     })
@@ -104,5 +107,13 @@ describe('<SkillsPage />', () => {
     const link = await screen.findByRole('link', { name: 'catalog.yml' })
     expect(link).toHaveAttribute('href', 'https://github.com/acme/catalog/blob/main/catalog.yml')
     expect(screen.getByRole('button', { name: '+ Create skill' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Scope' }))
+    fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Global'), { target: { value: 'workspace' } })
+    fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Select workspace...'), { target: { value: 'team-a' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/skills/delegated-skill/scope', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ scope: 'workspace', workspace_id: 'team-a' }),
+    })))
   })
 })
