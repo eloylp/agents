@@ -262,6 +262,11 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 	if row.ID != "" {
 		rec.Feedback = &feedback
 	}
+	if rec.Status == selfimprovement.RecommendationStatusSkipped {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rec)
+		return
+	}
 	if _, err := h.channels.PushEvent(r.Context(), analysisImprovementEvent(rec)); err != nil {
 		if previousStatus != "" {
 			_ = h.store.Transact(func(tx *store.Tx) error {

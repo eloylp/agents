@@ -157,6 +157,11 @@ func (e *Engine) AnalyzeSelfImprovementFeedback(ctx context.Context, feedback st
 }
 
 func (e *Engine) analyzeSelfImprovementFeedback(ctx context.Context, feedback store.SelfImprovementFeedback, prior *selfimprovement.SelfImprovementRecommendation, clarification *selfimprovement.SelfImprovementClarification, queuedEvent *Event) (selfimprovement.SelfImprovementRecommendation, error) {
+	if rec, skipped, err := selfimprovement.New(e.store).SkipCatalogAnalysisWhenDelegated(feedback); err != nil {
+		return selfimprovement.SelfImprovementRecommendation{}, err
+	} else if skipped {
+		return rec, nil
+	}
 	prompt, err := e.store.ReadPrompt(selfImprovementPromptRef)
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())

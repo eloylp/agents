@@ -144,6 +144,9 @@ func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 		if row.ID != "" {
 			rec.Feedback = &feedback
 		}
+		if rec.Status == selfimprovement.RecommendationStatusSkipped {
+			return jsonResult(rec)
+		}
 		if _, err := deps.Channels.PushEvent(ctx, mcpImprovementAnalysisEvent(rec, false)); err != nil {
 			if previousStatus != "" {
 				_ = deps.Store.Transact(func(tx *store.Tx) error {

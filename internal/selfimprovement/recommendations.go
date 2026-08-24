@@ -16,7 +16,10 @@ const (
 	RecommendationStatusClarifying     = "clarifying"
 	RecommendationStatusRejected       = "rejected"
 	RecommendationStatusFailed         = "failed"
+	RecommendationStatusSkipped        = "skipped"
 )
+
+const CatalogDelegatedImprovementDisabledMessage = "Catalog improvements are disabled because the intelligence catalog is delegated to GitHub. Edit catalog.yml in the delegated repository, or enable a future GitHub PR improvement flow."
 
 type SelfImprovementRecommendation struct {
 	ID                      string                         `json:"id"`
@@ -132,6 +135,11 @@ func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (S
 	}
 	rec := recommendationFromRow(row)
 	if rec.Status == RecommendationStatusRecommended {
+		if skipped, err := s.skipCatalogRecommendationWhenDelegated(rec.ID); err != nil {
+			return SelfImprovementRecommendation{}, err
+		} else if skipped {
+			return s.GetRecommendation(rec.ID)
+		}
 		if _, err := createSelfImprovementProposalBundle(s.store, rec.ID); err != nil {
 			var validation *store.ErrValidation
 			var conflict *store.ErrConflict
@@ -164,6 +172,11 @@ func (s *Service) BeginAnalysis(feedback store.SelfImprovementFeedback) (SelfImp
 		if terminalRecommendation(rec) {
 			return SelfImprovementRecommendation{}, "", &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already final and cannot be re-analyzed", rec.ID)}
 		}
+		if rec, skipped, err := s.SkipCatalogAnalysisWhenDelegated(feedback); err != nil {
+			return SelfImprovementRecommendation{}, "", err
+		} else if skipped {
+			return rec, "", nil
+		}
 		if rec.Status == RecommendationStatusAnalyzing || rec.Status == RecommendationStatusClarifying {
 			return SelfImprovementRecommendation{}, "", &store.ErrValidation{Msg: fmt.Sprintf("recommendation %q is already %s", rec.ID, rec.Status)}
 		}
@@ -180,6 +193,11 @@ func (s *Service) BeginAnalysis(feedback store.SelfImprovementFeedback) (SelfImp
 		if !errors.As(err, &nf) {
 			return SelfImprovementRecommendation{}, "", err
 		}
+	}
+	if rec, skipped, err := s.SkipCatalogAnalysisWhenDelegated(feedback); err != nil {
+		return SelfImprovementRecommendation{}, "", err
+	} else if skipped {
+		return rec, "", nil
 	}
 	finding := firstFeedbackLine(feedback.RawBody)
 	if finding == "" {
@@ -217,6 +235,74 @@ func (s *Service) BeginAnalysis(feedback store.SelfImprovementFeedback) (SelfImp
 	}
 	out, err := s.GetRecommendation(rec.ID)
 	return out, "", err
+}
+
+func (s *Service) SkipCatalogAnalysisWhenDelegated(feedback store.SelfImprovementFeedback) (SelfImprovementRecommendation, bool, error) {
+	cfg, err := s.store.ReadCatalogDelegationConfig()
+	if err != nil {
+		return SelfImprovementRecommendation{}, false, err
+	}
+	if !cfg.Enabled {
+		return SelfImprovementRecommendation{}, false, nil
+	}
+	workspaceID := fleet.NormalizeWorkspaceID(feedback.WorkspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	finding := firstFeedbackLine(feedback.RawBody)
+	if finding == "" {
+		finding = "Catalog improvements skipped while delegation is enabled."
+	}
+	in := SelfImprovementRecommendationInput{
+		WorkspaceID:           workspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_delegated",
+		Status:                RecommendationStatusSkipped,
+		Confidence:            "low",
+		Risk:                  "low",
+		Finding:               finding,
+		NormalizedLesson:      normalizeLesson(finding),
+		Rationale:             CatalogDelegatedImprovementDisabledMessage,
+		EvidenceFeedbackIDs:   []int64{feedback.ID},
+		EvidenceSourceURLs:    []string{feedback.SourceURL},
+		AttributionConfidence: defaultString(feedback.LinkConfidence, "unresolved"),
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{
+			"type":                   "catalog_delegated",
+			"status":                 RecommendationStatusSkipped,
+			"feedback_event_id":      feedback.ID,
+			"attribution_confidence": defaultString(feedback.LinkConfidence, "unresolved"),
+			"message":                CatalogDelegatedImprovementDisabledMessage,
+		},
+		Error: CatalogDelegatedImprovementDisabledMessage,
+	}
+	if err := s.store.Transact(func(tx *store.Tx) error {
+		if err := store.UpsertSelfImprovementRecommendationRow(tx, recommendationInputRow(in)); err != nil {
+			return err
+		}
+		return store.UpdateSelfImprovementFeedbackStatusRow(tx, feedback.ID, store.FeedbackStatusAnalyzed)
+	}); err != nil {
+		return SelfImprovementRecommendation{}, false, err
+	}
+	rec, err := s.store.GetSelfImprovementRecommendationByFeedback(workspaceID, feedback.ID)
+	if err != nil {
+		return SelfImprovementRecommendation{}, false, err
+	}
+	out, err := s.GetRecommendation(rec.ID)
+	return out, true, err
+}
+
+func (s *Service) skipCatalogRecommendationWhenDelegated(id string) (bool, error) {
+	cfg, err := s.store.ReadCatalogDelegationConfig()
+	if err != nil {
+		return false, err
+	}
+	if !cfg.Enabled {
+		return false, nil
+	}
+	return true, s.store.Transact(func(tx *store.Tx) error {
+		return store.UpdateSelfImprovementRecommendationStatusErrorRow(tx, id, RecommendationStatusSkipped, CatalogDelegatedImprovementDisabledMessage)
+	})
 }
 
 func (s *Service) UpdateRecommendationStatus(id, status, reason string) (SelfImprovementRecommendation, error) {
@@ -441,7 +527,7 @@ func defaultString(value, fallback string) string {
 
 func validRecommendationStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAnalyzing, RecommendationStatusClarifying, RecommendationStatusRejected, RecommendationStatusFailed:
+	case RecommendationStatusRecommended, RecommendationStatusNeedsUserInput, RecommendationStatusAnalyzing, RecommendationStatusClarifying, RecommendationStatusRejected, RecommendationStatusFailed, RecommendationStatusSkipped:
 		return true
 	default:
 		return false

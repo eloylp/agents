@@ -234,7 +234,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Optional workspace id or display name to narrow the global proposal set."),
 				),
 				mcpgo.WithString("status",
-					mcpgo.Description("Optional status filter such as recommended, needs_user_input, clarifying, analyzing, rejected, or failed. recommended means ready for human review and may already include a proposal bundle."),
+					mcpgo.Description("Optional status filter such as recommended, needs_user_input, clarifying, analyzing, skipped, rejected, or failed. recommended means ready for human review and may already include a proposal bundle."),
 				),
 				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
 				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
@@ -253,7 +253,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("analyze_improvement_feedback",
-				mcpgo.WithDescription("Queue a fresh agents.improvement analysis run for one stored feedback event. Existing non-terminal recommendations are marked analyzing until the queued run records the next state."),
+				mcpgo.WithDescription("Queue a fresh agents.improvement analysis run for one stored feedback event. Existing non-terminal recommendations are marked analyzing until the queued run records the next state. When catalog delegation is enabled, records a skipped recommendation instead of enqueueing catalog proposal work."),
 				mcpgo.WithNumber("feedback_event_id",
 					mcpgo.Required(),
 					mcpgo.Description("Stored feedback event id."),
