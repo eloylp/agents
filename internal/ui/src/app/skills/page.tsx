@@ -300,32 +300,46 @@ export default function SkillsPage() {
     try {
       const isNew = modal === 'create'
       const id = stableSkillID(form)
-      const url = isNew
-        ? apiRoutes.catalog.skills.list()
-        : catalogDelegated
-          ? apiRoutes.catalog.skills.scope(id)
-          : apiRoutes.catalog.skills.one(id)
-      const res = await fetch(url, {
-        method: isNew ? 'POST' : 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isNew ? {
-          id: form.id || '',
-          name: form.name,
-          workspace_id: form.workspace_id || '',
-          repo: form.repo || '',
-          prompt: form.prompt,
-        } : catalogDelegated ? {
-          ...scopePayload(scopeType(form), form),
-        } : {
-          workspace_id: form.workspace_id || '',
-          repo: form.repo || '',
-          prompt: form.prompt,
-        }),
-      })
-      if (!res.ok) {
-        setSaveError((await res.text()) || 'Save failed')
-        setSaving(false)
-        return
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.skills.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: form.id || '',
+            name: form.name,
+            workspace_id: form.workspace_id || '',
+            repo: form.repo || '',
+            prompt: form.prompt,
+          }),
+        })
+        if (!res.ok) {
+          setSaveError((await res.text()) || 'Save failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.skills.one(id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: form.prompt }),
+          })
+          if (!contentRes.ok) {
+            setSaveError((await contentRes.text()) || 'Save failed')
+            setSaving(false)
+            return
+          }
+        }
+        const scopeRes = await fetch(apiRoutes.catalog.skills.scope(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scopePayload(scopeType(form), form)),
+        })
+        if (!scopeRes.ok) {
+          setSaveError((await scopeRes.text()) || 'Save failed')
+          setSaving(false)
+          return
+        }
       }
       setModal(null)
       load()

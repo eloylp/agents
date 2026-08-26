@@ -50,6 +50,9 @@ describe('<SkillsPage />', () => {
       if (url === '/catalog/delegation') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ enabled: false }) } as Response)
       }
+      if (url === '/skills/go-api' || url === '/skills/go-api/scope') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'go-api', name: 'go api boundaries', prompt: 'Updated guidance.' }) } as Response)
+      }
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -76,8 +79,15 @@ describe('<SkillsPage />', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/skills/go-api',
-      expect.objectContaining({ method: 'PATCH' }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ prompt: 'Updated guidance.' }),
+      }),
     ))
+    expect(fetchMock).toHaveBeenCalledWith('/skills/go-api/scope', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ scope: 'global' }),
+    }))
   }, 10000)
 
   it('links delegated users to the configured catalog file', async () => {

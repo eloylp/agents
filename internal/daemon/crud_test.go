@@ -3370,6 +3370,56 @@ func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDPromptSkillGenericPatchRejectsScopeFields(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"id": "review-prompt", "name": "review", "content": "prompt body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"id": "review-skill", "name": "review", "prompt": "skill body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	cases := []struct {
+		name string
+		path string
+		body map[string]any
+	}{
+		{
+			name: "prompt workspace_id",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"workspace_id": "team-a", "content": "prompt v2"},
+		},
+		{
+			name: "prompt repo",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"repo": "owner/repo", "content": "prompt v2"},
+		},
+		{
+			name: "skill workspace_id",
+			path: "/skills/review-skill",
+			body: map[string]any{"workspace_id": "team-a", "prompt": "skill v2"},
+		},
+		{
+			name: "skill repo",
+			path: "/skills/review-skill",
+			body: map[string]any{"repo": "owner/repo", "prompt": "skill v2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := doCRUDRequest(t, s, http.MethodPatch, tc.path, tc.body)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH %s: got %d, want 400; body %s", tc.path, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestStoreCRUDCatalogPatchPublishesCurrentVersion(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

@@ -473,13 +473,11 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 	}
 }
 
-// SkillPatch is the partial-update shape for a skill. Used by both the REST
-// PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
-// "don't touch".
+// SkillPatch is the partial-update shape for skill content. Used by both the
+// REST PATCH /skills/{id} handler and the MCP update_skill tool. Placement is
+// owned by PATCH /skills/{id}/scope.
 type SkillPatch struct {
-	WorkspaceID *string `json:"workspace_id,omitempty"`
-	Repo        *string `json:"repo,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
+	Prompt *string `json:"prompt,omitempty"`
 }
 
 type CatalogScopePatch struct {
@@ -514,27 +512,33 @@ func (p CatalogScopePatch) workspaceRepo() (string, string, error) {
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
 func (p SkillPatch) AnyFieldSet() bool {
-	return p.WorkspaceID != nil || p.Repo != nil || p.Prompt != nil
-}
-
-func (p SkillPatch) ScopeFieldSet() bool {
-	return p.WorkspaceID != nil || p.Repo != nil
-}
-
-func (p SkillPatch) ContentFieldSet() bool {
 	return p.Prompt != nil
 }
 
 func (p SkillPatch) apply(s *fleet.Skill) {
-	if p.WorkspaceID != nil {
-		s.WorkspaceID = *p.WorkspaceID
-	}
-	if p.Repo != nil {
-		s.Repo = *p.Repo
-	}
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
+}
+
+func (p *SkillPatch) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["workspace_id"]; ok {
+		return &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
+	if _, ok := raw["repo"]; ok {
+		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
+	type skillPatch SkillPatch
+	var patch skillPatch
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+	*p = SkillPatch(patch)
+	return nil
 }
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
@@ -715,18 +719,6 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 	if !ok {
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
-	if patch.ScopeFieldSet() && !patch.ContentFieldSet() {
-		workspaceID := existing.WorkspaceID
-		repo := existing.Repo
-		if patch.WorkspaceID != nil {
-			workspaceID = *patch.WorkspaceID
-		}
-		if patch.Repo != nil {
-			repo = *patch.Repo
-		}
-		saved, err := h.service.UpdateSkillScope(normalized, workspaceID, repo)
-		return normalized, saved, err
-	}
 	patch.apply(&existing)
 	if err := h.service.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
@@ -763,37 +755,41 @@ type storePromptJSON struct {
 }
 
 type PromptPatch struct {
-	WorkspaceID *string `json:"workspace_id,omitempty"`
-	Repo        *string `json:"repo,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
 }
 
 func (p PromptPatch) AnyFieldSet() bool {
-	return p.WorkspaceID != nil || p.Repo != nil || p.Description != nil || p.Content != nil
-}
-
-func (p PromptPatch) ScopeFieldSet() bool {
-	return p.WorkspaceID != nil || p.Repo != nil
-}
-
-func (p PromptPatch) ContentFieldSet() bool {
 	return p.Description != nil || p.Content != nil
 }
 
 func (p PromptPatch) apply(prompt *fleet.Prompt) {
-	if p.WorkspaceID != nil {
-		prompt.WorkspaceID = *p.WorkspaceID
-	}
-	if p.Repo != nil {
-		prompt.Repo = *p.Repo
-	}
 	if p.Description != nil {
 		prompt.Description = *p.Description
 	}
 	if p.Content != nil {
 		prompt.Content = *p.Content
 	}
+}
+
+func (p *PromptPatch) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["workspace_id"]; ok {
+		return &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	if _, ok := raw["repo"]; ok {
+		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	type promptPatch PromptPatch
+	var patch promptPatch
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+	*p = PromptPatch(patch)
+	return nil
 }
 
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
@@ -968,17 +964,6 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 	prompt, err := h.store.ReadPrompt(ref)
 	if err != nil {
 		return fleet.Prompt{}, err
-	}
-	if patch.ScopeFieldSet() && !patch.ContentFieldSet() {
-		workspaceID := prompt.WorkspaceID
-		repo := prompt.Repo
-		if patch.WorkspaceID != nil {
-			workspaceID = *patch.WorkspaceID
-		}
-		if patch.Repo != nil {
-			repo = *patch.Repo
-		}
-		return h.service.UpdatePromptScope(prompt.ID, workspaceID, repo)
 	}
 	merged := prompt
 	patch.apply(&merged)

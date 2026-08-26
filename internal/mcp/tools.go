@@ -522,7 +522,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_skill",
-				mcpgo.WithDescription("Partially update a skill by stable id. Legacy global display-name lookup is also accepted. Only fields present in the call are modified. Same path as PATCH /skills/{id}."),
+				mcpgo.WithDescription("Partially update skill content by stable id. Legacy global display-name lookup is also accepted. Placement uses PATCH /skills/{id}/scope, not this content patch path."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable skill id. Preferred, and required for scoped skills that may share display names."),
 				),
@@ -641,7 +641,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_prompt",
-				mcpgo.WithDescription("Partially update a prompt by stable id, or by name plus optional scope path. Same path as PATCH /prompts/{id}."),
+				mcpgo.WithDescription("Partially update prompt content by stable id, or resolve by name plus optional scope path. Placement uses PATCH /prompts/{id}/scope, not this content patch path."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable prompt id. Preferred for scripts and required when name/scope is ambiguous."),
 				),

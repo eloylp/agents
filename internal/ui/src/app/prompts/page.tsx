@@ -118,35 +118,48 @@ export default function PromptsPage() {
     setError('')
     const isNew = modal === 'create'
     const id = selected.id || selected.name
-    const url = isNew
-      ? apiRoutes.catalog.prompts.list()
-      : catalogDelegated
-        ? apiRoutes.catalog.prompts.scope(id)
-        : apiRoutes.catalog.prompts.one(id)
-    const body = isNew
-      ? {
-          ...selected,
-          workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
-          repo: selectedScope === 'repo' ? selected.repo : '',
-        }
-      : catalogDelegated
-        ? scopePayload(selectedScope, selected)
-        : {
-            description: selected.description,
-            content: selected.content,
+    try {
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.prompts.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...selected,
             workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
             repo: selectedScope === 'repo' ? selected.repo : '',
+          }),
+        })
+        if (!res.ok) {
+          setError(await res.text() || 'Save failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.prompts.one(id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              description: selected.description,
+              content: selected.content,
+            }),
+          })
+          if (!contentRes.ok) {
+            setError(await contentRes.text() || 'Save failed')
+            setSaving(false)
+            return
           }
-    try {
-      const res = await fetch(url, {
-        method: isNew ? 'POST' : 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        setError(await res.text() || 'Save failed')
-        setSaving(false)
-        return
+        }
+        const scopeRes = await fetch(apiRoutes.catalog.prompts.scope(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scopePayload(selectedScope, selected)),
+        })
+        if (!scopeRes.ok) {
+          setError(await scopeRes.text() || 'Save failed')
+          setSaving(false)
+          return
+        }
       }
       setModal(null)
       load()
@@ -173,7 +186,6 @@ export default function PromptsPage() {
     }
     setSaving(false)
   }
-
   const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: 3 }
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6,

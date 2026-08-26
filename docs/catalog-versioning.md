@@ -35,13 +35,17 @@ before.
 
 ## Editing
 
-The REST edit endpoints publish immediately:
+The REST content edit endpoints publish immediately:
 
 ```http
 PATCH /prompts/{id}
 PATCH /skills/{id}
 PATCH /guardrails/{id}
 ```
+
+Prompt and skill placement is daemon-owned and uses the dedicated
+`PATCH /prompts/{id}/scope` and `PATCH /skills/{id}/scope` routes instead of
+the content patch payload.
 
 Example:
 

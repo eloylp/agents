@@ -133,4 +133,49 @@ describe('<PromptsPage />', () => {
       body: JSON.stringify({ scope: 'workspace', workspace_id: 'team-a' }),
     })))
   })
+
+  it('saves prompt content and scope through separate routes', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/prompts?limit=50&offset=0') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            items: [{ id: 'scoped-prompt', workspace_id: 'team-a', name: 'scoped prompt', description: 'Old', content: 'old body' }],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+        } as Response)
+      }
+      if (url === '/workspaces?limit=500&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [{ id: 'team-a', name: 'Team A' }], total: 1, limit: 500, offset: 0 }) } as Response)
+      }
+      if (url === '/catalog/delegation') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ enabled: false }) } as Response)
+      }
+      if (url === '/prompts/scoped-prompt' || url === '/prompts/scoped-prompt/scope') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'scoped-prompt', workspace_id: 'team-a', name: 'scoped prompt', description: 'New', content: 'new body' }) } as Response)
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<PromptsPage />)
+
+    expect(await screen.findByText('scoped prompt')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Old'), { target: { value: 'New' } })
+    fireEvent.change(screen.getByLabelText('Prompt content editor'), { target: { value: 'new body' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/prompts/scoped-prompt', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ description: 'New', content: 'new body' }),
+    })))
+    expect(fetchMock).toHaveBeenCalledWith('/prompts/scoped-prompt/scope', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ scope: 'workspace', workspace_id: 'team-a' }),
+    }))
+  })
 })
