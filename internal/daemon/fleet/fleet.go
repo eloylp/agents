@@ -533,6 +533,9 @@ func (p *SkillPatch) UnmarshalJSON(data []byte) error {
 	if _, ok := raw["repo"]; ok {
 		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
 	}
+	if _, ok := raw["scope"]; ok {
+		return &store.ErrValidation{Msg: "scope cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
 	type skillPatch SkillPatch
 	var patch skillPatch
 	if err := json.Unmarshal(data, &patch); err != nil {
@@ -783,6 +786,9 @@ func (p *PromptPatch) UnmarshalJSON(data []byte) error {
 	}
 	if _, ok := raw["repo"]; ok {
 		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	if _, ok := raw["scope"]; ok {
+		return &store.ErrValidation{Msg: "scope cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
 	}
 	type promptPatch PromptPatch
 	var patch promptPatch

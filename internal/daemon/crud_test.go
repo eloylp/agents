@@ -3405,6 +3405,11 @@ func TestStoreCRUDPromptSkillGenericPatchRejectsScopeFields(t *testing.T) {
 			body: map[string]any{"repo": "owner/repo", "content": "prompt v2"},
 		},
 		{
+			name: "prompt scope",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"scope": "repo", "content": "prompt v2"},
+		},
+		{
 			name: "skill workspace_id",
 			path: "/skills/review-skill",
 			body: map[string]any{"workspace_id": "team-a", "prompt": "skill v2"},
@@ -3413,6 +3418,11 @@ func TestStoreCRUDPromptSkillGenericPatchRejectsScopeFields(t *testing.T) {
 			name: "skill repo",
 			path: "/skills/review-skill",
 			body: map[string]any{"repo": "owner/repo", "prompt": "skill v2"},
+		},
+		{
+			name: "skill scope",
+			path: "/skills/review-skill",
+			body: map[string]any{"scope": "repo", "prompt": "skill v2"},
 		},
 	}
 	for _, tc := range cases {
