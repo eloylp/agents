@@ -181,6 +181,9 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 	var credentialRef string
 	if err := s.withRawTx("prepare catalog delegation", func(tx *sql.Tx) error {
 		var err error
+		if err := rejectPendingPublishableProposalBundlesTx(tx); err != nil {
+			return err
+		}
 		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
 		if err != nil {
 			return err
@@ -640,6 +643,23 @@ func deleteMissingCatalogRefsTx(tx *sql.Tx, table string, keep map[string]struct
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func rejectPendingPublishableProposalBundlesTx(tx *sql.Tx) error {
+	var count int
+	if err := tx.QueryRow(`
+		SELECT COUNT(DISTINCT b.id)
+		FROM self_improvement_proposal_bundles b
+		JOIN self_improvement_proposal_bundle_items i ON i.bundle_id = b.id
+		WHERE b.status = 'pending'
+		  AND i.decision = 'accepted'
+		  AND i.asset_type IN ('prompt', 'skill', 'guardrail')`).Scan(&count); err != nil {
+		return fmt.Errorf("count pending self-improvement proposal bundles: %w", err)
+	}
+	if count > 0 {
+		return &store.ErrValidation{Msg: "catalog delegation activation requires publishing or discarding pending self-improvement catalog proposal bundles first"}
 	}
 	return nil
 }

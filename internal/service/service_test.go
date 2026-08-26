@@ -639,6 +639,36 @@ assets:
 	}
 }
 
+func TestActivateCatalogDelegationRejectsPendingPublishableBundles(t *testing.T) {
+	_, db := openTestService(t)
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_feedback (id, repo_owner, repo_name, source_type, github_comment_id, raw_body)
+		VALUES (1, 'owner', 'repo', 'issue_comment', 1, 'feedback');
+		INSERT INTO self_improvement_recommendations (id, feedback_event_id, type, status)
+		VALUES ('rec_pending', 1, 'catalog_patch_bundle', 'needs_user_input');
+		INSERT INTO self_improvement_proposal_bundles (id, recommendation_id, status)
+		VALUES ('bundle_pending', 'rec_pending', 'pending');
+		INSERT INTO self_improvement_proposal_bundle_items (id, bundle_id, operation, asset_type, decision, proposed_body)
+		VALUES ('item_pending', 'bundle_pending', 'update_existing', 'prompt', 'accepted', 'prompt v2');
+	`); err != nil {
+		t.Fatalf("seed pending proposal bundle: %v", err)
+	}
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_PENDING_BUNDLE"
+	t.Setenv(credentialRef, "secret-token")
+	enabled := true
+	repo := "owner/catalog"
+	svc := NewWithCatalogGitHub(store.New(db), &fakeCatalogGitHub{})
+
+	_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled:       &enabled,
+		Repo:          &repo,
+		CredentialRef: &credentialRef,
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "pending self-improvement catalog proposal bundles") {
+		t.Fatalf("ActivateCatalogDelegation error = %v, want pending bundle validation", err)
+	}
+}
+
 func TestPatchCatalogDelegationConfigRejectsSourceChangeWhileEnabled(t *testing.T) {
 	t.Parallel()
 	svc, db := openTestService(t)
