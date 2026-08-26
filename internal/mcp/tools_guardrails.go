@@ -104,6 +104,25 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "content"); ok {
 			patch.Content = v
 		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, err := deps.Fleet.UpdateGuardrailPatch(ref, patch)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update guardrail", err), nil
+		}
+		return jsonResult(guardrailJSON(canonical))
+	}
+}
+
+func toolUpdateGuardrailState(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ref, ok := guardrailRefArg(req)
+		if !ok {
+			return mcpgo.NewToolResultError("id or name is required"), nil
+		}
+		args := req.GetArguments()
+		var patch daemonfleet.GuardrailStatePatch
 		if raw, ok := args["enabled"]; ok {
 			b, ok := raw.(bool)
 			if !ok {
@@ -122,9 +141,9 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, err := deps.Fleet.UpdateGuardrailPatch(ref, patch)
+		canonical, err := deps.Fleet.UpdateGuardrailState(ref, patch)
 		if err != nil {
-			return mcpgo.NewToolResultErrorFromErr("update guardrail", err), nil
+			return mcpgo.NewToolResultErrorFromErr("update guardrail state", err), nil
 		}
 		return jsonResult(guardrailJSON(canonical))
 	}

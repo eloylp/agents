@@ -717,7 +717,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_guardrail",
-				mcpgo.WithDescription("Partially update a guardrail by stable id. Legacy global display-name lookup is also accepted. is_builtin and default_content are migration-managed and cannot be patched. Same path as PATCH /guardrails/{id}."),
+				mcpgo.WithDescription("Partially update guardrail catalog content by stable id. Legacy global display-name lookup is also accepted. Operational enabled/position state uses update_guardrail_state."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
 				),
@@ -730,6 +730,18 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("content",
 					mcpgo.Description("New policy text. Omit to leave unchanged."),
 				),
+			),
+			toolUpdateGuardrail(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_guardrail_state",
+				mcpgo.WithDescription("Update daemon-owned guardrail enabled/position state by stable id. Same path as PATCH /guardrails/{id}/state."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
+				),
+				mcpgo.WithString("name",
+					mcpgo.Description("Legacy global guardrail display name fallback."),
+				),
 				mcpgo.WithBoolean("enabled",
 					mcpgo.Description("New enabled state. Omit to leave unchanged."),
 				),
@@ -737,7 +749,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("New render position. Omit to leave unchanged."),
 				),
 			),
-			toolUpdateGuardrail(deps),
+			toolUpdateGuardrailState(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_guardrail",

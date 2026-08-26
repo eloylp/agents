@@ -350,13 +350,6 @@ export default function GuardrailsManager() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const url = isNew ? apiRoutes.catalog.guardrails.list() : apiRoutes.catalog.guardrails.one(guardrailID(g))
-      const method = isNew ? 'POST' : 'PATCH'
-      const body = isNew
-        ? { id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
-        : catalogDelegated
-          ? { enabled: g.enabled, position: g.position }
-        : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
       if (!isNew && selected.enabled && !g.enabled) {
@@ -365,15 +358,40 @@ export default function GuardrailsManager() {
         setModal('disable-confirm')
         return
       }
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        setSaveError((await res.text()) || `${method} failed`)
-        setSaving(false)
-        return
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.guardrails.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }),
+        })
+        if (!res.ok) {
+          setSaveError((await res.text()) || 'POST failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(g)), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: g.description, content: g.content }),
+          })
+          if (!contentRes.ok) {
+            setSaveError((await contentRes.text()) || 'PATCH failed')
+            setSaving(false)
+            return
+          }
+        }
+        const stateRes = await fetch(apiRoutes.catalog.guardrails.state(guardrailID(g)), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: g.enabled, position: g.position }),
+        })
+        if (!stateRes.ok) {
+          setSaveError((await stateRes.text()) || 'PATCH failed')
+          setSaving(false)
+          return
+        }
       }
       load()
       closeModal()
@@ -388,7 +406,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(selected)), {
+      const res = await fetch(apiRoutes.catalog.guardrails.state(guardrailID(selected)), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

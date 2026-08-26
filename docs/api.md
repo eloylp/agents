@@ -133,9 +133,10 @@ Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLit
 | `GET` | `/{resource}` | List entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`) with `limit`, `offset`, `total`, and `items`. Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list, but uses the same paginated envelope. |
 | `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
 | `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. New catalog entries (`prompts`, `skills`, `guardrails`) must include an explicit stable public `id`; omitting `id` is accepted only when updating an existing same-scope/name catalog row. When `catalog.delegation.enabled` is true, direct catalog mutations return `409 Conflict`; edit the configured `catalog.yml` instead. |
-| `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Prompt and skill PATCH routes accept catalog content fields only (`description`/`content` for prompts, `prompt` for skills); use the dedicated scope routes for placement. Catalog routes use stable public refs; legacy global names are accepted as a compatibility fallback. |
+| `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Prompt, skill, and guardrail PATCH routes accept catalog content fields only (`description`/`content` for prompts and guardrails, `prompt` for skills); use the dedicated scope/state routes for daemon-owned placement and state. Catalog routes use stable public refs; legacy global names are accepted as a compatibility fallback. |
 | `PATCH` | `/prompts/{id}/scope` | Update only daemon-owned prompt placement by stable public ref. Allowed while catalog delegation is enabled; does not publish content versions or write GitHub state. |
 | `PATCH` | `/skills/{id}/scope` | Update only daemon-owned skill placement by stable public ref. Allowed while catalog delegation is enabled; does not publish content versions or write GitHub state. |
+| `PATCH` | `/guardrails/{id}/state` | Update only daemon-owned guardrail `enabled` and `position` state by stable public ref. Allowed while catalog delegation is enabled; does not publish content versions or write GitHub state. |
 | `PATCH` | `/repos/{owner}/{repo}` | Toggle a repo's `enabled` flag. Only `enabled` is patchable; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement (including bindings) goes through `POST /repos`. |
 | `DELETE` | `/{resource}/{name-or-id}` | Remove an entry. Catalog routes (`prompts`, `skills`, `guardrails`) use stable public refs; legacy global names are accepted as a compatibility fallback. |
 | `DELETE` | `/agents/{name}` | Same as the generic delete, plus a `cascade` query param. By default returns `409 Conflict` with the list of repos still binding the agent; pass `?cascade=true` to also drop those bindings in the same transaction. |
@@ -168,6 +169,16 @@ Prompt and skill scope routes accept one of these payloads:
 
 They update only `workspace_id` and `repo`. Repo scope requires both fields. The routes do not change `name`, `description`, prompt body, skill prompt text, current catalog version, or delegated GitHub file state.
 
+Guardrail state route payload:
+
+```json
+{ "enabled": true, "position": 10 }
+```
+
+It updates only daemon-owned operational state. `description` and `content`
+remain catalog-owned and must go through `PATCH /guardrails/{id}` while
+delegation is disabled, or through the delegated `catalog.yml` while enabled.
+
 ### Token budgets
 
 Token budget periods use UTC calendar boundaries: `daily` starts at 00:00 UTC,
@@ -184,7 +195,7 @@ partial update and omitted fields are preserved.
 
 ### Guardrails
 
-Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, name, description, content, default_content, is_builtin, enabled, position}`, where `id` is the stable public ref. Empty `workspace_id` means global visibility; a set `workspace_id` means workspace-only. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable public guardrail ref. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
+Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, name, description, content, default_content, is_builtin, enabled, position}`, where `id` is the stable public ref. Empty `workspace_id` means global visibility; a set `workspace_id` means workspace-only. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable public guardrail ref. `PATCH /guardrails/{id}` covers catalog `description` and `content`; `PATCH /guardrails/{id}/state` covers daemon-owned `enabled` and `position`. `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 

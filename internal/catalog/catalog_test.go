@@ -223,3 +223,53 @@ func TestToFileOmitsDaemonOwnedCatalogMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNormalizesMeaningfulWhitespace(t *testing.T) {
+	t.Parallel()
+
+	file, err := Parse([]byte(`
+version: 1
+assets:
+  - id: " coder "
+    kind: " prompt "
+    name: " coder "
+    body: " write code "
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	asset := file.Assets[0]
+	if asset.ID != "coder" || asset.Kind != "prompt" || asset.Name != "coder" || asset.Body != "write code" {
+		t.Fatalf("asset = %+v, want trimmed meaningful fields", asset)
+	}
+}
+
+func TestToFileSortsAssetsDeterministically(t *testing.T) {
+	t.Parallel()
+
+	file := ToFile(
+		[]fleet.Prompt{{ID: "z-prompt", Name: "z", Content: "z"}, {ID: "a-prompt", Name: "a", Content: "a"}},
+		map[string]fleet.Skill{
+			"z-skill": {Name: "z", Prompt: "z"},
+			"a-skill": {Name: "a", Prompt: "a"},
+		},
+		[]fleet.Guardrail{{ID: "z-guardrail", Name: "z", Content: "z"}, {ID: "a-guardrail", Name: "a", Content: "a"}},
+	)
+	got := make([]string, 0, len(file.Assets))
+	for _, asset := range file.Assets {
+		got = append(got, asset.Kind+":"+asset.ID)
+	}
+	want := []string{
+		"guardrail:a-guardrail",
+		"guardrail:z-guardrail",
+		"prompt:a-prompt",
+		"prompt:z-prompt",
+		"skill:a-skill",
+		"skill:z-skill",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("asset order = %v, want %v", got, want)
+		}
+	}
+}

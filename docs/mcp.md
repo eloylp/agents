@@ -86,7 +86,8 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | `list_guardrails` | List every guardrail catalog entry, including built-ins and scoped operator-added guardrails. |
 | `get_guardrail` | Fetch one guardrail by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `create_guardrail` | Create or update an operator-defined guardrail. Built-in flags (`is_builtin`, `default_content`) are migration-managed and ignored on the wire. |
-| `update_guardrail` | Partially update a guardrail by stable public ref. Patchable: `description`, `content`, `enabled`, `position`. |
+| `update_guardrail` | Partially update guardrail catalog content by stable public ref. Patchable: `description`, `content`. |
+| `update_guardrail_state` | Update daemon-owned guardrail state by stable public ref. Patchable: `enabled`, `position`. |
 | `delete_guardrail` | Delete a guardrail by stable public ref. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
 | `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content` by stable public ref. Returns a validation error on operator-added rows. |
 

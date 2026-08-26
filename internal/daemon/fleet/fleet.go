@@ -95,6 +95,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleGuardrailVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}/state", withTimeout(http.HandlerFunc(h.handleGuardrailStatePatch))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)

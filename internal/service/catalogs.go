@@ -347,6 +347,13 @@ func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatc
 	var cfg fleet.CatalogDelegationConfig
 	err := s.withRawTx("patch catalog delegation", func(tx *sql.Tx) error {
 		var err error
+		current, err := store.ReadCatalogDelegationConfigTx(tx)
+		if err != nil {
+			return err
+		}
+		if current.Enabled && patch.Enabled == nil && catalogDelegationSourceFieldSet(patch) {
+			return &store.ErrValidation{Msg: "catalog delegation source fields cannot be changed while delegation is enabled; disable delegation before changing repo, branch, catalog_path, or credential_ref"}
+		}
 		if patch.Enabled != nil && !*patch.Enabled {
 			disabledAt := time.Now().UTC().Format(time.RFC3339)
 			status := "disabled"
@@ -359,6 +366,10 @@ func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatc
 		return err
 	})
 	return cfg, err
+}
+
+func catalogDelegationSourceFieldSet(patch store.CatalogDelegationPatch) bool {
+	return patch.Repo != nil || patch.Branch != nil || patch.CatalogPath != nil || patch.CredentialRef != nil
 }
 
 func (s *Service) currentCatalogFile() (catalog.File, error) {
@@ -435,14 +446,22 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			if err != nil {
 				return err
 			}
-			if _, err := store.UpsertPromptTx(tx, fleet.Prompt{
+			next := fleet.Prompt{
 				ID:          asset.ID,
 				WorkspaceID: workspaceID,
 				Repo:        repo,
 				Name:        asset.Name,
 				Description: asset.Description,
 				Content:     asset.Body,
-			}); err != nil {
+			}
+			changed, err := promptCatalogContentChangedTx(tx, next)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			if _, err := store.UpsertPromptTx(tx, next); err != nil {
 				return err
 			}
 		case "skill":
@@ -451,13 +470,21 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			if err != nil {
 				return err
 			}
-			if err := store.UpsertSkillTx(tx, asset.ID, fleet.Skill{
+			next := fleet.Skill{
 				ID:          asset.ID,
 				WorkspaceID: workspaceID,
 				Repo:        repo,
 				Name:        asset.Name,
 				Prompt:      asset.Body,
-			}); err != nil {
+			}
+			changed, err := skillCatalogContentChangedTx(tx, next)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			if err := store.UpsertSkillTx(tx, asset.ID, next); err != nil {
 				return err
 			}
 		case "guardrail":
@@ -466,7 +493,7 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 			if err != nil {
 				return err
 			}
-			if err := store.UpsertGuardrailTx(tx, fleet.Guardrail{
+			next := fleet.Guardrail{
 				ID:          asset.ID,
 				WorkspaceID: existing.WorkspaceID,
 				Name:        asset.Name,
@@ -474,7 +501,15 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 				Content:     asset.Body,
 				Enabled:     existing.Enabled,
 				Position:    existing.Position,
-			}); err != nil {
+			}
+			changed, err := guardrailCatalogContentChangedTx(tx, next)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			if err := store.UpsertGuardrailTx(tx, next); err != nil {
 				return err
 			}
 		default:
@@ -491,6 +526,42 @@ func replaceDelegatedCatalogTx(tx *sql.Tx, file catalog.File) error {
 		return err
 	}
 	return validateFleetTx(tx)
+}
+
+func promptCatalogContentChangedTx(tx *sql.Tx, next fleet.Prompt) (bool, error) {
+	existing, err := store.ReadPromptTx(tx, next.ID)
+	if err != nil {
+		var notFound *store.ErrNotFound
+		if errors.As(err, &notFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	return existing.Name != next.Name || existing.Description != next.Description || existing.Content != next.Content, nil
+}
+
+func skillCatalogContentChangedTx(tx *sql.Tx, next fleet.Skill) (bool, error) {
+	existing, err := store.ReadSkillTx(tx, next.ID)
+	if err != nil {
+		var notFound *store.ErrNotFound
+		if errors.As(err, &notFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	return existing.Name != next.Name || existing.Prompt != next.Prompt, nil
+}
+
+func guardrailCatalogContentChangedTx(tx *sql.Tx, next fleet.Guardrail) (bool, error) {
+	existing, err := store.GetGuardrailFrom(tx, next.ID)
+	if err != nil {
+		var notFound *store.ErrNotFound
+		if errors.As(err, &notFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	return existing.Name != next.Name || existing.Description != next.Description || existing.Content != next.Content, nil
 }
 
 func existingPromptScopeTx(tx *sql.Tx, ref string) (string, string, error) {

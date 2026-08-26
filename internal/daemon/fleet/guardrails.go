@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,30 +45,27 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 	}
 }
 
-// GuardrailPatch is the partial-update shape for a guardrail. Used by both
+// GuardrailPatch is the partial-update shape for guardrail catalog content. Used by both
 // the REST PATCH /guardrails/{id} handler and the MCP update_guardrail
-// tool. A nil field means "don't touch". The is_builtin and
-// default_content fields are deliberately not patchable, built-in
-// status is set by the migration; default_content is reset territory.
+// tool. Operational state is owned by PATCH /guardrails/{id}/state.
 type GuardrailPatch struct {
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	Position    *int    `json:"position,omitempty"`
+}
+
+type GuardrailStatePatch struct {
+	Enabled  *bool `json:"enabled,omitempty"`
+	Position *int  `json:"position,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_guardrail tool to reject
 // empty payloads before hitting the store.
 func (p GuardrailPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil
-}
-
-func (p GuardrailPatch) ContentFieldSet() bool {
 	return p.Description != nil || p.Content != nil
 }
 
-func (p GuardrailPatch) StateFieldSet() bool {
+func (p GuardrailStatePatch) AnyFieldSet() bool {
 	return p.Enabled != nil || p.Position != nil
 }
 
@@ -78,12 +76,26 @@ func (p GuardrailPatch) apply(g *fleet.Guardrail) {
 	if p.Content != nil {
 		g.Content = *p.Content
 	}
-	if p.Enabled != nil {
-		g.Enabled = *p.Enabled
+}
+
+func (p *GuardrailPatch) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
 	}
-	if p.Position != nil {
-		g.Position = *p.Position
+	if _, ok := raw["enabled"]; ok {
+		return &store.ErrValidation{Msg: "enabled cannot be changed with PATCH /guardrails/{id}; use PATCH /guardrails/{id}/state"}
 	}
+	if _, ok := raw["position"]; ok {
+		return &store.ErrValidation{Msg: "position cannot be changed with PATCH /guardrails/{id}; use PATCH /guardrails/{id}/state"}
+	}
+	type guardrailPatch GuardrailPatch
+	var patch guardrailPatch
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+	*p = GuardrailPatch(patch)
+	return nil
 }
 
 // ── Guardrail handlers ───────────────────────────────────────────────────────
@@ -165,6 +177,24 @@ func (h *Handler) handleGuardrailVersionReferences(w http.ResponseWriter, r *htt
 func (h *Handler) handleGuardrailPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	h.handleGuardrailPatch(w, r, name)
+}
+
+func (h *Handler) handleGuardrailStatePatch(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	var req GuardrailStatePatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if !req.AnyFieldSet() {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	g, err := h.UpdateGuardrailState(name, req)
+	if err != nil {
+		h.writeErr(w, err, "guardrail state patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, guardrailToJSON(g))
 }
 
 func (h *Handler) handleGuardrailDelete(w http.ResponseWriter, r *http.Request) {
@@ -253,14 +283,15 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	if err != nil {
 		return fleet.Guardrail{}, err
 	}
-	if patch.StateFieldSet() && !patch.ContentFieldSet() {
-		return h.service.UpdateGuardrailState(normalized, patch.Enabled, patch.Position)
-	}
 	patch.apply(&existing)
 	if err := h.service.UpsertGuardrail(existing); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	return h.store.GetGuardrail(normalized)
+}
+
+func (h *Handler) UpdateGuardrailState(name string, patch GuardrailStatePatch) (fleet.Guardrail, error) {
+	return h.service.UpdateGuardrailState(fleet.NormalizeGuardrailName(name), patch.Enabled, patch.Position)
 }
 
 // DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound

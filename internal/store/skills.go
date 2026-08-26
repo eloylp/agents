@@ -142,6 +142,10 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 	return cfg.Skills, nil
 }
 
+func ReadSkillTx(tx *sql.Tx, ref string) (fleet.Skill, error) {
+	return readSkillByRefTx(tx, ref)
+}
+
 type SkillRecord struct {
 	ID    string
 	Skill fleet.Skill

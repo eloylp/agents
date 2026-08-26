@@ -931,13 +931,18 @@ func TestStoreCRUDGuardrailCreatePatchDelete(t *testing.T) {
 		t.Errorf("operator row must not be flagged built-in; got is_builtin=%v", created["is_builtin"])
 	}
 
-	// PATCH content + disable.
+	// PATCH content and state through their dedicated routes.
 	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/code-style", map[string]any{
 		"content": "Always run gofmt and goimports.",
-		"enabled": false,
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("PATCH guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/code-style/state", map[string]any{
+		"enabled": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail state: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var patched map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
@@ -3417,6 +3422,38 @@ func TestStoreCRUDPromptSkillGenericPatchRejectsScopeFields(t *testing.T) {
 				t.Fatalf("PATCH %s: got %d, want 400; body %s", tc.path, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestStoreCRUDGuardrailPatchRejectsStateFields(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"id": "review-guardrail", "name": "review", "content": "guardrail body", "enabled": true, "position": 10,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/guardrails/review-guardrail", map[string]any{
+		"enabled": false,
+	}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH guardrail state through content route: got %d, want 400; body %s", rr.Code, rr.Body.String())
+	}
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/guardrails/review-guardrail/state", map[string]any{
+		"enabled": false, "position": 20,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail state route: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Enabled  bool   `json:"enabled"`
+		Position int    `json:"position"`
+		Content  string `json:"content"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode guardrail: %v", err)
+	}
+	if out.Enabled || out.Position != 20 || out.Content != "guardrail body" {
+		t.Fatalf("guardrail = %+v, want state changed with content preserved", out)
 	}
 }
 

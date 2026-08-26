@@ -4,6 +4,7 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -64,6 +65,7 @@ func Parse(data []byte) (File, error) {
 	if err := root.Decode(&file); err != nil {
 		return File{}, &store.ErrValidation{Msg: fmt.Sprintf("catalog.yml: decode: %v", err)}
 	}
+	normalizeFile(&file)
 	if err := Validate(file); err != nil {
 		return File{}, err
 	}
@@ -149,7 +151,22 @@ func ToFile(prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []
 			Body:        g.Content,
 		})
 	}
+	sort.SliceStable(file.Assets, func(i, j int) bool {
+		if file.Assets[i].Kind != file.Assets[j].Kind {
+			return file.Assets[i].Kind < file.Assets[j].Kind
+		}
+		return file.Assets[i].ID < file.Assets[j].ID
+	})
 	return file
+}
+
+func normalizeFile(file *File) {
+	for i := range file.Assets {
+		file.Assets[i].ID = strings.TrimSpace(file.Assets[i].ID)
+		file.Assets[i].Kind = strings.TrimSpace(file.Assets[i].Kind)
+		file.Assets[i].Name = strings.TrimSpace(file.Assets[i].Name)
+		file.Assets[i].Body = strings.TrimSpace(file.Assets[i].Body)
+	}
 }
 
 func Marshal(file File) ([]byte, error) {

@@ -639,6 +639,56 @@ assets:
 	}
 }
 
+func TestPatchCatalogDelegationConfigRejectsSourceChangeWhileEnabled(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig seed: %v", err)
+	}
+
+	otherRepo := "owner/other"
+	if _, err := svc.PatchCatalogDelegationConfig(store.CatalogDelegationPatch{Repo: &otherRepo}); err == nil {
+		t.Fatal("PatchCatalogDelegationConfig source change while enabled succeeded, want error")
+	}
+}
+
+func TestApplyDelegatedCatalogSkipsUnchangedCatalogVersions(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	file, err := catalog.Parse([]byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: test prompt
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	before, err := store.ListPromptVersions(db, "coder")
+	if err != nil {
+		t.Fatalf("ListPromptVersions before: %v", err)
+	}
+	if err := svc.ApplyDelegatedCatalog(file, "same-content"); err != nil {
+		t.Fatalf("ApplyDelegatedCatalog: %v", err)
+	}
+	after, err := store.ListPromptVersions(db, "coder")
+	if err != nil {
+		t.Fatalf("ListPromptVersions after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("prompt versions after unchanged sync = %d, want %d", len(after), len(before))
+	}
+}
+
 func TestUpsertRepoRejectsInvalidCronBeforePersisting(t *testing.T) {
 	t.Parallel()
 	svc, db := openTestService(t)
