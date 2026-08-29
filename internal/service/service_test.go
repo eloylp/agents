@@ -689,6 +689,49 @@ func TestPatchCatalogDelegationConfigRejectsSourceChangeWhileEnabled(t *testing.
 	}
 }
 
+func TestActivateCatalogDelegationRejectsSourceChangeWhileEnabled(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	branch := "main"
+	catalogPath := "catalog.yml"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_ACTIVE"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		Branch:           &branch,
+		CatalogPath:      &catalogPath,
+		CredentialRef:    &credentialRef,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig seed: %v", err)
+	}
+	fake := &fakeCatalogGitHub{}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+
+	otherRepo := "owner/other"
+	_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled: &enabled,
+		Repo:    &otherRepo,
+	}, "")
+	var validation *store.ErrValidation
+	if !errors.As(err, &validation) {
+		t.Fatalf("ActivateCatalogDelegation err = %T %v, want ErrValidation", err, err)
+	}
+	if fake.writes != 0 || len(fake.reads) != 0 {
+		t.Fatalf("github calls = writes %d reads %d, want none", fake.writes, len(fake.reads))
+	}
+	cfg, err := store.ReadCatalogDelegationConfig(db)
+	if err != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", err)
+	}
+	if !cfg.Enabled || cfg.Repo != repo || cfg.Branch != branch || cfg.CatalogPath != catalogPath || cfg.CredentialRef != credentialRef || cfg.LastSyncedCommit != sha {
+		t.Fatalf("delegation cfg = %+v, want original active source unchanged", cfg)
+	}
+}
+
 func TestApplyDelegatedCatalogSkipsUnchangedCatalogVersions(t *testing.T) {
 	t.Parallel()
 	svc, db := openTestService(t)

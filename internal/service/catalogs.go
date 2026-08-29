@@ -184,6 +184,13 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 		if err := rejectPendingPublishableProposalBundlesTx(tx); err != nil {
 			return err
 		}
+		current, err := store.ReadCatalogDelegationConfigTx(tx)
+		if err != nil {
+			return err
+		}
+		if current.Enabled && catalogDelegationSourceFieldChanges(current, patch) {
+			return &store.ErrValidation{Msg: "catalog delegation source fields cannot be changed while delegation is enabled; disable delegation before changing repo, branch, catalog_path, or credential_ref"}
+		}
 		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
 		if err != nil {
 			return err
@@ -373,6 +380,22 @@ func (s *Service) PatchCatalogDelegationConfig(patch store.CatalogDelegationPatc
 
 func catalogDelegationSourceFieldSet(patch store.CatalogDelegationPatch) bool {
 	return patch.Repo != nil || patch.Branch != nil || patch.CatalogPath != nil || patch.CredentialRef != nil
+}
+
+func catalogDelegationSourceFieldChanges(current fleet.CatalogDelegationConfig, patch store.CatalogDelegationPatch) bool {
+	if patch.Repo != nil && strings.TrimSpace(*patch.Repo) != current.Repo {
+		return true
+	}
+	if patch.Branch != nil && strings.TrimSpace(*patch.Branch) != current.Branch {
+		return true
+	}
+	if patch.CatalogPath != nil && strings.TrimSpace(*patch.CatalogPath) != current.CatalogPath {
+		return true
+	}
+	if patch.CredentialRef != nil && strings.TrimSpace(*patch.CredentialRef) != current.CredentialRef {
+		return true
+	}
+	return false
 }
 
 func (s *Service) currentCatalogFile() (catalog.File, error) {
