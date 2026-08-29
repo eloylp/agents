@@ -277,7 +277,7 @@ function staleVersionCheck(row: Recommendation, checks: Record<string, CatalogVe
 
 function isTerminalRecommendationPayload(row: Recommendation) {
   const bundleStatus = row.proposal_bundle?.status
-  return row.status === 'rejected' || bundleStatus === 'published' || bundleStatus === 'resolved' || bundleStatus === 'discarded'
+  return row.status === 'rejected' || row.status === 'skipped' || bundleStatus === 'published' || bundleStatus === 'resolved' || bundleStatus === 'discarded'
 }
 
 function hasPendingVersionCheck(row: Recommendation, checks: Record<string, CatalogVersionCheck>) {
@@ -290,6 +290,7 @@ function displayProposalStatus(status: string) {
   if (status === 'clarifying') return 'clarifying'
   if (status === 'analyzing') return 'analyzing'
   if (status === 'failed') return 'failed'
+  if (status === 'skipped') return 'skipped'
   return status
 }
 
@@ -894,7 +895,7 @@ export default function ImprovementsPage() {
 
   const isCompletedRecommendation = (row: Recommendation) => {
     const bundleStatus = bundles[row.id]?.status
-    return row.status === 'rejected' || bundleStatus === 'published' || bundleStatus === 'resolved' || bundleStatus === 'discarded'
+    return row.status === 'rejected' || row.status === 'skipped' || bundleStatus === 'published' || bundleStatus === 'resolved' || bundleStatus === 'discarded'
   }
 
   const activeRecommendations = recommendations.filter(row => !isCompletedRecommendation(row))
@@ -931,6 +932,7 @@ export default function ImprovementsPage() {
             <option value="needs_user_input">Needs input</option>
             <option value="clarifying">Clarifying</option>
             <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
             <option value="rejected">Rejected</option>
           </select>
         </div>
@@ -980,7 +982,7 @@ export default function ImprovementsPage() {
           {shownRecommendations.map(row => {
 	            const bundle = bundles[row.id]
 	            const failed = row.status === 'failed'
-	            const decisionLocked = row.status === 'rejected' || bundle?.status === 'published' || bundle?.status === 'resolved' || bundle?.status === 'discarded'
+	            const decisionLocked = row.status === 'rejected' || row.status === 'skipped' || bundle?.status === 'published' || bundle?.status === 'resolved' || bundle?.status === 'discarded'
 	            const stale = decisionLocked ? null : staleVersionCheck(row, catalogVersionChecks)
 	            const versionCheckPending = decisionLocked ? false : hasPendingVersionCheck(row, catalogVersionChecks)
 	            const needsInput = row.status === 'needs_user_input'
@@ -1043,7 +1045,7 @@ export default function ImprovementsPage() {
                 {!needsInput && !waiting && canInspect && (
                   <button onClick={() => setReviewingProposal(row)} style={{ padding: '6px 8px', border: '1px solid var(--accent)', background: 'var(--bg-active)', color: 'var(--text)', borderRadius: 6 }}>Inspect</button>
                 )}
-                {row.status === 'rejected' && <span style={{ color: 'var(--text-faint)', fontSize: '0.76rem', alignSelf: 'center' }}>Decision locked</span>}
+                {(row.status === 'rejected' || row.status === 'skipped') && <span style={{ color: 'var(--text-faint)', fontSize: '0.76rem', alignSelf: 'center' }}>Decision locked</span>}
                 {stale && row.status === 'recommended' && (
                   <>
                     <span style={{ color: 'var(--text-danger)', fontSize: '0.76rem', alignSelf: 'center' }}>Proposal blocked: target changed</span>

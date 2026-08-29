@@ -49,6 +49,8 @@ function catalogRoutes(assetPath: 'prompts' | 'skills' | 'guardrails') {
   return {
     list: (query?: Query) => path(`/${assetPath}`, query),
     one: (id: string) => `/${assetPath}/${enc(id)}`,
+    scope: (id: string) => `/${assetPath}/${enc(id)}/scope`,
+    state: (id: string) => `/${assetPath}/${enc(id)}/state`,
     versions: (id: string) => `/${assetPath}/${enc(id)}/versions`,
     versionReferences: (id: string, versionID: string) => `/${assetPath}/${enc(id)}/versions/${enc(versionID)}/references`,
   }
@@ -84,6 +86,11 @@ export const apiRoutes = {
     guardrails: (id: string) => `/workspaces/${enc(id)}/guardrails`,
   },
   catalog: {
+    delegation: {
+      status: () => '/catalog/delegation',
+      update: () => '/catalog/delegation',
+      sync: () => '/catalog/delegation/sync',
+    },
     prompts: catalogRoutes('prompts'),
     skills: catalogRoutes('skills'),
     guardrails: {

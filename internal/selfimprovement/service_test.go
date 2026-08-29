@@ -29,6 +29,20 @@ func newServiceTest(t *testing.T) (*Service, *store.Store, *sql.DB) {
 	return New(st), st, db
 }
 
+func enableCatalogDelegationForTest(t *testing.T, db *sql.DB) {
+	t.Helper()
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+}
+
 func seedFeedback(t *testing.T, st *store.Store, workspace string, id int64) store.SelfImprovementFeedback {
 	t.Helper()
 	if workspace != "" && workspace != fleet.DefaultWorkspaceID {
@@ -477,6 +491,127 @@ func TestProposalBundleRejectsStaleRecommendationSnapshotAndGuardrailLink(t *tes
 	}
 	if _, err := svc.LinkProposalBundleItem(guardRec.ProposalBundle.ID, guardRec.ProposalBundle.Items[0].ID, "existing-guardrail", "already exists", "system"); err == nil {
 		t.Fatal("LinkProposalBundleItem guardrail succeeded, want validation error")
+	}
+}
+
+func TestPublishProposalBundleBlockedWhenCatalogDelegated(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "delegated-prompt", Name: "delegated-prompt", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683604)
+	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "catalog update",
+		Rationale:             "prompt update should be proposed",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation: %v", err)
+	}
+	if rec.ProposalBundle == nil {
+		t.Fatal("RecordRecommendation did not attach proposal bundle")
+	}
+	enableCatalogDelegationForTest(t, db)
+
+	_, err = svc.PublishProposalBundle(rec.ProposalBundle.ID, "system")
+	var delegated *store.ErrCatalogDelegated
+	if !errors.As(err, &delegated) {
+		t.Fatalf("PublishProposalBundle() error = %T %v, want ErrCatalogDelegated", err, err)
+	}
+}
+
+func TestRecordRecommendationSkipsCatalogBundleWhenCatalogDelegated(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{ID: "delegated-record-prompt", Name: "delegated-record-prompt", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	enableCatalogDelegationForTest(t, db)
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683605)
+
+	rec, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "catalog_patch_bundle",
+		Status:                RecommendationStatusRecommended,
+		Finding:               "catalog update",
+		Rationale:             "prompt update should be skipped while delegated",
+		AttributionConfidence: "exact",
+		StructuredOutput: map[string]any{
+			"changes": []map[string]any{
+				{"operation": ProposalBundleOperationUpdateExisting, "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation: %v", err)
+	}
+	if rec.Status != RecommendationStatusSkipped {
+		t.Fatalf("status = %q, want skipped", rec.Status)
+	}
+	if rec.ProposalBundle != nil {
+		t.Fatalf("proposal bundle = %+v, want none", rec.ProposalBundle)
+	}
+	if rec.Error != CatalogDelegatedImprovementDisabledMessage {
+		t.Fatalf("error = %q, want delegated disabled message", rec.Error)
+	}
+}
+
+func TestBeginAnalysisSkipsWhenCatalogDelegated(t *testing.T) {
+	t.Parallel()
+	svc, st, db := newServiceTest(t)
+	enableCatalogDelegationForTest(t, db)
+	feedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683606)
+
+	rec, previousStatus, err := svc.BeginAnalysis(feedback)
+	if err != nil {
+		t.Fatalf("BeginAnalysis: %v", err)
+	}
+	if previousStatus != "" {
+		t.Fatalf("previousStatus = %q, want empty", previousStatus)
+	}
+	if rec.Status != RecommendationStatusSkipped || rec.Error != CatalogDelegatedImprovementDisabledMessage {
+		t.Fatalf("recommendation = %+v, want skipped delegated message", rec)
+	}
+	gotFeedback, err := st.GetSelfImprovementFeedback(feedback.ID)
+	if err != nil {
+		t.Fatalf("GetSelfImprovementFeedback: %v", err)
+	}
+	if gotFeedback.Status != store.FeedbackStatusAnalyzed {
+		t.Fatalf("feedback status = %q, want analyzed", gotFeedback.Status)
+	}
+
+	existingFeedback := seedFeedback(t, st, fleet.DefaultWorkspaceID, 683607)
+	existing, err := svc.RecordRecommendation(SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       existingFeedback.ID,
+		Type:                  "needs_more_context",
+		Status:                RecommendationStatusNeedsUserInput,
+		Finding:               "needs clarification",
+		Rationale:             "human input needed",
+		AttributionConfidence: "exact",
+	})
+	if err != nil {
+		t.Fatalf("RecordRecommendation existing: %v", err)
+	}
+	skipped, previousStatus, err := svc.BeginAnalysis(existingFeedback)
+	if err != nil {
+		t.Fatalf("BeginAnalysis existing: %v", err)
+	}
+	if skipped.ID != existing.ID || skipped.Status != RecommendationStatusSkipped || previousStatus != "" {
+		t.Fatalf("existing reanalysis = (%q, %q, previous %q), want skipped same recommendation without previous status", skipped.ID, skipped.Status, previousStatus)
 	}
 }
 

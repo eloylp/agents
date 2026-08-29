@@ -481,6 +481,9 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 			}); err != nil {
 				return err
 			}
+			if err := rejectSelfImprovementCatalogDelegatedTx(tx); err != nil {
+				return err
+			}
 			versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
 			if err != nil {
 				return err
@@ -509,6 +512,17 @@ func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, ac
 		return SelfImprovementProposalBundle{}, err
 	}
 	return getSelfImprovementProposalBundleFromStore(st, publishedID)
+}
+
+func rejectSelfImprovementCatalogDelegatedTx(tx *store.Tx) error {
+	cfg, err := store.ReadCatalogDelegationConfigTx(tx)
+	if err != nil {
+		return err
+	}
+	if cfg.Enabled {
+		return &store.ErrCatalogDelegated{}
+	}
+	return nil
 }
 
 func discardSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, actor string) (SelfImprovementProposalBundle, error) {

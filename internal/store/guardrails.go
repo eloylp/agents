@@ -213,6 +213,37 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	return nil
 }
 
+func UpdateGuardrailStateTx(exec sqlExec, ref string, enabled *bool, position *int) (fleet.Guardrail, error) {
+	ref = fleet.NormalizeGuardrailName(ref)
+	if ref == "" {
+		return fleet.Guardrail{}, &ErrValidation{Msg: "guardrail id is required"}
+	}
+	if enabled == nil && position == nil {
+		return fleet.Guardrail{}, &ErrValidation{Msg: "guardrail enabled or position is required"}
+	}
+	existing, err := GetGuardrailFrom(exec, ref)
+	if err != nil {
+		return fleet.Guardrail{}, err
+	}
+	nextEnabled := existing.Enabled
+	nextPosition := existing.Position
+	if enabled != nil {
+		nextEnabled = *enabled
+	}
+	if position != nil {
+		nextPosition = *position
+	}
+	if _, err := exec.Exec(`
+		UPDATE guardrails
+		SET enabled = ?, position = ?, updated_at = datetime('now')
+		WHERE ref = ?`,
+		boolToInt(nextEnabled), nextPosition, ref,
+	); err != nil {
+		return fleet.Guardrail{}, fmt.Errorf("store: update guardrail %s state: %w", ref, err)
+	}
+	return GetGuardrailFrom(exec, ref)
+}
+
 func isReservedGuardrailName(name string) bool {
 	return name == "workspace-boundary"
 }

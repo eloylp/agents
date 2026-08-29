@@ -234,7 +234,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Optional workspace id or display name to narrow the global proposal set."),
 				),
 				mcpgo.WithString("status",
-					mcpgo.Description("Optional status filter such as recommended, needs_user_input, clarifying, analyzing, rejected, or failed. recommended means ready for human review and may already include a proposal bundle."),
+					mcpgo.Description("Optional status filter such as recommended, needs_user_input, clarifying, analyzing, skipped, rejected, or failed. recommended means ready for human review and may already include a proposal bundle."),
 				),
 				mcpgo.WithNumber("limit", mcpgo.Description("Maximum rows to return. Defaults to 50; maximum 500.")),
 				mcpgo.WithNumber("offset", mcpgo.Description("Pagination offset. Defaults to 0.")),
@@ -253,7 +253,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("analyze_improvement_feedback",
-				mcpgo.WithDescription("Queue a fresh agents.improvement analysis run for one stored feedback event. Existing non-terminal recommendations are marked analyzing until the queued run records the next state."),
+				mcpgo.WithDescription("Queue a fresh agents.improvement analysis run for one stored feedback event. Existing non-terminal recommendations are marked analyzing until the queued run records the next state. When catalog delegation is enabled, records a skipped recommendation instead of enqueueing catalog proposal work."),
 				mcpgo.WithNumber("feedback_event_id",
 					mcpgo.Required(),
 					mcpgo.Description("Stored feedback event id."),
@@ -522,7 +522,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_skill",
-				mcpgo.WithDescription("Partially update a skill by stable id. Legacy global display-name lookup is also accepted. Only fields present in the call are modified. Same path as PATCH /skills/{id}."),
+				mcpgo.WithDescription("Partially update skill content by stable id. Legacy global display-name lookup is also accepted. Placement uses PATCH /skills/{id}/scope, not this content patch path."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable skill id. Preferred, and required for scoped skills that may share display names."),
 				),
@@ -641,7 +641,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_prompt",
-				mcpgo.WithDescription("Partially update a prompt by stable id, or by name plus optional scope path. Same path as PATCH /prompts/{id}."),
+				mcpgo.WithDescription("Partially update prompt content by stable id, or resolve by name plus optional scope path. Placement uses PATCH /prompts/{id}/scope, not this content patch path."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable prompt id. Preferred for scripts and required when name/scope is ambiguous."),
 				),
@@ -717,7 +717,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_guardrail",
-				mcpgo.WithDescription("Partially update a guardrail by stable id. Legacy global display-name lookup is also accepted. is_builtin and default_content are migration-managed and cannot be patched. Same path as PATCH /guardrails/{id}."),
+				mcpgo.WithDescription("Partially update guardrail catalog content by stable id. Legacy global display-name lookup is also accepted. Operational enabled/position state uses update_guardrail_state."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
 				),
@@ -730,6 +730,18 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("content",
 					mcpgo.Description("New policy text. Omit to leave unchanged."),
 				),
+			),
+			toolUpdateGuardrail(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_guardrail_state",
+				mcpgo.WithDescription("Update daemon-owned guardrail enabled/position state by stable id. Same path as PATCH /guardrails/{id}/state."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
+				),
+				mcpgo.WithString("name",
+					mcpgo.Description("Legacy global guardrail display name fallback."),
+				),
 				mcpgo.WithBoolean("enabled",
 					mcpgo.Description("New enabled state. Omit to leave unchanged."),
 				),
@@ -737,7 +749,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("New render position. Omit to leave unchanged."),
 				),
 			),
-			toolUpdateGuardrail(deps),
+			toolUpdateGuardrailState(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_guardrail",

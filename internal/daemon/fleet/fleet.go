@@ -86,6 +86,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleSkillVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}/scope", withTimeout(http.HandlerFunc(h.handleSkillScopePatch))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
@@ -94,6 +95,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleGuardrailVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}/state", withTimeout(http.HandlerFunc(h.handleGuardrailStatePatch))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
@@ -103,6 +105,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handlePromptVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}/scope", withTimeout(http.HandlerFunc(h.handlePromptScopePatch))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
@@ -471,11 +474,39 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 	}
 }
 
-// SkillPatch is the partial-update shape for a skill. Used by both the REST
-// PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
-// "don't touch".
+// SkillPatch is the partial-update shape for skill content. Used by both the
+// REST PATCH /skills/{id} handler and the MCP update_skill tool. Placement is
+// owned by PATCH /skills/{id}/scope.
 type SkillPatch struct {
 	Prompt *string `json:"prompt,omitempty"`
+}
+
+type CatalogScopePatch struct {
+	Scope       string `json:"scope"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+}
+
+func (p CatalogScopePatch) workspaceRepo() (string, string, error) {
+	switch strings.TrimSpace(p.Scope) {
+	case "global":
+		return "", "", nil
+	case "workspace":
+		if strings.TrimSpace(p.WorkspaceID) == "" {
+			return "", "", &store.ErrValidation{Msg: "workspace_id is required for workspace scope"}
+		}
+		if strings.TrimSpace(p.Repo) != "" {
+			return "", "", &store.ErrValidation{Msg: "repo must be empty for workspace scope"}
+		}
+		return p.WorkspaceID, "", nil
+	case "repo":
+		if strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.Repo) == "" {
+			return "", "", &store.ErrValidation{Msg: "workspace_id and repo are required for repo scope"}
+		}
+		return p.WorkspaceID, p.Repo, nil
+	default:
+		return "", "", &store.ErrValidation{Msg: fmt.Sprintf("unsupported scope %q", p.Scope)}
+	}
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
@@ -489,6 +520,29 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
+}
+
+func (p *SkillPatch) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["workspace_id"]; ok {
+		return &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
+	if _, ok := raw["repo"]; ok {
+		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
+	if _, ok := raw["scope"]; ok {
+		return &store.ErrValidation{Msg: "scope cannot be changed with PATCH /skills/{id}; use PATCH /skills/{id}/scope"}
+	}
+	type skillPatch SkillPatch
+	var patch skillPatch
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+	*p = SkillPatch(patch)
+	return nil
 }
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
@@ -565,6 +619,25 @@ func (h *Handler) handleSkillVersionReferences(w http.ResponseWriter, r *http.Re
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
+}
+
+func (h *Handler) handleSkillScopePatch(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	var req CatalogScopePatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	workspaceID, repo, err := req.workspaceRepo()
+	if err != nil {
+		h.writeErr(w, err, "skill scope patch")
+		return
+	}
+	saved, err := h.service.UpdateSkillScope(ref, workspaceID, repo)
+	if err != nil {
+		h.writeErr(w, err, "skill scope patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, skillToStoreJSON(saved.ID, saved))
 }
 
 func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
@@ -703,6 +776,29 @@ func (p PromptPatch) apply(prompt *fleet.Prompt) {
 	}
 }
 
+func (p *PromptPatch) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["workspace_id"]; ok {
+		return &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	if _, ok := raw["repo"]; ok {
+		return &store.ErrValidation{Msg: "repo cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	if _, ok := raw["scope"]; ok {
+		return &store.ErrValidation{Msg: "scope cannot be changed with PATCH /prompts/{id}; use PATCH /prompts/{id}/scope"}
+	}
+	type promptPatch PromptPatch
+	var patch promptPatch
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+	*p = PromptPatch(patch)
+	return nil
+}
+
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
 	return storePromptJSON{
 		ID:          p.ID,
@@ -810,6 +906,25 @@ func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) 
 	prompt, err := h.updatePrompt(ref, req)
 	if err != nil {
 		h.writeErr(w, err, "prompt patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptScopePatch(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	var req CatalogScopePatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	workspaceID, repo, err := req.workspaceRepo()
+	if err != nil {
+		h.writeErr(w, err, "prompt scope patch")
+		return
+	}
+	prompt, err := h.service.UpdatePromptScope(ref, workspaceID, repo)
+	if err != nil {
+		h.writeErr(w, err, "prompt scope patch")
 		return
 	}
 	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
@@ -1214,6 +1329,10 @@ func storeErrStatus(err error) int {
 	}
 	var c *store.ErrConflict
 	if errors.As(err, &c) {
+		return http.StatusConflict
+	}
+	var d *store.ErrCatalogDelegated
+	if errors.As(err, &d) {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError

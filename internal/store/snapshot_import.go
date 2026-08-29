@@ -273,33 +273,43 @@ func ReplaceConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error 
 }
 
 func ImportConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget) error {
-	return importConfigTx(tx, cfg, budgets, false)
+	return importConfigTx(tx, cfg, budgets, false, false)
 }
 
 func ReplaceConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget) error {
-	return importConfigTx(tx, cfg, budgets, true)
+	return importConfigTx(tx, cfg, budgets, true, false)
 }
 
-func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, replace bool) error {
+func ReplaceConfigPreserveCatalogTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfigTx(tx, cfg, budgets, true, true)
+}
+
+func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, replace bool, preserveCatalog bool) error {
 	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
 
 	if replace {
-		for _, tbl := range []string{"agent_dispatches", "agent_skills", "bindings", "graph_layouts", "agents", "token_budgets", "prompts", "skills"} {
+		truncateTables := []string{"agent_dispatches", "agent_skills", "bindings", "graph_layouts", "agents", "token_budgets"}
+		if !preserveCatalog {
+			truncateTables = append(truncateTables, "prompts", "skills")
+		}
+		for _, tbl := range truncateTables {
 			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
 				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
 			}
 		}
-		if _, err := tx.Exec("DELETE FROM workspace_guardrails"); err != nil {
-			return fmt.Errorf("store: replace config: truncate workspace guardrails: %w", err)
-		}
-		if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
-			return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
+		if !preserveCatalog {
+			if _, err := tx.Exec("DELETE FROM workspace_guardrails"); err != nil {
+				return fmt.Errorf("store: replace config: truncate workspace guardrails: %w", err)
+			}
+			if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
+				return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
+			}
+			if err := seedWorkspaceGuardrails(tx, fleet.DefaultWorkspaceID); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec("DELETE FROM repos"); err != nil {
 			return fmt.Errorf("store: replace config: truncate repos: %w", err)
-		}
-		if err := seedWorkspaceGuardrails(tx, fleet.DefaultWorkspaceID); err != nil {
-			return err
 		}
 		if _, err := tx.Exec("DELETE FROM workspaces WHERE id <> ?", fleet.DefaultWorkspaceID); err != nil {
 			return fmt.Errorf("store: replace config: truncate workspaces: %w", err)

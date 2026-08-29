@@ -17,12 +17,21 @@ import (
 
 // Service coordinates mutable fleet/config operations against the store.
 type Service struct {
-	store *store.Store
+	store  *store.Store
+	github catalogGitHubClient
 }
 
 // New constructs a service layer backed by st.
 func New(st *store.Store) *Service {
-	return &Service{store: st}
+	return &Service{store: st, github: newGitHubCatalogClient()}
+}
+
+func NewWithCatalogGitHub(st *store.Store, github catalogGitHubClient) *Service {
+	s := New(st)
+	if github != nil {
+		s.github = github
+	}
+	return s
 }
 
 func (s *Service) withTx(op string, fn func(*sql.Tx) error) error {

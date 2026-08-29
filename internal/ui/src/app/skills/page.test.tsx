@@ -47,6 +47,12 @@ describe('<SkillsPage />', () => {
       if (url === '/workspaces?limit=500&offset=0') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'default', name: 'Default' }]) } as Response)
       }
+      if (url === '/catalog/delegation') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ enabled: false }) } as Response)
+      }
+      if (url === '/skills/go-api' || url === '/skills/go-api/scope') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'go-api', name: 'go api boundaries', prompt: 'Updated guidance.' }) } as Response)
+      }
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -73,7 +79,53 @@ describe('<SkillsPage />', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/skills/go-api',
-      expect.objectContaining({ method: 'PATCH' }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ prompt: 'Updated guidance.' }),
+      }),
     ))
+    expect(fetchMock).toHaveBeenCalledWith('/skills/go-api/scope', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ scope: 'global' }),
+    }))
+  }, 10000)
+
+  it('links delegated users to the configured catalog file', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/skills?limit=50&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [{ id: 'delegated-skill', name: 'delegated skill', prompt: 'body' }], total: 1, limit: 50, offset: 0 }) } as Response)
+      }
+      if (url === '/workspaces?limit=500&offset=0') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [{ id: 'team-a', name: 'Team A' }], total: 1, limit: 500, offset: 0 }) } as Response)
+      }
+      if (url === '/catalog/delegation') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ enabled: true, repo: 'acme/catalog', branch: 'main', catalog_path: 'catalog.yml' }),
+        } as Response)
+      }
+      if (url === '/skills/delegated-skill/scope') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'delegated-skill', workspace_id: 'team-a', name: 'delegated skill', prompt: 'body' }) } as Response)
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve([]) } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<SkillsPage />)
+
+    const link = await screen.findByRole('link', { name: 'catalog.yml' })
+    expect(link).toHaveAttribute('href', 'https://github.com/acme/catalog/blob/main/catalog.yml')
+    expect(screen.getByRole('button', { name: '+ Create skill' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Scope' }))
+    expect(screen.queryByTestId('catalog-versions')).not.toBeInTheDocument()
+    expect(screen.getByText('Content versions are managed in the delegated GitHub catalog while delegation is enabled.')).toBeInTheDocument()
+    fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Global'), { target: { value: 'workspace' } })
+    fireEvent.change(within(screen.getByRole('dialog')).getByDisplayValue('Select workspace...'), { target: { value: 'team-a' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/skills/delegated-skill/scope', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ scope: 'workspace', workspace_id: 'team-a' }),
+    })))
   })
 })

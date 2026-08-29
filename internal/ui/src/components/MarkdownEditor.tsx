@@ -9,7 +9,7 @@ import FullscreenModal from './FullscreenModal'
 const MDEditor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false })
 
 export default function MarkdownEditor({
-  value, onChange, placeholder, minHeight = 200, expandable = true, expandTitle = 'Edit',
+  value, onChange, placeholder, minHeight = 200, expandable = true, expandTitle = 'Edit', readOnly = false,
 }: {
   value: string
   onChange: (v: string) => void
@@ -17,6 +17,7 @@ export default function MarkdownEditor({
   minHeight?: number
   expandable?: boolean
   expandTitle?: string
+  readOnly?: boolean
 }) {
   const { theme } = useTheme()
   const [expanded, setExpanded] = useState(false)
@@ -25,9 +26,11 @@ export default function MarkdownEditor({
     <div data-color-mode={theme} style={{ position: 'relative' }}>
       <MDEditor
         value={value}
-        onChange={v => onChange(v ?? '')}
+        onChange={v => {
+          if (!readOnly) onChange(v ?? '')
+        }}
         preview="live"
-        textareaProps={{ placeholder }}
+        textareaProps={{ placeholder, readOnly }}
         height={minHeight}
         visibleDragbar
       />
@@ -50,9 +53,11 @@ export default function MarkdownEditor({
           <div data-color-mode={theme} style={{ height: '100%' }}>
             <MDEditor
               value={value}
-              onChange={v => onChange(v ?? '')}
+              onChange={v => {
+                if (!readOnly) onChange(v ?? '')
+              }}
               preview="live"
-              textareaProps={{ placeholder }}
+              textareaProps={{ placeholder, readOnly }}
               height="100%"
               visibleDragbar={false}
             />

@@ -35,13 +35,18 @@ before.
 
 ## Editing
 
-The REST edit endpoints publish immediately:
+The REST content edit endpoints publish immediately:
 
 ```http
 PATCH /prompts/{id}
 PATCH /skills/{id}
 PATCH /guardrails/{id}
 ```
+
+Prompt and skill placement is daemon-owned and uses the dedicated
+`PATCH /prompts/{id}/scope` and `PATCH /skills/{id}/scope` routes instead of
+the content patch payload. Guardrail enabled/position state is daemon-owned and
+uses `PATCH /guardrails/{id}/state`.
 
 Example:
 
@@ -52,8 +57,9 @@ Example:
 ```
 
 The MCP `update_prompt`, `update_skill`, and `update_guardrail` tools follow
-the same rule. There is no catalog draft state and no explicit publish endpoint
-for individual catalog versions.
+the same content-publishing rule. `update_guardrail_state` updates daemon-owned
+state without publishing a content version. There is no catalog draft state and
+no explicit publish endpoint for individual catalog versions.
 
 The self-improvement workflow keeps proposed changes in proposal bundle tables
 until a human finalizes the bundle. Finalizing a bundle atomically creates the

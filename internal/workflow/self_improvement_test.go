@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,57 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != selfImprovementInternalAgentName {
 		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
+	}
+}
+
+func TestAnalyzeSelfImprovementFeedbackSkipsWhenCatalogDelegated(t *testing.T) {
+	t.Parallel()
+
+	st := newTempStore(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(st.DB(), store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+	feedback, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "default",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  124,
+		SourceURL:        "https://github.com/owner/repo/issues/7#issuecomment-124",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "Improve prompt guidance /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+		Status:           store.FeedbackStatusNew,
+	})
+	if err != nil {
+		t.Fatalf("upsert feedback: %v", err)
+	}
+	runner := &selfImprovementJSONRunner{err: errors.New("runner should not be called")}
+	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
+	e.WithRunnerBuilder(func(_ string, _ string, _ fleet.Backend) ai.Runner { return runner })
+
+	rec, err := e.AnalyzeSelfImprovementFeedback(context.Background(), feedback)
+	if err != nil {
+		t.Fatalf("AnalyzeSelfImprovementFeedback: %v", err)
+	}
+	if rec.Status != selfimprovement.RecommendationStatusSkipped {
+		t.Fatalf("status = %q, want skipped", rec.Status)
+	}
+	if rec.Error != selfimprovement.CatalogDelegatedImprovementDisabledMessage {
+		t.Fatalf("error = %q, want delegated disabled message", rec.Error)
+	}
+	if runner.req.User != "" {
+		t.Fatalf("runner request = %+v, want no runner call", runner.req)
 	}
 }
 

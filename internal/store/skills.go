@@ -142,6 +142,10 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 	return cfg.Skills, nil
 }
 
+func ReadSkillTx(tx *sql.Tx, ref string) (fleet.Skill, error) {
+	return readSkillByRefTx(tx, ref)
+}
+
 type SkillRecord struct {
 	ID    string
 	Skill fleet.Skill
@@ -233,6 +237,60 @@ func UpsertSkillTx(tx *sql.Tx, name string, s fleet.Skill) error {
 		return err
 	}
 	return nil
+}
+
+func UpdateSkillScopeTx(tx *sql.Tx, ref, workspaceID, repo string) (fleet.Skill, error) {
+	ref = fleet.NormalizeSkillName(ref)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if ref == "" {
+		return fleet.Skill{}, &ErrValidation{Msg: "skill id is required"}
+	}
+	if workspaceID == "" && repo != "" {
+		return fleet.Skill{}, &ErrValidation{Msg: fmt.Sprintf("store: skill %q repo scope requires workspace_id", ref)}
+	}
+	if err := ensureCatalogScope(tx, "skill", workspaceID, repo); err != nil {
+		return fleet.Skill{}, err
+	}
+	result, err := tx.Exec(`
+		UPDATE skills
+		SET workspace_id = NULLIF(?, ''), repo = NULLIF(?, '')
+		WHERE ref = ?`,
+		workspaceID, repo, ref,
+	)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return fleet.Skill{}, &ErrConflict{Msg: "skill name is already used by another skill in that scope"}
+		}
+		return fleet.Skill{}, fmt.Errorf("store: update skill %s scope: %w", ref, err)
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return fleet.Skill{}, fmt.Errorf("store: update skill %s scope: rows affected: %w", ref, err)
+	} else if changed == 0 {
+		return fleet.Skill{}, &ErrNotFound{Msg: fmt.Sprintf("skill %q not found", ref)}
+	}
+	return readSkillByRefTx(tx, ref)
+}
+
+func readSkillByRefTx(tx *sql.Tx, ref string) (fleet.Skill, error) {
+	var skill fleet.Skill
+	err := tx.QueryRow(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id
+		WHERE s.ref = ?`, ref).
+		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Skill{}, &ErrNotFound{Msg: fmt.Sprintf("skill %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Skill{}, fmt.Errorf("store: read skill %s: %w", ref, err)
+	}
+	return skill, nil
 }
 
 // DeleteSkill removes the skill with the given name. Returns an error if any

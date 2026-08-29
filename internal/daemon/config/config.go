@@ -11,6 +11,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,9 @@ func New(st *store.Store, daemonCfg config.DaemonConfig, logger zerolog.Logger) 
 // RegisterRoutes mounts the config endpoints on r.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
+	r.Handle("/catalog/delegation", withTimeout(http.HandlerFunc(h.HandleCatalogDelegation))).Methods(http.MethodGet)
+	r.Handle("/catalog/delegation", withTimeout(http.HandlerFunc(h.HandleUpdateCatalogDelegation))).Methods(http.MethodPut, http.MethodPatch)
+	r.Handle("/catalog/delegation/sync", withTimeout(http.HandlerFunc(h.HandleSyncCatalogDelegation))).Methods(http.MethodPost)
 	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleRuntime))).Methods(http.MethodGet)
 	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateRuntime))).Methods(http.MethodPut, http.MethodPatch)
 	r.Handle("/workspaces/{workspace}/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateWorkspaceRuntime))).Methods(http.MethodPut, http.MethodPatch)
@@ -147,6 +151,7 @@ func (h *Handler) HandleUpdateWorkspaceRuntime(w http.ResponseWriter, r *http.Re
 type apiConfigJSON struct {
 	Backends     map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
 	Runtime      fleet.RuntimeSettings             `json:"runtime"`
+	Catalog      apiCatalogConfigJSON              `json:"catalog"`
 	Prompts      []fleet.Prompt                    `json:"prompts,omitempty"`
 	Skills       map[string]apiSkillJSON           `json:"skills,omitempty"`
 	Guardrails   []fleet.Guardrail                 `json:"guardrails,omitempty"`
@@ -154,6 +159,10 @@ type apiConfigJSON struct {
 	Agents       []apiAgentConfigJSON              `json:"agents,omitempty"`
 	Repos        []apiRepoConfigJSON               `json:"repos,omitempty"`
 	TokenBudgets []store.TokenBudget               `json:"token_budgets,omitempty"`
+}
+
+type apiCatalogConfigJSON struct {
+	Delegation fleet.CatalogDelegationConfig `json:"delegation"`
 }
 
 // apiBindingConfigJSON is the wire shape for a repo binding in /config.
@@ -244,6 +253,10 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list token budgets: %w", err)
 	}
+	delegation, err := h.store.ReadCatalogDelegationConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read catalog delegation: %w", err)
+	}
 	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Backends))
 	for name, b := range cfg.Backends {
 		backends[name] = apiAIBackendConfigJSON{
@@ -325,6 +338,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	resp := apiConfigJSON{
 		Backends:     backends,
 		Runtime:      cfg.Runtime,
+		Catalog:      apiCatalogConfigJSON{Delegation: delegation},
 		Prompts:      cfg.Prompts,
 		Skills:       skills,
 		Guardrails:   cfg.Guardrails,
@@ -335,6 +349,100 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(resp)
+}
+
+type catalogDelegationPatchJSON struct {
+	Enabled              *bool   `json:"enabled,omitempty"`
+	Repo                 *string `json:"repo,omitempty"`
+	Branch               *string `json:"branch,omitempty"`
+	CatalogPath          *string `json:"catalog_path,omitempty"`
+	ReenableMode         *string `json:"reenable_mode,omitempty"`
+	LastSyncedCommit     *string `json:"last_synced_commit,omitempty"`
+	LastSuccessfulSyncAt *string `json:"last_successful_sync_at,omitempty"`
+	LastSyncStatus       *string `json:"last_sync_status,omitempty"`
+	LastSyncError        *string `json:"last_sync_error,omitempty"`
+	DisabledAt           *string `json:"disabled_at,omitempty"`
+	CredentialRef        *string `json:"credential_ref,omitempty"`
+	Credential           *string `json:"credential,omitempty"`
+	CredentialStatus     *string `json:"credential_status,omitempty"`
+}
+
+func (p catalogDelegationPatchJSON) toStorePatch() store.CatalogDelegationPatch {
+	return store.CatalogDelegationPatch{
+		Enabled:       p.Enabled,
+		Repo:          p.Repo,
+		Branch:        p.Branch,
+		CatalogPath:   p.CatalogPath,
+		CredentialRef: p.CredentialRef,
+	}
+}
+
+func (p catalogDelegationPatchJSON) validatePublicPatch() error {
+	if p.LastSyncedCommit != nil ||
+		p.LastSuccessfulSyncAt != nil ||
+		p.LastSyncStatus != nil ||
+		p.LastSyncError != nil ||
+		p.DisabledAt != nil ||
+		p.CredentialStatus != nil {
+		return &store.ErrValidation{Msg: "catalog delegation sync status is managed by the daemon"}
+	}
+	if p.Credential != nil {
+		return &store.ErrValidation{Msg: "catalog delegation credential must be supplied as credential_ref"}
+	}
+	return nil
+}
+
+func (h *Handler) HandleCatalogDelegation(w http.ResponseWriter, _ *http.Request) {
+	cfg, err := h.store.ReadCatalogDelegationConfig()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read catalog delegation: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+func (h *Handler) HandleUpdateCatalogDelegation(w http.ResponseWriter, r *http.Request) {
+	var patch catalogDelegationPatchJSON
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&patch); err != nil {
+		http.Error(w, fmt.Sprintf("parse catalog delegation: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := patch.validatePublicPatch(); err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	var cfg fleet.CatalogDelegationConfig
+	var err error
+	if patch.Enabled != nil && *patch.Enabled {
+		reenableMode := ""
+		if patch.ReenableMode != nil {
+			reenableMode = strings.TrimSpace(*patch.ReenableMode)
+		}
+		cfg, err = h.service.ActivateCatalogDelegation(r.Context(), patch.toStorePatch(), reenableMode)
+	} else {
+		cfg, err = h.service.PatchCatalogDelegationConfig(patch.toStorePatch())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+func (h *Handler) HandleSyncCatalogDelegation(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.service.SyncDelegatedCatalog(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+func (h *Handler) SyncCatalogDelegation(ctx context.Context) (fleet.CatalogDelegationConfig, error) {
+	return h.service.SyncDelegatedCatalog(ctx)
 }
 
 // ── /export and /import ──────────────────────────────────────────────────────
@@ -599,6 +707,10 @@ func storeErrStatus(err error) int {
 	}
 	var c *store.ErrConflict
 	if errors.As(err, &c) {
+		return http.StatusConflict
+	}
+	var d *store.ErrCatalogDelegated
+	if errors.As(err, &d) {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError

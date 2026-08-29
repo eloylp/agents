@@ -150,3 +150,77 @@ describe('<ConfigPage /> backend pagination', () => {
     expect(fetchMock).toHaveBeenCalledWith('/backends?limit=50&offset=50')
   })
 })
+
+describe('<ConfigPage /> catalog delegation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('explains activation, links the configured catalog file, and requires a credential ref before enabling', async () => {
+    window.history.replaceState(null, '', '/ui/config?tab=catalog')
+
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/config') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            catalog: {
+              delegation: {
+                enabled: false,
+                repo: 'acme/catalog',
+                branch: 'main',
+                catalog_path: 'catalog.yml',
+                credential_status: 'unset',
+              },
+            },
+          }),
+        } as Response)
+      }
+      if (url === '/catalog/delegation' && init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          enabled: true,
+          repo: 'acme/catalog',
+          branch: 'main',
+          catalog_path: 'catalog.yml',
+          credential_ref: 'CATALOG_TOKEN',
+        })
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            enabled: true,
+            repo: 'acme/catalog',
+            branch: 'main',
+            catalog_path: 'catalog.yml',
+            credential_ref: 'CATALOG_TOKEN',
+            credential_status: 'set',
+          }),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: false,
+        text: () => Promise.resolve(`unexpected request: ${url}`),
+        json: () => Promise.resolve({}),
+      } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ConfigPage />)
+
+    expect(await screen.findByText('Catalog content is read-only in the daemon while delegation is enabled; daemon-owned scope and placement stay editable.')).toBeInTheDocument()
+    expect(screen.getByText(/Enable exports the current SQLite catalog/)).toBeInTheDocument()
+    expect(screen.getByText(/Enter the daemon environment variable name, not a token value/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open configured catalog.yml' })).toHaveAttribute('href', 'https://github.com/acme/catalog/blob/main/catalog.yml')
+
+    const enable = screen.getByRole('button', { name: 'Enable' })
+    expect(enable).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('GITHUB_TOKEN'), { target: { value: 'CATALOG_TOKEN' } })
+    expect(enable).toBeEnabled()
+
+    fireEvent.click(enable)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/catalog/delegation', expect.objectContaining({ method: 'PATCH' })))
+    expect(await screen.findByText('Catalog delegation enabled.')).toBeInTheDocument()
+  })
+})

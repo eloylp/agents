@@ -108,6 +108,12 @@ func (s *Store) CountPrompts() (int, error) { return CountPrompts(s.db) }
 func (s *Store) ReadRuntimeSettings() (fleet.RuntimeSettings, error) {
 	return ReadRuntimeSettings(s.db)
 }
+func (s *Store) ReadCatalogDelegationConfig() (fleet.CatalogDelegationConfig, error) {
+	return ReadCatalogDelegationConfig(s.db)
+}
+func (s *Store) PatchCatalogDelegationConfig(patch CatalogDelegationPatch) (fleet.CatalogDelegationConfig, error) {
+	return PatchCatalogDelegationConfig(s.db, patch)
+}
 func (s *Store) WriteRuntimeSettings(settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
 	return WriteRuntimeSettings(s.db, settings)
 }
@@ -152,6 +158,15 @@ func (s *Store) ListPromptVersionReferences(ref, versionID string) ([]fleet.Cata
 	return ListPromptVersionReferences(s.db, ref, versionID)
 }
 func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) }
+func (s *Store) UpdatePromptScope(ref, workspaceID, repo string) (fleet.Prompt, error) {
+	var prompt fleet.Prompt
+	err := s.Transact(func(tx *sql.Tx) error {
+		var err error
+		prompt, err = UpdatePromptScopeTx(tx, ref, workspaceID, repo)
+		return err
+	})
+	return prompt, err
+}
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
@@ -171,6 +186,15 @@ func (s *Store) ListSkillVersionReferences(ref, versionID string) ([]fleet.Catal
 }
 func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
 func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
+func (s *Store) UpdateSkillScope(ref, workspaceID, repo string) (fleet.Skill, error) {
+	var skill fleet.Skill
+	err := s.Transact(func(tx *sql.Tx) error {
+		var err error
+		skill, err = UpdateSkillScopeTx(tx, ref, workspaceID, repo)
+		return err
+	})
+	return skill, err
+}
 
 // ── Backends ────────────────────────────────────────────────────────────
 
@@ -250,6 +274,15 @@ func (s *Store) ListGuardrailVersionReferences(ref, versionID string) ([]fleet.C
 func (s *Store) UpsertGuardrail(g fleet.Guardrail) error { return UpsertGuardrail(s.db, g) }
 func (s *Store) DeleteGuardrail(name string) error       { return DeleteGuardrail(s.db, name) }
 func (s *Store) ResetGuardrail(name string) error        { return ResetGuardrail(s.db, name) }
+func (s *Store) UpdateGuardrailState(ref string, enabled *bool, position *int) (fleet.Guardrail, error) {
+	var guardrail fleet.Guardrail
+	err := s.Transact(func(tx *sql.Tx) error {
+		var err error
+		guardrail, err = UpdateGuardrailStateTx(tx, ref, enabled, position)
+		return err
+	})
+	return guardrail, err
+}
 
 // ── Memory ──────────────────────────────────────────────────────────────
 

@@ -8,6 +8,7 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
+import { CatalogDelegationConfig, catalogDelegationFileURL, configCatalogDelegation } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { defaultWorkspaceID, useSelectedWorkspace } from '@/lib/workspace'
 
@@ -279,7 +280,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'improvement-analyst' | 'backends' | 'import-export' | 'tokens'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'improvement-analyst' | 'backends' | 'catalog' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [backendOptions, setBackendOptions] = useState<Backend[]>([])
@@ -322,6 +323,12 @@ export default function ConfigPage() {
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [delegation, setDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const [delegationForm, setDelegationForm] = useState({ repo: '', branch: 'main', catalog_path: 'catalog.yml', credential_ref: '', reenable_mode: '' })
+  const [delegationSaving, setDelegationSaving] = useState(false)
+  const [delegationStatus, setDelegationStatus] = useState('')
+  const [delegationError, setDelegationError] = useState('')
+
   const [budgets, setBudgets] = useState<TokenBudget[]>([])
   const [budgetsTotal, setBudgetsTotal] = useState(0)
   const [budgetsLimit, setBudgetsLimit] = useState(50)
@@ -354,14 +361,27 @@ export default function ConfigPage() {
   useEffect(() => {
     fetch(apiRoutes.config())
       .then(r => r.json())
-      .then(data => { setConfig(data); setLoading(false) })
+      .then(data => {
+        setConfig(data)
+        const nextDelegation = configCatalogDelegation(data)
+        setDelegation(nextDelegation)
+        if (nextDelegation) {
+          setDelegationForm(prev => ({
+            ...prev,
+            repo: nextDelegation.repo ?? '',
+            branch: nextDelegation.branch ?? 'main',
+            catalog_path: nextDelegation.catalog_path ?? 'catalog.yml',
+          }))
+        }
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const requestedTab = params.get('tab')
-    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'improvement-analyst' || requestedTab === 'backends' || requestedTab === 'import-export' || requestedTab === 'tokens') {
+    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'improvement-analyst' || requestedTab === 'backends' || requestedTab === 'catalog' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
     setLbRepo(params.get('repo') ?? '')
@@ -795,6 +815,79 @@ export default function ConfigPage() {
     setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends, ${summary.guardrails ?? 0} guardrails, ${summary.token_budgets ?? 0} token budgets.`)
   }
 
+  const loadDelegation = async () => {
+    setDelegationError('')
+    const res = await fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' })
+    if (!res.ok) {
+      setDelegationError((await res.text()) || 'Failed to load catalog delegation')
+      return
+    }
+    const data = await res.json() as CatalogDelegationConfig
+    setDelegation(data)
+    setDelegationForm(prev => ({
+      ...prev,
+      repo: data.repo ?? '',
+      branch: data.branch ?? 'main',
+      catalog_path: data.catalog_path ?? 'catalog.yml',
+      credential_ref: data.credential_ref ?? '',
+    }))
+  }
+
+  const updateDelegation = async (body: Record<string, unknown>, status: string) => {
+    setDelegationSaving(true)
+    setDelegationError('')
+    setDelegationStatus('')
+    try {
+      const res = await fetch(apiRoutes.catalog.delegation.update(), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        setDelegationError((await res.text()) || 'Catalog delegation update failed')
+        return
+      }
+      const data = await res.json() as CatalogDelegationConfig
+      setDelegation(data)
+      setDelegationStatus(status)
+    } catch (e) {
+      setDelegationError(String(e))
+    } finally {
+      setDelegationSaving(false)
+    }
+  }
+
+  const enableDelegation = () => updateDelegation({
+    enabled: true,
+    repo: delegationForm.repo,
+    branch: delegationForm.branch,
+    catalog_path: delegationForm.catalog_path,
+    credential_ref: delegationForm.credential_ref || undefined,
+    reenable_mode: delegationForm.reenable_mode || undefined,
+  }, 'Catalog delegation enabled.')
+
+  const disableDelegation = () => updateDelegation({ enabled: false }, 'Catalog delegation disabled.')
+
+  const syncDelegation = async () => {
+    setDelegationSaving(true)
+    setDelegationError('')
+    setDelegationStatus('')
+    try {
+      const res = await fetch(apiRoutes.catalog.delegation.sync(), { method: 'POST' })
+      if (!res.ok) {
+        setDelegationError((await res.text()) || 'Catalog delegation sync failed')
+        return
+      }
+      const data = await res.json() as CatalogDelegationConfig
+      setDelegation(data)
+      setDelegationStatus('Catalog delegation synced.')
+    } catch (e) {
+      setDelegationError(String(e))
+    } finally {
+      setDelegationSaving(false)
+    }
+  }
+
   const loadBudgets = async () => {
     setBudgetsLoading(true)
     setBudgetError('')
@@ -933,6 +1026,12 @@ export default function ConfigPage() {
   const repoOptionsWithCurrent = budgetForm.repo && !repoNames.includes(budgetForm.repo) ? [budgetForm.repo, ...repoNames] : repoNames
   const agentOptionsWithCurrent = budgetForm.agent && !agentNames.includes(budgetForm.agent) ? [budgetForm.agent, ...agentNames] : agentNames
   const backendOptionsWithCurrent = budgetForm.backend && !backendNames.includes(budgetForm.backend) ? [budgetForm.backend, ...backendNames] : backendNames
+  const delegationFileURL = catalogDelegationFileURL({
+    repo: delegationForm.repo,
+    branch: delegationForm.branch,
+    catalog_path: delegationForm.catalog_path,
+  })
+  const canEnableDelegation = !delegationSaving && delegationForm.repo.trim() !== '' && delegationForm.credential_ref.trim() !== ''
   const budgetCanSave = !budgetSaving &&
     (!budgetNeedsWorkspace || budgetForm.workspace_id.trim() !== '') &&
     (!budgetNeedsRepo || budgetForm.repo.trim() !== '') &&
@@ -961,6 +1060,7 @@ export default function ConfigPage() {
         <button style={tabStyle('runtime')} onClick={() => setTab('runtime')}>Runtime</button>
         <button style={tabStyle('improvement-analyst')} onClick={() => setTab('improvement-analyst')}>Improvement analyst</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
+        <button style={tabStyle('catalog')} onClick={() => setTab('catalog')}>Catalog delegation</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
         <button style={tabStyle('tokens')} onClick={() => setTab('tokens')}>Token usage and limits</button>
       </div>
@@ -988,6 +1088,83 @@ export default function ConfigPage() {
       {tab === 'authentication' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
           <AuthTokenSettings />
+        </Card>
+      )}
+
+      {tab === 'catalog' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ display: 'grid', gap: '1rem', maxWidth: '760px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+              <div>
+                <h2 style={{ fontSize: '1rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>GitHub catalog source</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  Catalog content is read-only in the daemon while delegation is enabled; daemon-owned scope and placement stay editable.
+                </p>
+              </div>
+              <button
+                onClick={loadDelegation}
+                disabled={delegationSaving}
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 12px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.8rem' }}
+              >
+                Refresh
+              </button>
+            </div>
+            {delegationError && <div style={{ color: 'var(--text-danger)', fontSize: '0.875rem' }}>{delegationError}</div>}
+            {delegationStatus && <div style={{ color: 'var(--text-success)', fontSize: '0.875rem' }}>{delegationStatus}</div>}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.75rem' }}>
+              <div><label style={labelStyle}>Status</label><div style={{ color: delegation?.enabled ? 'var(--success)' : 'var(--text-muted)', fontWeight: 700 }}>{delegation?.enabled ? 'Enabled' : 'Disabled'}</div></div>
+              <div><label style={labelStyle}>Last sync</label><div style={{ color: 'var(--text)' }}>{delegation?.last_sync_status || 'disabled'}</div></div>
+              <div><label style={labelStyle}>Commit</label><div style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{delegation?.last_synced_commit?.slice(0, 12) || '-'}</div></div>
+              <div><label style={labelStyle}>Credential</label><div style={{ color: 'var(--text)' }}>{delegation?.credential_status || 'unset'}{delegation?.credential_ref ? ` (${delegation.credential_ref})` : ''}</div></div>
+            </div>
+            {delegationFileURL && (
+              <a href={delegationFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--link)', fontSize: '0.875rem' }}>
+                Open configured catalog.yml
+              </a>
+            )}
+            {delegation?.last_sync_error && <div style={{ color: 'var(--text-danger)', fontSize: '0.825rem' }}>{delegation.last_sync_error}</div>}
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+                Enable exports the current SQLite catalog, writes and overwrites the configured catalog.yml on the selected branch, commits it to GitHub, records the resulting commit SHA, and only then enables delegation.
+              </p>
+              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                Repository
+                <input value={delegationForm.repo} onChange={e => setDelegationForm(prev => ({ ...prev, repo: e.target.value }))} placeholder="owner/catalog" style={inputStyle} />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Branch
+                  <input value={delegationForm.branch} onChange={e => setDelegationForm(prev => ({ ...prev, branch: e.target.value }))} placeholder="main" style={inputStyle} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Catalog path
+                  <input value={delegationForm.catalog_path} onChange={e => setDelegationForm(prev => ({ ...prev, catalog_path: e.target.value }))} placeholder="catalog.yml" style={inputStyle} />
+                </label>
+              </div>
+              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                Credential env var
+                <input value={delegationForm.credential_ref} onChange={e => setDelegationForm(prev => ({ ...prev, credential_ref: e.target.value }))} placeholder="GITHUB_TOKEN" style={inputStyle} />
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.775rem' }}>
+                  Enter the daemon environment variable name, not a token value. The variable must already exist in the daemon runtime; private repositories need contents write access, and env var changes require restarting the daemon or container.
+                </span>
+              </label>
+              {delegation?.disabled_at && (
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Re-enable mode
+                  <select value={delegationForm.reenable_mode} onChange={e => setDelegationForm(prev => ({ ...prev, reenable_mode: e.target.value }))} style={inputStyle}>
+                    <option value="">Require if GitHub diverged</option>
+                    <option value="resume_from_repo">Resume from GitHub</option>
+                    <option value="overwrite_repo_from_sqlite">Overwrite GitHub from SQLite</option>
+                  </select>
+                </label>
+              )}
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button onClick={enableDelegation} disabled={!canEnableDelegation} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: canEnableDelegation ? 'pointer' : 'default', fontSize: '0.875rem', fontWeight: 600 }}>Enable</button>
+                <button onClick={syncDelegation} disabled={delegationSaving || !delegation?.enabled} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 14px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>Sync now</button>
+                <button onClick={disableDelegation} disabled={delegationSaving || !delegation?.enabled} style={{ background: 'var(--bg-danger)', border: '1px solid var(--border-danger)', color: 'var(--text-danger)', padding: '7px 14px', borderRadius: '6px', cursor: delegationSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>Disable</button>
+              </div>
+            </div>
+          </div>
         </Card>
       )}
 

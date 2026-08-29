@@ -6,6 +6,8 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
+import { catalogDelegationFileURL } from '@/lib/catalog-delegation'
+import type { CatalogDelegationConfig } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Skill {
@@ -36,6 +38,12 @@ function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | '
   return 'global'
 }
 
+function scopePayload(scope: 'global' | 'workspace' | 'repo', item: { workspace_id?: string; repo?: string }) {
+  if (scope === 'global') return { scope }
+  if (scope === 'workspace') return { scope, workspace_id: item.workspace_id || '' }
+  return { scope, workspace_id: item.workspace_id || '', repo: item.repo || '' }
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
   fontSize: '0.85rem', fontFamily: 'inherit', background: 'var(--bg-input)', color: 'var(--text)',
@@ -59,11 +67,12 @@ function skillIdentityTooltip(skill: Skill) {
 }
 
 function SkillForm({
-  initial, isNew, workspaces, onSave, onCancel, onVersionsChanged, saving, error,
+  initial, isNew, workspaces, catalogDelegated, onSave, onCancel, onVersionsChanged, saving, error,
 }: {
   initial: Skill
   isNew: boolean
   workspaces: Workspace[]
+  catalogDelegated: boolean
   onSave: (s: Skill) => void
   onCancel: () => void
   onVersionsChanged: () => void
@@ -89,6 +98,12 @@ function SkillForm({
       .then((data) => setRepoOptions(itemsFromResponse<Repo>(data)))
       .catch(() => setRepoOptions([]))
   }, [selectedScope, form.workspace_id])
+
+  const save = () => onSave({
+    ...form,
+    workspace_id: selectedScope === 'global' ? '' : form.workspace_id,
+    repo: selectedScope === 'repo' ? form.repo : '',
+  })
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -127,7 +142,6 @@ function SkillForm({
           <select
             style={inputStyle}
             value={selectedScope}
-            disabled={!isNew}
             onChange={e => {
               const next = e.target.value as 'global' | 'workspace' | 'repo'
               setSelectedScope(next)
@@ -145,7 +159,6 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.workspace_id || ''}
-              disabled={!isNew}
               onChange={e => setForm(f => ({ ...f, workspace_id: e.target.value, repo: '' }))}
             >
               <option value="">Select workspace...</option>
@@ -159,7 +172,7 @@ function SkillForm({
             <select
               style={inputStyle}
               value={form.repo || ''}
-              disabled={!isNew || !form.workspace_id}
+              disabled={!form.workspace_id}
               onChange={e => setForm(f => ({ ...f, repo: e.target.value }))}
             >
               <option value="">Select repo...</option>
@@ -175,9 +188,15 @@ function SkillForm({
           onChange={v => setForm(f => ({ ...f, prompt: v }))}
           placeholder="Skill guidance text…"
           minHeight={200}
+          readOnly={catalogDelegated && !isNew}
         />
       </div>
-      {!isNew && (
+      {!isNew && catalogDelegated && (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+          Content versions are managed in the delegated GitHub catalog while delegation is enabled.
+        </p>
+      )}
+      {!isNew && !catalogDelegated && (
         <CatalogVersionsPanel
           type="skill"
           assetID={stableSkillID(form)}
@@ -194,7 +213,7 @@ function SkillForm({
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={save}
           disabled={saving || (isNew && !form.id?.trim()) || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
@@ -223,6 +242,9 @@ export default function SkillsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [catalogDelegation, setCatalogDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const catalogDelegated = catalogDelegation?.enabled === true
+  const catalogFileURL = catalogDelegationFileURL(catalogDelegation)
 
   const load = () => {
     setLoading(true)
@@ -243,6 +265,10 @@ export default function SkillsPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
+    fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setCatalogDelegation(data))
+      .catch(() => setCatalogDelegation(null))
   }, [limit, offset])
 
   useEffect(() => {
@@ -273,21 +299,47 @@ export default function SkillsPage() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const res = await fetch(isNew ? apiRoutes.catalog.skills.list() : apiRoutes.catalog.skills.one(stableSkillID(form)), {
-        method: isNew ? 'POST' : 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isNew ? {
-          id: form.id || '',
-          name: form.name,
-          workspace_id: form.workspace_id || '',
-          repo: form.repo || '',
-          prompt: form.prompt,
-        } : { prompt: form.prompt }),
-      })
-      if (!res.ok) {
-        setSaveError((await res.text()) || 'Save failed')
-        setSaving(false)
-        return
+      const id = stableSkillID(form)
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.skills.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: form.id || '',
+            name: form.name,
+            workspace_id: form.workspace_id || '',
+            repo: form.repo || '',
+            prompt: form.prompt,
+          }),
+        })
+        if (!res.ok) {
+          setSaveError((await res.text()) || 'Save failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.skills.one(id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: form.prompt }),
+          })
+          if (!contentRes.ok) {
+            setSaveError((await contentRes.text()) || 'Save failed')
+            setSaving(false)
+            return
+          }
+        }
+        const scopeRes = await fetch(apiRoutes.catalog.skills.scope(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scopePayload(scopeType(form), form)),
+        })
+        if (!scopeRes.ok) {
+          setSaveError((await scopeRes.text()) || 'Save failed')
+          setSaving(false)
+          return
+        }
       }
       setModal(null)
       load()
@@ -392,7 +444,9 @@ export default function SkillsPage() {
           )}
           <button
             onClick={openCreate}
-            style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            disabled={catalogDelegated}
+            title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+            style={{ background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Create skill
           </button>
@@ -411,6 +465,12 @@ export default function SkillsPage() {
         >
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
         {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
+        {catalogDelegated && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            Catalog delegation is enabled. Edit{' '}
+            {catalogFileURL ? <a href={catalogFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{catalogDelegation?.catalog_path || 'catalog.yml'}</a> : 'catalog.yml'}.
+          </p>
+        )}
         {!loading && !error && skills.length === 0 && (
           <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
         )}
@@ -442,8 +502,8 @@ export default function SkillsPage() {
                   </pre>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                  <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                  <button onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
+                  <button title={catalogDelegated ? 'Manage daemon-owned scope' : undefined} onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>{catalogDelegated ? 'Scope' : 'Edit'}</button>
+                  <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
                 </div>
               </div>
             </Card>
@@ -457,6 +517,7 @@ export default function SkillsPage() {
             initial={selected}
             isNew={modal === 'create'}
             workspaces={workspaces}
+            catalogDelegated={catalogDelegated}
             onSave={saveSkill}
             onCancel={() => setModal(null)}
             onVersionsChanged={load}

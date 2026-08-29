@@ -1,14 +1,56 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/eloylp/agents/internal/catalog"
+	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
+
+type fakeCatalogGitHub struct {
+	head      string
+	file      []byte
+	blobSHA   string
+	writeSHA  string
+	writeErr  error
+	writes    int
+	reads     []string
+	lastWrite []byte
+}
+
+func (f *fakeCatalogGitHub) BranchHead(context.Context, catalogGitHubConfig) (string, error) {
+	if f.head == "" {
+		return "base123", nil
+	}
+	return f.head, nil
+}
+
+func (f *fakeCatalogGitHub) ReadFile(_ context.Context, _ catalogGitHubConfig, ref string) ([]byte, string, error) {
+	f.reads = append(f.reads, ref)
+	if f.file == nil {
+		return nil, "", &githubStatusError{StatusCode: 404, Body: "not found"}
+	}
+	return f.file, f.blobSHA, nil
+}
+
+func (f *fakeCatalogGitHub) WriteFile(_ context.Context, _ catalogGitHubConfig, _ string, content []byte, _ string) (string, error) {
+	f.writes++
+	f.lastWrite = append([]byte(nil), content...)
+	if f.writeErr != nil {
+		return "", f.writeErr
+	}
+	if f.writeSHA == "" {
+		return "commit123", nil
+	}
+	return f.writeSHA, nil
+}
 
 func openTestService(t *testing.T) (*Service, *sql.DB) {
 	t.Helper()
@@ -60,6 +102,701 @@ func TestCreateWorkspaceBindingRejectsInvalidShape(t *testing.T) {
 	}
 	if got := len(repos[0].Use); got != 0 {
 		t.Fatalf("binding count = %d, want 0", got)
+	}
+}
+
+func TestCatalogMutationsBlockedWhenDelegated(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "prompt upsert",
+			run: func() error {
+				_, err := svc.UpsertPrompt(fleet.Prompt{ID: "new-prompt", Name: "new-prompt", Content: "body"})
+				return err
+			},
+		},
+		{
+			name: "prompt delete",
+			run:  func() error { return svc.DeletePrompt("coder") },
+		},
+		{
+			name: "skill upsert",
+			run:  func() error { return svc.UpsertSkill("new-skill", fleet.Skill{Name: "new-skill", Prompt: "body"}) },
+		},
+		{
+			name: "guardrail upsert",
+			run: func() error {
+				return svc.UpsertGuardrail(fleet.Guardrail{ID: "new-guardrail", Name: "new-guardrail", Content: "body"})
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			var delegated *store.ErrCatalogDelegated
+			if !errors.As(err, &delegated) {
+				t.Fatalf("%s error = %T %v, want ErrCatalogDelegated", tc.name, err, err)
+			}
+		})
+	}
+}
+
+func TestDaemonOwnedCatalogPlacementAllowedWhenDelegated(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	if err := svc.UpsertRepo(fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := store.UpsertSkill(db, "reviewer", fleet.Skill{ID: "reviewer", Name: "reviewer", Prompt: "review skill"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	prompt, err := svc.UpdatePromptScope("coder", fleet.DefaultWorkspaceID, "owner/repo")
+	if err != nil {
+		t.Fatalf("UpdatePromptScope: %v", err)
+	}
+	if prompt.WorkspaceID != fleet.DefaultWorkspaceID || prompt.Repo != "owner/repo" || prompt.Content != "test prompt" {
+		t.Fatalf("prompt = %+v, want repo-scoped placement with content preserved", prompt)
+	}
+
+	skill, err := svc.UpdateSkillScope("reviewer", fleet.DefaultWorkspaceID, "owner/repo")
+	if err != nil {
+		t.Fatalf("UpdateSkillScope: %v", err)
+	}
+	if skill.WorkspaceID != fleet.DefaultWorkspaceID || skill.Repo != "owner/repo" || skill.Prompt != "review skill" {
+		t.Fatalf("skill = %+v, want repo-scoped placement with prompt preserved", skill)
+	}
+
+	position := 42
+	guardrailEnabled := false
+	guardrail, err := svc.UpdateGuardrailState("security", &guardrailEnabled, &position)
+	if err != nil {
+		t.Fatalf("UpdateGuardrailState: %v", err)
+	}
+	if guardrail.Enabled || guardrail.Position != position || guardrail.Content == "" {
+		t.Fatalf("guardrail = %+v, want state update with content preserved", guardrail)
+	}
+}
+
+func TestReplaceConfigPreservesDelegatedCatalogMirror(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	err := svc.ReplaceConfig(&config.Config{
+		Backends: map[string]fleet.Backend{"claude": {Command: "claude"}},
+		Agents: []fleet.Agent{{
+			Name:        "coder",
+			Backend:     "claude",
+			PromptRef:   "coder",
+			Description: "Writes code",
+		}},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ReplaceConfig: %v", err)
+	}
+
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "test prompt" {
+		t.Fatalf("prompt content = %q, want test prompt", prompt.Content)
+	}
+}
+
+func TestApplyDelegatedCatalogUpdatesMirrorAndCommitSHA(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	if err := svc.UpsertSkill("go-api", fleet.Skill{ID: "go-api", Name: "go-api", Prompt: "old"}); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "base123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	file, err := catalog.Parse([]byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: updated prompt
+  - id: go-api
+    kind: skill
+    name: go-api
+    body: updated skill
+  - id: rollout
+    kind: guardrail
+    name: rollout
+    description: release safety
+    body: deploy carefully
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := svc.ApplyDelegatedCatalog(file, "abc123"); err != nil {
+		t.Fatalf("ApplyDelegatedCatalog: %v", err)
+	}
+
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "updated prompt" {
+		t.Fatalf("prompt content = %q, want updated prompt", prompt.Content)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if skills["go-api"].Prompt != "updated skill" {
+		t.Fatalf("skill prompt = %q, want updated skill", skills["go-api"].Prompt)
+	}
+	guardrail, err := store.GetGuardrail(db, "rollout")
+	if err != nil {
+		t.Fatalf("GetGuardrail: %v", err)
+	}
+	if guardrail.Enabled || guardrail.Position != 0 {
+		t.Fatalf("guardrail = %+v, want new daemon-owned disabled position 0", guardrail)
+	}
+	cfg, err := store.ReadCatalogDelegationConfig(db)
+	if err != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", err)
+	}
+	if cfg.LastSyncedCommit != "abc123" || cfg.LastSyncStatus != "synced" {
+		t.Fatalf("delegation cfg = %+v, want sha abc123 synced", cfg)
+	}
+}
+
+func TestApplyDelegatedCatalogPreservesExistingDaemonOwnedMetadata(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{
+		ID:          "repo-coder",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Repo:        "owner/repo",
+		Name:        "coder",
+		Content:     "old repo prompt",
+	}); err != nil {
+		t.Fatalf("seed scoped prompt: %v", err)
+	}
+	if err := svc.UpsertSkill("workspace-skill", fleet.Skill{
+		ID:          "workspace-skill",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "workspace skill",
+		Prompt:      "old",
+	}); err != nil {
+		t.Fatalf("seed scoped skill: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		ID:          "workspace-guardrail",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "workspace guardrail",
+		Content:     "old guardrail",
+		Enabled:     true,
+		Position:    99,
+	}); err != nil {
+		t.Fatalf("seed scoped guardrail: %v", err)
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "base123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	file, err := catalog.Parse([]byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: updated global prompt
+  - id: repo-coder
+    kind: prompt
+    name: coder
+    body: repo prompt
+  - id: workspace-skill
+    kind: skill
+    name: workspace skill
+    body: workspace skill
+  - id: workspace-guardrail
+    kind: guardrail
+    name: workspace guardrail
+    body: workspace guardrail
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := svc.ApplyDelegatedCatalog(file, "abc123"); err != nil {
+		t.Fatalf("ApplyDelegatedCatalog: %v", err)
+	}
+
+	prompt, err := store.ReadPrompt(db, "repo-coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt scoped: %v", err)
+	}
+	if prompt.WorkspaceID != fleet.DefaultWorkspaceID || prompt.Repo != "owner/repo" || prompt.Content != "repo prompt" {
+		t.Fatalf("scoped prompt = %+v, want default owner/repo repo prompt", prompt)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if got := skills["workspace-skill"]; got.WorkspaceID != fleet.DefaultWorkspaceID || got.Prompt != "workspace skill" {
+		t.Fatalf("workspace-skill = %+v, want scoped updated skill", got)
+	}
+	guardrail, err := store.GetGuardrail(db, "workspace-guardrail")
+	if err != nil {
+		t.Fatalf("GetGuardrail scoped: %v", err)
+	}
+	if guardrail.WorkspaceID != fleet.DefaultWorkspaceID || guardrail.Content != "workspace guardrail" {
+		t.Fatalf("workspace guardrail = %+v, want scoped content", guardrail)
+	}
+	if !guardrail.Enabled || guardrail.Position != 99 {
+		t.Fatalf("workspace guardrail settings = %+v, want existing enabled position 99", guardrail)
+	}
+}
+
+func TestActivateCatalogDelegationExportsBeforeEnabling(t *testing.T) {
+	_, db := openTestService(t)
+	fake := &fakeCatalogGitHub{writeSHA: "commit456"}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+	enabled := true
+	repo := "owner/catalog"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_EXPORT"
+	t.Setenv(credentialRef, "secret-token")
+
+	cfg, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled:       &enabled,
+		Repo:          &repo,
+		CredentialRef: &credentialRef,
+	}, "")
+	if err != nil {
+		t.Fatalf("ActivateCatalogDelegation: %v", err)
+	}
+	if !cfg.Enabled || cfg.LastSyncedCommit != "commit456" || cfg.LastSyncStatus != "synced" {
+		t.Fatalf("delegation cfg = %+v, want enabled synced at commit456", cfg)
+	}
+	if fake.writes != 1 {
+		t.Fatalf("writes = %d, want 1", fake.writes)
+	}
+	if got := string(fake.lastWrite); !strings.Contains(got, "id: coder") || strings.Contains(got, "secret-token") {
+		t.Fatalf("exported catalog = %q, want coder asset and no credential", got)
+	}
+}
+
+func TestActivateCatalogDelegationFailureLeavesDisabled(t *testing.T) {
+	_, db := openTestService(t)
+	fake := &fakeCatalogGitHub{writeErr: errors.New("write failed")}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+	enabled := true
+	repo := "owner/catalog"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_FAILURE"
+	t.Setenv(credentialRef, "secret-token")
+
+	err := func() error {
+		_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+			Enabled:       &enabled,
+			Repo:          &repo,
+			CredentialRef: &credentialRef,
+		}, "")
+		return err
+	}()
+	if err == nil {
+		t.Fatal("ActivateCatalogDelegation err = nil, want error")
+	}
+	cfg, readErr := store.ReadCatalogDelegationConfig(db)
+	if readErr != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", readErr)
+	}
+	if cfg.Enabled || cfg.LastSyncedCommit != "" || cfg.LastSyncStatus != "error" {
+		t.Fatalf("delegation cfg = %+v, want disabled error without synced commit", cfg)
+	}
+}
+
+func TestActivateCatalogDelegationRequiresExplicitReenableModeWhenDiverged(t *testing.T) {
+	_, db := openTestService(t)
+	enabled := true
+	disabled := false
+	repo := "owner/catalog"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_REENABLE"
+	t.Setenv(credentialRef, "secret-token")
+	sha := "old123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+		CredentialRef:    &credentialRef,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig enable: %v", err)
+	}
+	svc := New(store.New(db))
+	if _, err := svc.PatchCatalogDelegationConfig(store.CatalogDelegationPatch{Enabled: &disabled}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig disable: %v", err)
+	}
+	disabledCfg, err := store.ReadCatalogDelegationConfig(db)
+	if err != nil {
+		t.Fatalf("ReadCatalogDelegationConfig after disable: %v", err)
+	}
+	if disabledCfg.DisabledAt == "" {
+		t.Fatal("disabled_at after disable is empty")
+	}
+	fake := &fakeCatalogGitHub{head: "new123", file: []byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: github prompt
+`)}
+	svc = NewWithCatalogGitHub(store.New(db), fake)
+
+	_, err = svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled: &enabled,
+		Repo:    &repo,
+	}, "")
+	var validation *store.ErrValidation
+	if !errors.As(err, &validation) {
+		t.Fatalf("ActivateCatalogDelegation error = %T %v, want ErrValidation", err, err)
+	}
+	if fake.writes != 0 {
+		t.Fatalf("writes = %d, want 0", fake.writes)
+	}
+	cfg, err := store.ReadCatalogDelegationConfig(db)
+	if err != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", err)
+	}
+	if cfg.DisabledAt != disabledCfg.DisabledAt {
+		t.Fatalf("disabled_at = %q, want preserved %q", cfg.DisabledAt, disabledCfg.DisabledAt)
+	}
+}
+
+func TestActivateCatalogDelegationResumeFromRepoAppliesRemoteCatalog(t *testing.T) {
+	_, db := openTestService(t)
+	enabled := true
+	disabled := false
+	repo := "owner/catalog"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_RESUME"
+	t.Setenv(credentialRef, "secret-token")
+	sha := "old123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+		CredentialRef:    &credentialRef,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig enable: %v", err)
+	}
+	svc := New(store.New(db))
+	if _, err := svc.PatchCatalogDelegationConfig(store.CatalogDelegationPatch{Enabled: &disabled}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig disable: %v", err)
+	}
+	fake := &fakeCatalogGitHub{head: "new123", file: []byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: github prompt
+`)}
+	svc = NewWithCatalogGitHub(store.New(db), fake)
+
+	cfg, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled: &enabled,
+		Repo:    &repo,
+	}, catalogDelegationResumeFromRepo)
+	if err != nil {
+		t.Fatalf("ActivateCatalogDelegation: %v", err)
+	}
+	if !cfg.Enabled || cfg.LastSyncedCommit != "new123" {
+		t.Fatalf("delegation cfg = %+v, want enabled at new123", cfg)
+	}
+	if fake.writes != 0 {
+		t.Fatalf("writes = %d, want 0", fake.writes)
+	}
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "github prompt" {
+		t.Fatalf("prompt content = %q, want github prompt", prompt.Content)
+	}
+}
+
+func TestPatchCatalogDelegationConfigDisableRecordsAuditState(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	disabled := false
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig enable: %v", err)
+	}
+
+	cfg, err := svc.PatchCatalogDelegationConfig(store.CatalogDelegationPatch{Enabled: &disabled})
+	if err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig disable: %v", err)
+	}
+	if cfg.Enabled || cfg.DisabledAt == "" || cfg.LastSyncStatus != "disabled" {
+		t.Fatalf("delegation cfg = %+v, want disabled with audit status", cfg)
+	}
+}
+
+func TestSyncDelegatedCatalogAppliesChangedHead(t *testing.T) {
+	_, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_SYNC"
+	t.Setenv(credentialRef, "secret-token")
+	sha := "old123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+		CredentialRef:    &credentialRef,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+	svc := NewWithCatalogGitHub(store.New(db), &fakeCatalogGitHub{
+		head: "new123",
+		file: []byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: synced prompt
+`),
+	})
+
+	cfg, err := svc.SyncDelegatedCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("SyncDelegatedCatalog: %v", err)
+	}
+	if cfg.LastSyncedCommit != "new123" || cfg.LastSyncStatus != "synced" {
+		t.Fatalf("delegation cfg = %+v, want new123 synced", cfg)
+	}
+	prompt, err := store.ReadPrompt(db, "coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if prompt.Content != "synced prompt" {
+		t.Fatalf("prompt content = %q, want synced prompt", prompt.Content)
+	}
+}
+
+func TestActivateCatalogDelegationRejectsPendingPublishableBundles(t *testing.T) {
+	_, db := openTestService(t)
+	if _, err := db.Exec(`
+		INSERT INTO self_improvement_feedback (id, repo_owner, repo_name, source_type, github_comment_id, raw_body)
+		VALUES (1, 'owner', 'repo', 'issue_comment', 1, 'feedback');
+		INSERT INTO self_improvement_recommendations (id, feedback_event_id, type, status)
+		VALUES ('rec_pending', 1, 'catalog_patch_bundle', 'needs_user_input');
+		INSERT INTO self_improvement_proposal_bundles (id, recommendation_id, status)
+		VALUES ('bundle_pending', 'rec_pending', 'pending');
+		INSERT INTO self_improvement_proposal_bundle_items (id, bundle_id, operation, asset_type, decision, proposed_body)
+		VALUES ('item_pending', 'bundle_pending', 'update_existing', 'prompt', 'accepted', 'prompt v2');
+	`); err != nil {
+		t.Fatalf("seed pending proposal bundle: %v", err)
+	}
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_PENDING_BUNDLE"
+	t.Setenv(credentialRef, "secret-token")
+	enabled := true
+	repo := "owner/catalog"
+	svc := NewWithCatalogGitHub(store.New(db), &fakeCatalogGitHub{})
+
+	_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled:       &enabled,
+		Repo:          &repo,
+		CredentialRef: &credentialRef,
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "pending self-improvement catalog proposal bundles") {
+		t.Fatalf("ActivateCatalogDelegation error = %v, want pending bundle validation", err)
+	}
+}
+
+func TestPatchCatalogDelegationConfigRejectsSourceChangeWhileEnabled(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig seed: %v", err)
+	}
+
+	otherRepo := "owner/other"
+	if _, err := svc.PatchCatalogDelegationConfig(store.CatalogDelegationPatch{Repo: &otherRepo}); err == nil {
+		t.Fatal("PatchCatalogDelegationConfig source change while enabled succeeded, want error")
+	}
+}
+
+func TestActivateCatalogDelegationRejectsSourceChangeWhileEnabled(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	branch := "main"
+	catalogPath := "catalog.yml"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_ACTIVE"
+	sha := "abc123"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		Branch:           &branch,
+		CatalogPath:      &catalogPath,
+		CredentialRef:    &credentialRef,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig seed: %v", err)
+	}
+	fake := &fakeCatalogGitHub{}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+
+	otherRepo := "owner/other"
+	_, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled: &enabled,
+		Repo:    &otherRepo,
+	}, "")
+	var validation *store.ErrValidation
+	if !errors.As(err, &validation) {
+		t.Fatalf("ActivateCatalogDelegation err = %T %v, want ErrValidation", err, err)
+	}
+	if fake.writes != 0 || len(fake.reads) != 0 {
+		t.Fatalf("github calls = writes %d reads %d, want none", fake.writes, len(fake.reads))
+	}
+	cfg, err := store.ReadCatalogDelegationConfig(db)
+	if err != nil {
+		t.Fatalf("ReadCatalogDelegationConfig: %v", err)
+	}
+	if !cfg.Enabled || cfg.Repo != repo || cfg.Branch != branch || cfg.CatalogPath != catalogPath || cfg.CredentialRef != credentialRef || cfg.LastSyncedCommit != sha {
+		t.Fatalf("delegation cfg = %+v, want original active source unchanged", cfg)
+	}
+}
+
+func TestActivateCatalogDelegationNoopsWhenAlreadyEnabled(t *testing.T) {
+	t.Parallel()
+	_, db := openTestService(t)
+	enabled := true
+	repo := "owner/catalog"
+	branch := "main"
+	catalogPath := "catalog.yml"
+	credentialRef := "AGENTS_TEST_CATALOG_TOKEN_ACTIVE_NOOP"
+	sha := "abc123"
+	status := "synced"
+	if _, err := store.PatchCatalogDelegationConfig(db, store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		Branch:           &branch,
+		CatalogPath:      &catalogPath,
+		CredentialRef:    &credentialRef,
+		LastSyncedCommit: &sha,
+		LastSyncStatus:   &status,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig seed: %v", err)
+	}
+	fake := &fakeCatalogGitHub{}
+	svc := NewWithCatalogGitHub(store.New(db), fake)
+
+	cfg, err := svc.ActivateCatalogDelegation(context.Background(), store.CatalogDelegationPatch{
+		Enabled: &enabled,
+	}, "")
+	if err != nil {
+		t.Fatalf("ActivateCatalogDelegation: %v", err)
+	}
+	if fake.writes != 0 || len(fake.reads) != 0 {
+		t.Fatalf("github calls = writes %d reads %d, want none", fake.writes, len(fake.reads))
+	}
+	if !cfg.Enabled || cfg.Repo != repo || cfg.Branch != branch || cfg.CatalogPath != catalogPath || cfg.CredentialRef != credentialRef || cfg.LastSyncedCommit != sha || cfg.LastSyncStatus != status {
+		t.Fatalf("delegation cfg = %+v, want original active config unchanged", cfg)
+	}
+}
+
+func TestApplyDelegatedCatalogSkipsUnchangedCatalogVersions(t *testing.T) {
+	t.Parallel()
+	svc, db := openTestService(t)
+	file, err := catalog.Parse([]byte(`
+version: 1
+assets:
+  - id: coder
+    kind: prompt
+    name: coder
+    body: test prompt
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	before, err := store.ListPromptVersions(db, "coder")
+	if err != nil {
+		t.Fatalf("ListPromptVersions before: %v", err)
+	}
+	if err := svc.ApplyDelegatedCatalog(file, "same-content"); err != nil {
+		t.Fatalf("ApplyDelegatedCatalog: %v", err)
+	}
+	after, err := store.ListPromptVersions(db, "coder")
+	if err != nil {
+		t.Fatalf("ListPromptVersions after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("prompt versions after unchanged sync = %d, want %d", len(after), len(before))
 	}
 }
 

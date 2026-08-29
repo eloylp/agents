@@ -584,6 +584,69 @@ func TestStoreCRUDPromptScopedDuplicatesUseStableID(t *testing.T) {
 	}
 }
 
+func TestCatalogScopePatchEndpointsAllowedWhenDelegated(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"workspace_id": "team-a", "name": "owner/repo", "enabled": true, "bindings": []map[string]any{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"id": "review-prompt", "name": "review", "content": "prompt body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"id": "review-skill", "name": "review", "prompt": "skill body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	enabled := true
+	repo := "owner/catalog"
+	sha := "abc123"
+	if _, err := s.Store().PatchCatalogDelegationConfig(store.CatalogDelegationPatch{
+		Enabled:          &enabled,
+		Repo:             &repo,
+		LastSyncedCommit: &sha,
+	}); err != nil {
+		t.Fatalf("PatchCatalogDelegationConfig: %v", err)
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/prompts/review-prompt/scope", map[string]any{
+		"scope": "repo", "workspace_id": "team-a", "repo": "owner/repo",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt scope: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var prompt storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	if prompt.WorkspaceID != "team-a" || prompt.Repo != "owner/repo" || prompt.Content != "prompt body" {
+		t.Fatalf("prompt = %+v, want repo scope with content preserved", prompt)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/review-skill/scope", map[string]any{
+		"scope": "workspace", "workspace_id": "team-a",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH skill scope: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var skill storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&skill); err != nil {
+		t.Fatalf("decode skill: %v", err)
+	}
+	if skill.WorkspaceID != "team-a" || skill.Repo != "" || skill.Prompt != "skill body" {
+		t.Fatalf("skill = %+v, want workspace scope with prompt preserved", skill)
+	}
+}
+
 func TestStoreCRUDPromptDeleteReferencedByAgent(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -868,13 +931,18 @@ func TestStoreCRUDGuardrailCreatePatchDelete(t *testing.T) {
 		t.Errorf("operator row must not be flagged built-in; got is_builtin=%v", created["is_builtin"])
 	}
 
-	// PATCH content + disable.
+	// PATCH content and state through their dedicated routes.
 	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/code-style", map[string]any{
 		"content": "Always run gofmt and goimports.",
-		"enabled": false,
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("PATCH guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/code-style/state", map[string]any{
+		"enabled": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail state: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var patched map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
@@ -3304,6 +3372,98 @@ func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
 		"prompt": "x",
 	}); rr.Code != http.StatusNotFound {
 		t.Fatalf("PATCH missing skill: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDPromptSkillGenericPatchRejectsScopeFields(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"id": "review-prompt", "name": "review", "content": "prompt body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"id": "review-skill", "name": "review", "prompt": "skill body",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	cases := []struct {
+		name string
+		path string
+		body map[string]any
+	}{
+		{
+			name: "prompt workspace_id",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"workspace_id": "team-a", "content": "prompt v2"},
+		},
+		{
+			name: "prompt repo",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"repo": "owner/repo", "content": "prompt v2"},
+		},
+		{
+			name: "prompt scope",
+			path: "/prompts/review-prompt",
+			body: map[string]any{"scope": "repo", "content": "prompt v2"},
+		},
+		{
+			name: "skill workspace_id",
+			path: "/skills/review-skill",
+			body: map[string]any{"workspace_id": "team-a", "prompt": "skill v2"},
+		},
+		{
+			name: "skill repo",
+			path: "/skills/review-skill",
+			body: map[string]any{"repo": "owner/repo", "prompt": "skill v2"},
+		},
+		{
+			name: "skill scope",
+			path: "/skills/review-skill",
+			body: map[string]any{"scope": "repo", "prompt": "skill v2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := doCRUDRequest(t, s, http.MethodPatch, tc.path, tc.body)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH %s: got %d, want 400; body %s", tc.path, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestStoreCRUDGuardrailPatchRejectsStateFields(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"id": "review-guardrail", "name": "review", "content": "guardrail body", "enabled": true, "position": 10,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed guardrail: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/guardrails/review-guardrail", map[string]any{
+		"enabled": false,
+	}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH guardrail state through content route: got %d, want 400; body %s", rr.Code, rr.Body.String())
+	}
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/guardrails/review-guardrail/state", map[string]any{
+		"enabled": false, "position": 20,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail state route: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Enabled  bool   `json:"enabled"`
+		Position int    `json:"position"`
+		Content  string `json:"content"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode guardrail: %v", err)
+	}
+	if out.Enabled || out.Position != 20 || out.Content != "guardrail body" {
+		t.Fatalf("guardrail = %+v, want state changed with content preserved", out)
 	}
 }
 

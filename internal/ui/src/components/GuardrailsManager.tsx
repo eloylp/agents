@@ -8,6 +8,8 @@ import WorkspaceSelect from '@/components/WorkspaceSelect'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import PaginatedDataSection from '@/components/PaginatedDataSection'
 import { apiRoutes } from '@/lib/api-routes'
+import { catalogDelegationFileURL } from '@/lib/catalog-delegation'
+import type { CatalogDelegationConfig } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
@@ -51,10 +53,11 @@ const labelStyle: React.CSSProperties = {
 }
 
 function GuardrailForm({
-  initial, isNew, onSave, onCancel, onReset, onDelete, onVersionsChanged, saving, error,
+  initial, isNew, catalogDelegated, onSave, onCancel, onReset, onDelete, onVersionsChanged, saving, error,
 }: {
   initial: Guardrail
   isNew: boolean
+  catalogDelegated: boolean
   onSave: (g: Guardrail) => void
   onCancel: () => void
   onReset?: () => void
@@ -71,7 +74,8 @@ function GuardrailForm({
   }, [initial])
 
   const showReset = !isNew && form.is_builtin && !!onReset
-  const canDelete = !isNew && !!onDelete
+  const canDelete = !isNew && !catalogDelegated && !!onDelete
+  const contentReadOnly = catalogDelegated && !isNew
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -108,6 +112,7 @@ function GuardrailForm({
           value={form.description}
           onChange={e => set('description', e.target.value)}
           placeholder="Short label shown in the list"
+          disabled={contentReadOnly}
         />
       </div>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -133,9 +138,10 @@ function GuardrailForm({
           placeholder="The policy text prepended to every agent's composed prompt…"
           minHeight={260}
           expandTitle={isNew ? 'New guardrail' : `Edit ${form.name}`}
+          readOnly={contentReadOnly}
         />
       </div>
-      {!isNew && (
+      {!isNew && !catalogDelegated && (
         <CatalogVersionsPanel
           type="guardrail"
           assetID={form.id || form.name}
@@ -211,6 +217,9 @@ export default function GuardrailsManager() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
+  const [catalogDelegation, setCatalogDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const catalogDelegated = catalogDelegation?.enabled === true
+  const catalogFileURL = catalogDelegationFileURL(catalogDelegation)
 
   useEffect(() => {
     currentWorkspaceRef.current = workspace
@@ -233,14 +242,16 @@ export default function GuardrailsManager() {
         if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
         return r.json()
       }),
+      fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
     ])
-      .then(([catalogRaw, lookupRaw, refs]: [unknown, unknown, WorkspaceGuardrailRef[]]) => {
+      .then(([catalogRaw, lookupRaw, refs, delegation]: [unknown, unknown, WorkspaceGuardrailRef[], CatalogDelegationConfig | null]) => {
         if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         const catalog = pageFromResponse<Guardrail>(catalogRaw, guardrailsLimit, guardrailsOffset)
         setGuardrails(catalog.items ?? [])
         setGuardrailLookups(itemsFromResponse<Guardrail>(lookupRaw))
         setGuardrailsTotal(catalog.total)
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
+        setCatalogDelegation(delegation)
         setLoading(false)
       })
       .catch(e => {
@@ -339,11 +350,6 @@ export default function GuardrailsManager() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const url = isNew ? apiRoutes.catalog.guardrails.list() : apiRoutes.catalog.guardrails.one(guardrailID(g))
-      const method = isNew ? 'POST' : 'PATCH'
-      const body = isNew
-        ? { id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
-        : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
       if (!isNew && selected.enabled && !g.enabled) {
@@ -352,15 +358,40 @@ export default function GuardrailsManager() {
         setModal('disable-confirm')
         return
       }
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        setSaveError((await res.text()) || `${method} failed`)
-        setSaving(false)
-        return
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.guardrails.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: g.id || '', name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }),
+        })
+        if (!res.ok) {
+          setSaveError((await res.text()) || 'POST failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(g)), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: g.description, content: g.content }),
+          })
+          if (!contentRes.ok) {
+            setSaveError((await contentRes.text()) || 'PATCH failed')
+            setSaving(false)
+            return
+          }
+        }
+        const stateRes = await fetch(apiRoutes.catalog.guardrails.state(guardrailID(g)), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: g.enabled, position: g.position }),
+        })
+        if (!stateRes.ok) {
+          setSaveError((await stateRes.text()) || 'PATCH failed')
+          setSaving(false)
+          return
+        }
       }
       load()
       closeModal()
@@ -375,11 +406,10 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(apiRoutes.catalog.guardrails.one(guardrailID(selected)), {
+      const res = await fetch(apiRoutes.catalog.guardrails.state(guardrailID(selected)), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          description: selected.description, content: selected.content,
           enabled: false, position: selected.position,
         }),
       })
@@ -551,7 +581,9 @@ export default function GuardrailsManager() {
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          disabled={catalogDelegated}
+          title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', color: '#fff', cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           New guardrail
         </button>
@@ -564,11 +596,19 @@ export default function GuardrailsManager() {
           onLimitChange={(next) => { setGuardrailsLimit(next); setGuardrailsOffset(0) }}
           onOffsetChange={setGuardrailsOffset}
         >
+        {catalogDelegated && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            Catalog delegation is enabled. Edit{' '}
+            {catalogFileURL ? <a href={catalogFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{catalogDelegation?.catalog_path || 'catalog.yml'}</a> : 'catalog.yml'}.
+          </p>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {guardrails.map(g => (
             <div
               key={guardrailID(g)}
-              onClick={() => { setSelected(g); setModal('edit') }}
+              onClick={() => {
+                setSelected(g); setModal('edit')
+              }}
               style={{
                 background: 'var(--bg-card)', border: '1px solid var(--border)',
                 borderRadius: '8px', padding: '1rem',
@@ -597,7 +637,7 @@ export default function GuardrailsManager() {
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>
                 )}
               </div>
-              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>edit →</span>
+              <span style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>{catalogDelegated ? 'state' : 'edit ->'}</span>
             </div>
           ))}
           {guardrails.length === 0 && (
@@ -614,6 +654,7 @@ export default function GuardrailsManager() {
           <GuardrailForm
             initial={selected}
             isNew={modal === 'create'}
+            catalogDelegated={catalogDelegated}
             onSave={handleSave}
             onCancel={closeModal}
             onReset={selected.is_builtin ? handleReset : undefined}

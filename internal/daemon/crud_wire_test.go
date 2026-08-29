@@ -24,10 +24,13 @@ type storeAgentJSON struct {
 }
 
 type storeSkillJSON struct {
-	Name      string `json:"name"`
-	Prompt    string `json:"prompt"`
-	VersionID string `json:"version_id,omitempty"`
-	Version   int    `json:"version,omitempty"`
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name"`
+	Prompt      string `json:"prompt"`
+	VersionID   string `json:"version_id,omitempty"`
+	Version     int    `json:"version,omitempty"`
 }
 
 type storePromptJSON struct {

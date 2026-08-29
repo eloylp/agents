@@ -321,8 +321,9 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	// wind down cooperatively.
 	producers, producerCtx := errgroup.WithContext(parentCtx)
 	producers.Go(func() error { return d.scheduler.Run(producerCtx) })
+	producers.Go(func() error { return d.runCatalogDelegationSync(producerCtx) })
 	producers.Go(func() error { return d.runHTTP(producerCtx) })
-	log.Info().Str("addr", d.daemonCfg.HTTP.ListenAddr).Msg("producers ready: http listener, scheduler")
+	log.Info().Str("addr", d.daemonCfg.HTTP.ListenAddr).Msg("producers ready: http listener, scheduler, catalog delegation sync")
 	log.Info().Msg("daemon ready")
 
 	// Block until parentCtx fires or a producer fails.
@@ -410,6 +411,23 @@ const queueRetention = 7 * 24 * time.Hour
 // is plenty, the table is bounded by retention regardless of cadence,
 // the cadence just controls the deletion granularity.
 const queueCleanupInterval = time.Hour
+
+const catalogDelegationSyncInterval = time.Minute
+
+func (d *Daemon) runCatalogDelegationSync(ctx context.Context) error {
+	ticker := time.NewTicker(catalogDelegationSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if _, err := d.config.SyncCatalogDelegation(ctx); err != nil {
+				d.logger.Warn().Err(err).Msg("catalog delegation sync tick failed")
+			}
+		}
+	}
+}
 
 func (d *Daemon) runHTTP(ctx context.Context) error {
 	httpCfg := d.daemonCfg.HTTP

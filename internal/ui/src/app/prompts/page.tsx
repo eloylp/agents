@@ -7,6 +7,8 @@ import PaginatedDataSection from '@/components/PaginatedDataSection'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { apiRoutes } from '@/lib/api-routes'
+import { catalogDelegationFileURL } from '@/lib/catalog-delegation'
+import type { CatalogDelegationConfig } from '@/lib/catalog-delegation'
 import { itemsFromResponse, pageFromResponse, selectorURL } from '@/lib/pagination'
 
 interface Prompt {
@@ -37,6 +39,12 @@ function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | '
   return 'global'
 }
 
+function scopePayload(scope: 'global' | 'workspace' | 'repo', item: { workspace_id?: string; repo?: string }) {
+  if (scope === 'global') return { scope }
+  if (scope === 'workspace') return { scope, workspace_id: item.workspace_id || '' }
+  return { scope, workspace_id: item.workspace_id || '', repo: item.repo || '' }
+}
+
 export default function PromptsPage() {
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [total, setTotal] = useState(0)
@@ -54,6 +62,9 @@ export default function PromptsPage() {
   const [filterRepos, setFilterRepos] = useState<Repo[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [catalogDelegation, setCatalogDelegation] = useState<CatalogDelegationConfig | null>(null)
+  const catalogDelegated = catalogDelegation?.enabled === true
+  const catalogFileURL = catalogDelegationFileURL(catalogDelegation)
 
   const load = () => {
     setLoading(true)
@@ -74,6 +85,10 @@ export default function PromptsPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data) => setWorkspaces(itemsFromResponse<Workspace>(data)))
       .catch(() => setWorkspaces([]))
+    fetch(apiRoutes.catalog.delegation.status(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setCatalogDelegation(data))
+      .catch(() => setCatalogDelegation(null))
   }, [limit, offset])
 
   useEffect(() => {
@@ -102,24 +117,49 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     const isNew = modal === 'create'
-    const url = isNew ? apiRoutes.catalog.prompts.list() : apiRoutes.catalog.prompts.one(selected.id || selected.name)
-    const body = isNew
-      ? {
-          ...selected,
-          workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
-          repo: selectedScope === 'repo' ? selected.repo : '',
-        }
-      : { description: selected.description, content: selected.content }
+    const id = selected.id || selected.name
     try {
-      const res = await fetch(url, {
-        method: isNew ? 'POST' : 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        setError(await res.text() || 'Save failed')
-        setSaving(false)
-        return
+      if (isNew) {
+        const res = await fetch(apiRoutes.catalog.prompts.list(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...selected,
+            workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
+            repo: selectedScope === 'repo' ? selected.repo : '',
+          }),
+        })
+        if (!res.ok) {
+          setError(await res.text() || 'Save failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        if (!catalogDelegated) {
+          const contentRes = await fetch(apiRoutes.catalog.prompts.one(id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              description: selected.description,
+              content: selected.content,
+            }),
+          })
+          if (!contentRes.ok) {
+            setError(await contentRes.text() || 'Save failed')
+            setSaving(false)
+            return
+          }
+        }
+        const scopeRes = await fetch(apiRoutes.catalog.prompts.scope(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scopePayload(selectedScope, selected)),
+        })
+        if (!scopeRes.ok) {
+          setError(await scopeRes.text() || 'Save failed')
+          setSaving(false)
+          return
+        }
       }
       setModal(null)
       load()
@@ -146,7 +186,6 @@ export default function PromptsPage() {
     }
     setSaving(false)
   }
-
   const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: 3 }
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6,
@@ -212,7 +251,9 @@ export default function PromptsPage() {
           )}
           <button
             onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setError(''); setModal('create') }}
-            style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            disabled={catalogDelegated}
+            title={catalogDelegated ? 'Catalog delegation is enabled' : undefined}
+            style={{ background: catalogDelegated ? 'var(--bg-input)' : 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: catalogDelegated ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + New prompt
           </button>
@@ -227,6 +268,12 @@ export default function PromptsPage() {
           onOffsetChange={setOffset}
         >
         {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
+        {catalogDelegated && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            Catalog delegation is enabled. Edit{' '}
+            {catalogFileURL ? <a href={catalogFileURL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{catalogDelegation?.catalog_path || 'catalog.yml'}</a> : 'catalog.yml'}.
+          </p>
+        )}
         {!loading && prompts.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No prompts configured.</p>}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
           {visiblePrompts.map(p => (
@@ -243,8 +290,8 @@ export default function PromptsPage() {
                 {p.content || '-'}
               </pre>
               <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-                <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
-                <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
+                <button title={catalogDelegated ? 'Manage daemon-owned scope' : undefined} onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>{catalogDelegated ? 'Scope' : 'Edit'}</button>
+                <button disabled={catalogDelegated} title={catalogDelegated ? 'Catalog delegation is enabled' : undefined} onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: catalogDelegated ? 'not-allowed' : 'pointer', color: 'var(--text-danger)' }}>Delete</button>
               </div>
             </Card>
           ))}
@@ -270,7 +317,7 @@ export default function PromptsPage() {
                 <select
                   style={inputStyle}
                   value={selectedScope}
-                  disabled={modal === 'edit'}
+                  disabled={false}
                   onChange={e => {
                     const next = e.target.value as 'global' | 'workspace' | 'repo'
                     setSelectedScope(next)
@@ -288,7 +335,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.workspace_id || ''}
-                    disabled={modal === 'edit'}
+                    disabled={false}
                     onChange={e => setSelected(p => ({ ...p, workspace_id: e.target.value, repo: '' }))}
                   >
                     <option value="">Select workspace...</option>
@@ -302,7 +349,7 @@ export default function PromptsPage() {
                   <select
                     style={inputStyle}
                     value={selected.repo || ''}
-                    disabled={modal === 'edit' || !selected.workspace_id}
+                    disabled={!selected.workspace_id}
                     onChange={e => setSelected(p => ({ ...p, repo: e.target.value }))}
                   >
                     <option value="">Select repo...</option>
@@ -313,13 +360,18 @@ export default function PromptsPage() {
             </div>
             <div>
               <label style={labelStyle}>Description</label>
-              <input style={inputStyle} value={selected.description} onChange={e => setSelected(p => ({ ...p, description: e.target.value }))} />
+              <input style={inputStyle} value={selected.description} onChange={e => setSelected(p => ({ ...p, description: e.target.value }))} disabled={catalogDelegated && modal === 'edit'} />
             </div>
             <div>
               <label style={labelStyle}>Content *</label>
-              <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} />
+              <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} readOnly={catalogDelegated && modal === 'edit'} />
             </div>
-            {modal === 'edit' && (
+            {modal === 'edit' && catalogDelegated && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', margin: 0 }}>
+                Content versions are managed in the delegated GitHub catalog while delegation is enabled.
+              </p>
+            )}
+            {modal === 'edit' && !catalogDelegated && (
               <CatalogVersionsPanel
                 type="prompt"
                 assetID={selected.id || selected.name}
