@@ -173,24 +173,28 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 	disabled := false
 	pending := "pending"
 	clear := ""
-	patch.Enabled = &disabled
-	patch.LastSyncStatus = &pending
-	patch.LastSyncError = &clear
 
 	var cfg fleet.CatalogDelegationConfig
 	var credentialRef string
 	if err := s.withRawTx("prepare catalog delegation", func(tx *sql.Tx) error {
 		var err error
-		if err := rejectPendingPublishableProposalBundlesTx(tx); err != nil {
-			return err
-		}
 		current, err := store.ReadCatalogDelegationConfigTx(tx)
 		if err != nil {
 			return err
 		}
-		if current.Enabled && catalogDelegationSourceFieldChanges(current, patch) {
-			return &store.ErrValidation{Msg: "catalog delegation source fields cannot be changed while delegation is enabled; disable delegation before changing repo, branch, catalog_path, or credential_ref"}
+		if current.Enabled {
+			if catalogDelegationSourceFieldChanges(current, patch) {
+				return &store.ErrValidation{Msg: "catalog delegation source fields cannot be changed while delegation is enabled; disable delegation before changing repo, branch, catalog_path, or credential_ref"}
+			}
+			cfg = current
+			return nil
 		}
+		if err := rejectPendingPublishableProposalBundlesTx(tx); err != nil {
+			return err
+		}
+		patch.Enabled = &disabled
+		patch.LastSyncStatus = &pending
+		patch.LastSyncError = &clear
 		cfg, err = store.PatchCatalogDelegationConfigTx(tx, patch)
 		if err != nil {
 			return err
@@ -199,6 +203,9 @@ func (s *Service) ActivateCatalogDelegation(ctx context.Context, patch store.Cat
 		return err
 	}); err != nil {
 		return fleet.CatalogDelegationConfig{}, err
+	}
+	if cfg.Enabled {
+		return cfg, nil
 	}
 	token, err := resolveCatalogDelegationCredential(credentialRef)
 	if err != nil {
